@@ -2581,26 +2581,25 @@ function classifyGraphicsCmds(cmds){
   return result;
 }
 
-function walkDisplayObject(dispObj,parentX,parentY){
-  // Convert a Flashy DisplayObject into an EditorObject
+var _importSymCount=0;
+function walkDisplayObject(dispObj,parentX,parentY,depth){
+  depth=depth||0;
   var objects=[];
-  var dx=(dispObj.x||0)+parentX;
-  var dy=(dispObj.y||0)+parentY;
+  var dx=(dispObj.x||0);
+  var dy=(dispObj.y||0);
 
-  // Check if it's a TextField
+  // TextField
   if(dispObj.text!==undefined&&dispObj.font!==undefined){
     var tf=new EditorObject("text");
-    tf.x=dx;tf.y=dy;
+    tf.x=dx+parentX;tf.y=dy+parentY;
     tf.text=dispObj.text||"Text";
-    tf.font=dispObj.font?dispObj.font.replace(/^.*?(\d+)px\s*/,"").replace(/['"]/g,"").trim()||"Arial":"Arial";
+    tf.font=dispObj.font?dispObj.font.replace(/^.*?\d+px\s*/,"").replace(/['"]/g,"").trim()||"Arial":"Arial";
     var fontMatch=dispObj.font?dispObj.font.match(/(\d+)px/):null;
     tf.fontSize=fontMatch?parseInt(fontMatch[1]):24;
-    tf.fillColor=intToHex(dispObj.color!=null?dispObj.color:0x000000);
-    tf.fillAlpha=1;
+    tf.fillColor=intToHex(dispObj.color!=null?dispObj.color:0);
     tf.alpha=dispObj.alpha!=null?dispObj.alpha:1;
     tf.rotation=(dispObj.rotation||0)*180/Math.PI;
-    tf.scaleX=dispObj.scaleX||1;
-    tf.scaleY=dispObj.scaleY||1;
+    tf.scaleX=dispObj.scaleX||1;tf.scaleY=dispObj.scaleY||1;
     tf.width=tf.fontSize*Math.max(1,tf.text.length)*0.6;
     tf.height=tf.fontSize*1.2;
     tf.name=dispObj.name||"";
@@ -2608,32 +2607,78 @@ function walkDisplayObject(dispObj,parentX,parentY){
     return objects;
   }
 
-  // Check if it has graphics (Shape or MovieClip with graphics)
+  // If this is a MovieClip with children at depth > 0, convert to a library symbol
+  var isComplex=dispObj.children&&dispObj.children.length>0&&depth>0;
+  if(isComplex){
+    var symName=dispObj.name||("imported_mc_"+(++_importSymCount));
+    // Collect all sub-objects inside this MC
+    var subObjs=[];
+    // Own graphics
+    var sg=dispObj.graphics;
+    if(sg&&sg._cmds&&sg._cmds.length>0){
+      var sinfo=classifyGraphicsCmds(sg._cmds);
+      var sobj=new EditorObject(sinfo.type);
+      sobj.x=sinfo.x;sobj.y=sinfo.y;
+      sobj.width=sinfo.width;sobj.height=sinfo.height;
+      sobj.fillColor=sinfo.fillColor;sobj.fillAlpha=sinfo.fillAlpha;
+      sobj.strokeColor=sinfo.strokeColor;sobj.strokeAlpha=sinfo.strokeAlpha;
+      sobj.strokeWidth=sinfo.strokeWidth;
+      if(sinfo.points)sobj.points=sinfo.points;
+      subObjs.push(sobj);
+    }
+    // Children
+    for(var ci=0;ci<dispObj.children.length;ci++){
+      var childObjs=walkDisplayObject(dispObj.children[ci],0,0,depth+1);
+      for(var j=0;j<childObjs.length;j++)subObjs.push(childObjs[j]);
+    }
+    // Store as library symbol
+    if(subObjs.length>0){
+      doc.library[symName]={objects:subObjs,layers:null};
+      // Create a symbol instance
+      var inst=new EditorObject("symbol");
+      inst.x=dx+parentX;inst.y=dy+parentY;
+      inst.symbolName=symName;
+      inst.alpha=dispObj.alpha!=null?dispObj.alpha:1;
+      inst.rotation=(dispObj.rotation||0)*180/Math.PI;
+      inst.scaleX=dispObj.scaleX||1;inst.scaleY=dispObj.scaleY||1;
+      inst.name=dispObj.name||"";
+      // Compute bounds from sub-objects
+      var bx0=Infinity,by0=Infinity,bx1=-Infinity,by1=-Infinity;
+      for(var bi=0;bi<subObjs.length;bi++){
+        var so=subObjs[bi];
+        if(so.x<bx0)bx0=so.x;if(so.y<by0)by0=so.y;
+        if(so.x+(so.width||0)>bx1)bx1=so.x+(so.width||0);
+        if(so.y+(so.height||0)>by1)by1=so.y+(so.height||0);
+      }
+      inst.width=bx1-bx0||50;inst.height=by1-by0||50;
+      objects.push(inst);
+      return objects;
+    }
+  }
+
+  // Simple shape with graphics
   var g=dispObj.graphics;
   if(g&&g._cmds&&g._cmds.length>0){
     var info=classifyGraphicsCmds(g._cmds);
     var obj=new EditorObject(info.type);
-    obj.x=dx+info.x;obj.y=dy+info.y;
+    obj.x=dx+parentX+info.x;obj.y=dy+parentY+info.y;
     obj.width=info.width;obj.height=info.height;
     obj.fillColor=info.fillColor;obj.fillAlpha=info.fillAlpha;
     obj.strokeColor=info.strokeColor;obj.strokeAlpha=info.strokeAlpha;
     obj.strokeWidth=info.strokeWidth;
     obj.alpha=dispObj.alpha!=null?dispObj.alpha:1;
     obj.rotation=(dispObj.rotation||0)*180/Math.PI;
-    obj.scaleX=dispObj.scaleX||1;
-    obj.scaleY=dispObj.scaleY||1;
+    obj.scaleX=dispObj.scaleX||1;obj.scaleY=dispObj.scaleY||1;
     obj.name=dispObj.name||"";
     if(info.points)obj.points=info.points;
     objects.push(obj);
   }
 
-  // Recurse into children (MovieClip/DisplayObjectContainer)
-  if(dispObj.children&&dispObj.children.length>0){
-    for(var ci=0;ci<dispObj.children.length;ci++){
-      var childObjs=walkDisplayObject(dispObj.children[ci],dx,dy);
-      for(var j=0;j<childObjs.length;j++){
-        objects.push(childObjs[j]);
-      }
+  // Recurse children at this level (for containers without own graphics)
+  if(dispObj.children&&dispObj.children.length>0&&!isComplex){
+    for(var ci2=0;ci2<dispObj.children.length;ci2++){
+      var childObjs2=walkDisplayObject(dispObj.children[ci2],dx+parentX,dy+parentY,depth+1);
+      for(var j2=0;j2<childObjs2.length;j2++)objects.push(childObjs2[j2]);
     }
   }
 
@@ -2663,7 +2708,9 @@ function extractTimelineTweens(dispObj){
 function importFromStage(flashyStage){
   pushUndo();
 
-  // Set document properties from stage
+  // Stop the source animation so we capture a stable state
+  if(flashyStage.stop)flashyStage.stop();
+
   doc.width=flashyStage.width||550;
   doc.height=flashyStage.height||400;
   doc.fps=flashyStage.fps||24;
@@ -2748,12 +2795,8 @@ function importFromStage(flashyStage){
             startKF.objects=startObjs;
             startKF.duration=fd.endFrame-fd.startFrame;
             startKF.tweenType="motion";
-            // Map easing name
-            var eName=fd.ease||"linear";
-            if(eName==="quadIn"||eName==="cubicIn"||eName==="sineIn"||eName==="expoIn"||eName==="backIn")startKF.easing="easeIn";
-            else if(eName==="quadOut"||eName==="cubicOut"||eName==="sineOut"||eName==="expoOut"||eName==="backOut"||eName==="bounceOut"||eName==="elasticOut")startKF.easing="easeOut";
-            else if(eName==="quadInOut"||eName==="cubicInOut"||eName==="sineInOut")startKF.easing="easeInOut";
-            else startKF.easing="linear";
+            // Keep the original easing name — the editor supports all Flashy easings
+            startKF.easing=fd.ease||"linear";
             layer.keyframes.push(startKF);
 
             // Keyframe at tween end
@@ -2817,11 +2860,16 @@ function importFromStage(flashyStage){
   doc.layers.forEach(function(l){
     l.keyframes.forEach(function(kf){totalObjs+=kf.objects.length;});
   });
-  alert("Scene imported successfully!\n\n"+
-    "Stage: "+doc.width+" x "+doc.height+" @ "+doc.fps+" fps\n"+
+  var symCount=Object.keys(doc.library).length;
+  var msg="Scene imported!\n\n"+
+    "Stage: "+doc.width+"x"+doc.height+" @ "+doc.fps+"fps\n"+
     "Layers: "+doc.layers.length+"\n"+
-    "Total objects: "+totalObjs+"\n"+
-    "Total frames: "+doc.totalFrames);
+    "Objects: "+totalObjs+"\n"+
+    "Symbols in library: "+symCount+"\n"+
+    "Frames: "+doc.totalFrames;
+  if(symCount>0)msg+="\n\nNested MovieClips were converted to library symbols.\nDouble-click them to edit.";
+  msg+="\n\nNote: Examples that use enterFrame scripting (like Solar System)\nimport as a static snapshot. Timeline tweens are preserved\nwhere they exist.";
+  alert(msg);
 }
 
 function testMovie(){
