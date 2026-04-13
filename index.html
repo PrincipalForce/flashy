@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Vectid — HTML5 Canvas vector animation engine</title>
+<title>Flashy — HTML5 Canvas vector animation engine</title>
 <style>
   :root { color-scheme: dark; }
   body {
@@ -72,7 +72,7 @@
 </head>
 <body>
 
-<h1>Vectid</h1>
+<h1>Flashy</h1>
 <div class="sub">HTML5 Canvas vector animation engine · timelines · nested MovieClips · SWF &amp; FLA loader</div>
 
 <canvas id="stage"></canvas>
@@ -97,7 +97,7 @@
 <div class="status" id="status"></div>
 
 <div class="notes">
-  The showcase above is built entirely from <code>Vectid</code> primitives:
+  The showcase above is built entirely from <code>Flashy</code> primitives:
   vector shapes with gradients and curves, a <code>MovieClip</code> per star,
   a nested title <code>MovieClip</code> with per-letter bounce tweens driven
   by a <code>Timeline</code>, and a clickable pause button wired through
@@ -105,26 +105,26 @@
   above to try the importers (simple vector SWFs; CS5+ FLAs / XFL folders).
 </div>
 
-<script src="vectid.js"></script>
-<script src="vectid-swf.js"></script>
-<script src="vectid-fla.js"></script>
+<script src="flashy.js"></script>
+<script src="flashy-swf.js"></script>
+<script src="flashy-fla.js"></script>
 <script>
 (function () {
   const canvas = document.getElementById('stage');
-  const stage  = new Vectid.Stage(canvas, {
+  const stage  = new Flashy.Stage(canvas, {
     width: 960, height: 540, fps: 30, backgroundColor: 0x0a0a1f
   });
   window.__stage = stage;
 
   function buildDemo() {
     stage.root.removeAllChildren();
-    stage.root.timeline = new Vectid.Timeline(stage.root);
+    stage.root.timeline = new Flashy.Timeline(stage.root);
     stage.root._primed = false;
     stage.root.currentFrame = 1;
     stage.root.play();
 
     // -------- gradient sky --------
-    const sky = new Vectid.Shape();
+    const sky = new Flashy.Shape();
     sky.graphics
       .beginGradientFill(
         'linear',
@@ -139,7 +139,7 @@
 
     // -------- stars --------
     for (let i = 0; i < 120; i++) {
-      const star = new Vectid.MovieClip();
+      const star = new Flashy.MovieClip();
       const r = 0.4 + Math.random() * 1.8;
       star.graphics.beginFill(0xffffff, 0.9).drawCircle(0, 0, r).endFill();
       star.x = Math.random() * 960;
@@ -153,7 +153,7 @@
     }
 
     // -------- moon --------
-    const moon = new Vectid.MovieClip();
+    const moon = new Flashy.MovieClip();
     moon.graphics
       .beginGradientFill('radial', [0xfff7d6, 0xcfb870], [1,1], [0.3, 1], -15, -15, 50, 50)
       .drawCircle(0, 0, 58).endFill()
@@ -169,7 +169,7 @@
 
     // -------- sunburst behind title --------
     function makeSunburst() {
-      const s = new Vectid.MovieClip();
+      const s = new Flashy.MovieClip();
       const rays = 14;
       const r = 260;
       s.graphics.beginGradientFill(
@@ -196,7 +196,7 @@
     stage.root.addChild(burst);
 
     // -------- city silhouette (vector) --------
-    const city = new Vectid.Shape();
+    const city = new Flashy.Shape();
     city.graphics.beginFill(0x05050f);
     city.graphics.moveTo(0, 540);
     let cx = 0;
@@ -213,7 +213,7 @@
     stage.root.addChild(city);
 
     // window lights
-    const windows = new Vectid.Shape();
+    const windows = new Flashy.Shape();
     windows.graphics.beginFill(0xffd866, 0.6);
     const rng2 = mulberry32(99);
     for (let i = 0; i < 80; i++) {
@@ -225,15 +225,15 @@
     stage.root.addChild(windows);
 
     // -------- title (nested MovieClip with per-letter tweens) --------
-    const title = new Vectid.MovieClip();
+    const title = new Flashy.MovieClip();
     title.x = 480; title.y = 270;
     title.shadowBlur = 24;
     title.shadowColor = 0xffaa22;
     stage.root.addChild(title);
 
-    const letters = 'VECTID';
+    const letters = 'FLASHY';
     for (let i = 0; i < letters.length; i++) {
-      const ltr = new Vectid.TextField(letters[i], {
+      const ltr = new Flashy.TextField(letters[i], {
         font: 'bold 110px Impact, "Arial Black", sans-serif',
         color: 0xffdd44,
         stroke: 0x552200,
@@ -259,7 +259,7 @@
     title.loop = true;
 
     // -------- subtitle faded in via root timeline --------
-    const sub = new Vectid.TextField('vector animation engine for the web', {
+    const sub = new Flashy.TextField('vector animation engine for the web', {
       font: '22px sans-serif',
       color: 0xffffff,
       align: 'center',
@@ -272,7 +272,7 @@
     stage.root.timeline.setTotalFrames(360);
 
     // -------- play/pause button (vector, clickable via hit test) --------
-    const btn = new Vectid.MovieClip();
+    const btn = new Flashy.MovieClip();
     btn.graphics
       .lineStyle(2, 0xffffff, 0.85)
       .beginFill(0xffffff, 0.08)
@@ -282,11 +282,11 @@
     btn.name = 'pauseBtn';
     stage.root.addChild(btn);
 
-    const playIcon = new Vectid.Shape();
+    const playIcon = new Flashy.Shape();
     playIcon.graphics.beginFill(0xffffff)
       .moveTo(-9, -13).lineTo(-9, 13).lineTo(13, 0).lineTo(-9, -13).endFill();
     playIcon.visible = false;
-    const pauseIcon = new Vectid.Shape();
+    const pauseIcon = new Flashy.Shape();
     pauseIcon.graphics.beginFill(0xffffff)
       .drawRect(-10, -12, 6, 24).drawRect(4, -12, 6, 24).endFill();
     btn.addChild(pauseIcon);
@@ -304,7 +304,7 @@
       stage.root.playing = p;
       // walk the tree and flip all MovieClips
       (function walk(n) {
-        if (n instanceof Vectid.MovieClip) n.playing = p;
+        if (n instanceof Flashy.MovieClip) n.playing = p;
         if (n.children) for (const c of n.children) walk(c);
       })(stage.root);
       playIcon.visible  = !p;
@@ -314,7 +314,7 @@
     setPlaying(true);
 
     // vignette
-    const vignette = new Vectid.Shape();
+    const vignette = new Flashy.Shape();
     vignette.graphics.beginGradientFill(
       'radial', [0x000000, 0x000000], [0, 0.7], [0.5, 1],
       480, 270, 480, 540
@@ -341,7 +341,7 @@
     if (!file) return;
     setStatus('Parsing SWF: ' + file.name + ' …');
     try {
-      const loader = new Vectid.SWFLoader();
+      const loader = new Flashy.SWFLoader();
       const mc = await loader.loadFile(file);
       stage.root.removeAllChildren();
       const info = mc.swfInfo || {};
@@ -368,7 +368,7 @@
     if (!file) return;
     setStatus('Parsing FLA: ' + file.name + ' …');
     try {
-      const loader = new Vectid.FLALoader();
+      const loader = new Flashy.FLALoader();
       const mc = await loader.loadFile(file);
       stage.root.removeAllChildren();
       const info = mc.flaInfo || {};
@@ -392,7 +392,7 @@
     if (!files || !files.length) return;
     setStatus('Parsing XFL folder …');
     try {
-      const loader = new Vectid.FLALoader();
+      const loader = new Flashy.FLALoader();
       const mc = await loader.loadXFLDirectory(files);
       stage.root.removeAllChildren();
       const info = mc.flaInfo || {};

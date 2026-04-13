@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Vectid - Retro Space Shooter</title>
+<title>Flashy - Retro Space Shooter</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #050510; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Courier New', monospace; color: #c0f0ff; }
@@ -15,10 +15,10 @@
 <h1>SPACE BLASTER</h1>
 <p class="info">Move mouse to steer | Click to shoot | Destroy all aliens!</p>
 <canvas id="stage"></canvas>
-<script src="../vectid.js"></script>
+<script src="../flashy.js"></script>
 <script>
 (function () {
-  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const { Stage, MovieClip, Shape, TextField } = Flashy;
   const W = 960, H = 540;
   const canvas = document.getElementById('stage');
   const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: 0x030816 });

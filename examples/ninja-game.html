@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Vectid - Shadow Blade</title>
+<title>Flashy - Shadow Blade</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #08081a; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Courier New', monospace; color: #c0c8e0; }
@@ -15,10 +15,10 @@
 <h1>SHADOW BLADE</h1>
 <p class="info">WASD / Arrows to move &amp; jump | SPACE or Click to attack | Wall-jump off walls</p>
 <canvas id="stage"></canvas>
-<script src="../vectid.js"></script>
+<script src="../flashy.js"></script>
 <script>
 (function () {
-  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const { Stage, MovieClip, Shape, TextField } = Flashy;
   const W = 960, H = 540;
   const canvas = document.getElementById('stage');
   const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });

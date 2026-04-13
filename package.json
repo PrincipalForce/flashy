@@ -1,8 +1,8 @@
 {
-  "name": "vectid",
+  "name": "flashy",
   "version": "0.1.0",
   "description": "HTML5 Canvas vector animation engine — a modern Flash alternative with timeline, nested MovieClips, tweening, and a full authoring IDE",
-  "main": "vectid.js",
+  "main": "flashy.js",
   "keywords": [
     "flash",
     "animation",
@@ -21,12 +21,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/PrincipalForce/vectid.git"
+    "url": "https://github.com/PrincipalForce/flashy.git"
   },
   "files": [
-    "vectid.js",
-    "vectid-swf.js",
-    "vectid-fla.js"
+    "flashy.js",
+    "flashy-swf.js",
+    "flashy-fla.js"
   ],
   "scripts": {
     "start": "python -m http.server 8000",

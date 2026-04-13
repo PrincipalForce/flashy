@@ -1,10 +1,10 @@
-/* vectid-fla.js — FLA / XFL importer for Vectid
+/* flashy-fla.js — FLA / XFL importer for Flashy
  *
  * Modern Flash FLA files are ZIP archives of XFL (XML) documents. This loader:
  *   1. Reads the ZIP (using the browser's native DecompressionStream for
  *      deflate — no third-party zlib needed)
  *   2. Parses DOMDocument.xml and LIBRARY/*.xml via DOMParser
- *   3. Builds a Vectid.MovieClip tree that mirrors the FLA timeline structure
+ *   3. Builds a Flashy.MovieClip tree that mirrors the FLA timeline structure
  *
  * SCOPE — what is supported:
  *   - FLA (ZIP) or an unzipped XFL directory via File[] input (webkitdirectory)
@@ -18,15 +18,15 @@
  * text, sound, actionscript, legacy (pre-CS5) OLE compound FLA format.
  *
  * Usage:
- *   const loader = new Vectid.FLALoader();
+ *   const loader = new Flashy.FLALoader();
  *   const mc = await loader.loadFile(fileFromInput);        // FLA zip
  *   const mc = await loader.loadXFLDirectory(filesFromDir); // unzipped XFL
  */
 (function (global) {
   'use strict';
 
-  const F = global.Vectid;
-  if (!F) throw new Error('vectid.js must be loaded before vectid-fla.js');
+  const F = global.Flashy;
+  if (!F) throw new Error('flashy.js must be loaded before flashy-fla.js');
 
   // -------------------- minimal ZIP reader --------------------
   async function unzip(bytes) {
@@ -287,7 +287,7 @@
         const sym = resolveSymbol(libName);
         if (!sym) return null;
         // Each placement needs an independent instance — clone via a thin
-        // MovieClip wrapper that re-hosts the same symbol. Since Vectid's
+        // MovieClip wrapper that re-hosts the same symbol. Since Flashy's
         // display tree assumes single-parent, we build a shallow copy.
         const inst = this._cloneMovieClip(sym);
         this._applyMatrix(inst, el.querySelector('matrix > Matrix'));

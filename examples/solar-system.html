@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Vectid - Solar System</title>
+<title>Flashy - Solar System</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #0a0a12; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
@@ -15,10 +15,10 @@
 <h1>Solar System</h1>
 <p class="info">Nested MovieClip orbits, gradient fills, parallax starfield, and a periodic comet.</p>
 <canvas id="stage"></canvas>
-<script src="../vectid.js"></script>
+<script src="../flashy.js"></script>
 <script>
 (function () {
-  const { Stage, MovieClip, Shape, TextField, Graphics, Easing } = Vectid;
+  const { Stage, MovieClip, Shape, TextField, Graphics, Easing } = Flashy;
   const W = 960, H = 540;
   const canvas = document.getElementById('stage');
   const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });

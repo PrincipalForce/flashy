@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Vectid - Neon City</title>
+<title>Flashy - Neon City</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #050508; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
@@ -15,10 +15,10 @@
 <h1>Neon City</h1>
 <p class="info">Cyberpunk cityscape with neon signs, rain, reflections, flying car, billboard, and steam vents.</p>
 <canvas id="stage"></canvas>
-<script src="../vectid.js"></script>
+<script src="../flashy.js"></script>
 <script>
 (function () {
-  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const { Stage, MovieClip, Shape, TextField } = Flashy;
   const W = 960, H = 540;
   const canvas = document.getElementById('stage');
   const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });

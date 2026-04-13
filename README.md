@@ -1,14 +1,14 @@
-# Vectid
+# Flashy
 
 **The open-source Flash alternative for the modern web.**
 
-Vectid is an HTML5 Canvas vector animation engine and authoring tool that brings back the creative spirit of the Flash era. Draw vector art, build timeline animations with nested MovieClips, create interactive content — and export self-contained HTML that runs in any browser.
+Flashy is an HTML5 Canvas vector animation engine and authoring tool that brings back the creative spirit of the Flash era. Draw vector art, build timeline animations with nested MovieClips, create interactive content — and export self-contained HTML that runs in any browser.
 
 No plugins. No installs. Just open a browser and create.
 
 ## What's in the box
 
-### vectid.js — The Engine (25KB, zero dependencies)
+### flashy.js — The Engine (25KB, zero dependencies)
 A complete Flash-style display list and animation runtime:
 - **Graphics API** — moveTo, lineTo, curveTo, cubicCurveTo, beginFill, gradients, drawRect, drawCircle, drawStar, drawPolygon
 - **Display Objects** — Shape, TextField, MovieClip, DisplayObjectContainer with full transform stack (position, rotation, scale, alpha, blend modes)
@@ -18,13 +18,13 @@ A complete Flash-style display list and animation runtime:
 - **Event System** — enterFrame, click, mouseDown, mouseMove, mouseUp with display-list hit testing
 - **Stage** — Fixed-step game loop with configurable FPS and HiDPI support
 
-### vectid-swf.js — SWF Importer
+### flashy-swf.js — SWF Importer
 Load legacy .swf files directly. Parses headers, DefineShape 1-3, DefineSprite, PlaceObject2, SetBackgroundColor. Bring old Flash content back to life.
 
-### vectid-fla.js — FLA/XFL Importer  
+### flashy-fla.js — FLA/XFL Importer  
 Open Flash authoring files. Reads CS5+ ZIP-based .fla files and unzipped XFL directories. Parses DOMDocument.xml, edge strings, fill/stroke styles, and symbol libraries.
 
-### Vectid Studio — The Editor
+### Flashy Studio — The Editor
 A browser-based authoring IDE inspired by Macromedia Flash MX2004:
 - **Tools** — Selection, Transform, Pen, Text, Line, Rectangle, Oval, Pencil, Brush, Eyedropper, Hand, Zoom
 - **Timeline** — Multi-layer timeline with keyframes, motion tweens, shape tweens, frame scripts, playhead scrubbing, frame range selection
@@ -33,15 +33,15 @@ A browser-based authoring IDE inspired by Macromedia Flash MX2004:
 - **Nested Editing** — Double-click a symbol to enter its timeline, breadcrumb navigation, edit at any depth
 - **Color Mixer** — Fill/stroke colors with swatch picker and alpha control
 - **AI Assistant** — Describe what you want and an AI agent creates it directly in your project (requires Anthropic API key)
-- **Import** — Open .vectid projects, import from URL (inspect live Vectid animations), load .swf and .fla files
+- **Import** — Open .flashy projects, import from URL (inspect live Flashy animations), load .swf and .fla files
 - **Export** — Self-contained HTML with the full engine embedded inline. No server needed — just open the file.
 
 ## Quick Start
 
 ```bash
 # Clone and serve
-git clone https://github.com/PrincipalForce/vectid.git
-cd vectid
+git clone https://github.com/PrincipalForce/flashy.git
+cd flashy
 python -m http.server 8000
 
 # Open in your browser:
@@ -56,14 +56,14 @@ Or just open the files directly — no build step, no bundler, no npm install.
 
 ```html
 <canvas id="stage"></canvas>
-<script src="vectid.js"></script>
+<script src="flashy.js"></script>
 <script>
-  const stage = new Vectid.Stage(document.getElementById('stage'), {
+  const stage = new Flashy.Stage(document.getElementById('stage'), {
     width: 800, height: 600, fps: 30
   });
 
   // Draw a shape
-  const circle = new Vectid.Shape();
+  const circle = new Flashy.Shape();
   circle.graphics
     .beginGradientFill('radial', [0xff6600, 0xff0000], [1, 1], [0, 1], 0, 0, 50, 50)
     .drawCircle(0, 0, 50)
@@ -72,7 +72,7 @@ Or just open the files directly — no build step, no bundler, no npm install.
   stage.root.addChild(circle);
 
   // Animate it
-  const mc = new Vectid.MovieClip();
+  const mc = new Flashy.MovieClip();
   mc.addChild(circle);
   mc.timeline.addTween(circle, 'x', 100, 700, 1, 60, 'bounceOut');
   mc.timeline.addTween(circle, 'y', 100, 500, 1, 60, 'elasticOut');
@@ -100,7 +100,7 @@ Or just open the files directly — no build step, no bundler, no npm install.
 
 Flash wasn't just a plugin — it was a creative movement. Millions of artists, animators, and developers used it to build an interactive web that was playful, experimental, and alive. When Flash died, that creative ecosystem went with it.
 
-Vectid exists to bring it back:
+Flashy exists to bring it back:
 
 - **For creators** — A free, open tool to make vector animations, games, and interactive art, right in the browser
 - **For preservation** — SWF and FLA importers to rescue legacy Flash content
@@ -110,9 +110,9 @@ Vectid exists to bring it back:
 ## Architecture
 
 ```
-vectid.js          Core engine (Graphics, DisplayObject, MovieClip, Timeline, Stage)
-vectid-swf.js      SWF binary parser and importer
-vectid-fla.js      FLA/XFL (ZIP + XML) parser and importer
+flashy.js          Core engine (Graphics, DisplayObject, MovieClip, Timeline, Stage)
+flashy-swf.js      SWF binary parser and importer
+flashy-fla.js      FLA/XFL (ZIP + XML) parser and importer
 editor.html        Editor shell (layout)
 editor.css         Macromedia Flash MX2004-style dark chrome theme
 editor-app.js      Editor application (tools, timeline, properties, library, AI)
@@ -122,7 +122,7 @@ examples/          Example animations and games
 
 ## Contributing
 
-Vectid is in early development. Major areas that need work:
+Flashy is in early development. Major areas that need work:
 
 - **Shape tweening** — interpolating between different vector shapes
 - **Sound support** — audio playback synced to timeline
@@ -131,7 +131,7 @@ Vectid is in early development. Major areas that need work:
 - **More SWF tags** — DefineShape4, DefineMorphShape, DefineText, ActionScript bytecode
 - **Better FLA parsing** — gradient fills, bitmap fills, tweens from XFL
 - **Editor polish** — symbol editing UX, onion skinning, snap to objects, rulers
-- **Vectid Hub** — community sharing platform
+- **Flashy Hub** — community sharing platform
 
 ## License
 

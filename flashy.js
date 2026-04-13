@@ -1,4 +1,4 @@
-/* vectid.js — a Flash-inspired vector animation engine for HTML5 Canvas
+/* flashy.js — a Flash-inspired vector animation engine for HTML5 Canvas
  *
  * Provides:
  *   - Graphics        : AS3-style vector drawing (moveTo/lineTo/curveTo/beginFill/gradients/...)
@@ -643,13 +643,13 @@
   }
 
   // -------------------- export --------------------
-  const Vectid = {
+  const Flashy = {
     version: '0.1.0',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
     Shape, TextField, MovieClip, Timeline, Tween, Stage,
     toRGBA
   };
-  if (typeof module !== 'undefined' && module.exports) module.exports = Vectid;
-  global.Vectid = Vectid;
+  if (typeof module !== 'undefined' && module.exports) module.exports = Flashy;
+  global.Flashy = Flashy;
 })(typeof window !== 'undefined' ? window : this);

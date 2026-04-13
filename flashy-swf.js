@@ -1,4 +1,4 @@
-/* vectid-swf.js — minimal SWF importer for Vectid
+/* flashy-swf.js — minimal SWF importer for Flashy
  *
  * SCOPE — what this loader aims to handle:
  *   - FWS (uncompressed) and CWS (zlib) headers
@@ -6,7 +6,7 @@
  *   - Tag iteration with long/short form
  *   - DefineShape, DefineShape2, DefineShape3 — straight & curved edges,
  *     solid fills, stroked lines. Gradients/bitmaps are rendered as flat fills.
- *   - DefineSprite — nested timelines become nested Vectid.MovieClips
+ *   - DefineSprite — nested timelines become nested Flashy.MovieClips
  *   - PlaceObject2, RemoveObject2 — display list with depth ordering
  *   - SetBackgroundColor, ShowFrame, End, FileAttributes (skipped)
  *   - Matrix transforms on placed objects
@@ -17,15 +17,15 @@
  * undertaking (see Ruffle); this loader handles simple vector SWFs.
  *
  * Usage:
- *   const loader = new Vectid.SWFLoader();
+ *   const loader = new Flashy.SWFLoader();
  *   const mc = await loader.loadURL('anim.swf');  // returns a MovieClip
  *   stage.root.addChild(mc);
  */
 (function (global) {
   'use strict';
 
-  const F = global.Vectid;
-  if (!F) throw new Error('vectid.js must be loaded before vectid-swf.js');
+  const F = global.Flashy;
+  if (!F) throw new Error('flashy.js must be loaded before flashy-swf.js');
 
   // -------------------- inflate via browser --------------------
   async function inflate(bytes) {
@@ -166,7 +166,7 @@
     return styles;
   }
 
-  // Decodes shape records to a Vectid Graphics. This is the simplified
+  // Decodes shape records to a Flashy Graphics. This is the simplified
   // per-edge emission: groups edges by the currently-active fillStyle1 and
   // emits them in sequence. Multi-fill shapes built from closed graphs may
   // not render perfectly.

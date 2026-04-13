@@ -1,4 +1,4 @@
-// Vectid Studio Editor - generated
+// Flashy Studio Editor - generated
 (function(){
 "use strict";
 var N=1;function uid(){return N++;}
@@ -1690,7 +1690,7 @@ function doAction(a){
     }
     break;
   case "open":
-    var inp=document.createElement("input");inp.type="file";inp.accept=".vectid,.json";
+    var inp=document.createElement("input");inp.type="file";inp.accept=".flashy,.json";
     inp.addEventListener("change",function(){
       if(!inp.files[0])return;
       var r=new FileReader();
@@ -1706,7 +1706,7 @@ function doAction(a){
     inp.click();
     break;
   case "save":
-    dlFile(JSON.stringify(serializeDoc(),null,2),"animation.vectid","application/json");
+    dlFile(JSON.stringify(serializeDoc(),null,2),"animation.flashy","application/json");
     break;
   case "export":
     genHTML(function(html){dlFile(html,"animation.html","text/html");});
@@ -1896,7 +1896,7 @@ function doAction(a){
   case "gotoFirst":curFrame=1;fullRefresh();break;
   case "gotoLast":curFrame=currentMaxFrame();fullRefresh();break;
   case "importURL":
-    var importUrl=prompt("Enter URL of a running Vectid animation:\n(Must be same origin, e.g. http://localhost:8000/examples/solar-system.html)","http://localhost:8000/examples/solar-system.html");
+    var importUrl=prompt("Enter URL of a running Flashy animation:\n(Must be same origin, e.g. http://localhost:8000/examples/solar-system.html)","http://localhost:8000/examples/solar-system.html");
     if(importUrl){
       var iframe=document.createElement("iframe");
       iframe.style.cssText="position:absolute;left:-9999px;top:-9999px;width:960px;height:540px;border:none;";
@@ -1908,11 +1908,11 @@ function doAction(a){
           setTimeout(function(){
             var fStage=iWin.__stage||iWin.stage;
             if(!fStage){
-              // Try to find stage by looking at Vectid on the iframe
-              if(iWin.Vectid){
+              // Try to find stage by looking at Flashy on the iframe
+              if(iWin.Flashy){
                 alert("Could not find __stage on the loaded page.\nMake sure the animation sets: window.__stage = stage;");
               }else{
-                alert("The loaded page does not appear to use Vectid.\nNo Vectid library detected.");
+                alert("The loaded page does not appear to use Flashy.\nNo Flashy library detected.");
               }
               document.body.removeChild(iframe);
               return;
@@ -2076,10 +2076,10 @@ function dlFile(content,name,mime){
 var _cachedEngineSource=null;
 function getEngineSource(callback){
   if(_cachedEngineSource){callback(_cachedEngineSource);return;}
-  fetch("vectid.js").then(function(r){return r.text();}).then(function(src){
+  fetch("flashy.js").then(function(r){return r.text();}).then(function(src){
     _cachedEngineSource=src;callback(src);
   }).catch(function(){
-    callback("/* vectid.js could not be loaded — export may not work standalone */");
+    callback("/* flashy.js could not be loaded — export may not work standalone */");
   });
 }
 function genHTML(callback){
@@ -2087,32 +2087,32 @@ function genHTML(callback){
     var d=serializeDoc();
     var sc="<"+"script>",sce="</"+"script>";
     var s="<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n";
-    s+="<title>Vectid Animation</title>\n";
+    s+="<title>Flashy Animation</title>\n";
     s+="<style>\n";
     s+="*{margin:0;padding:0;box-sizing:border-box;}\n";
     s+="body{background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;overflow:hidden;}\n";
     s+="canvas{display:block;}\n";
     s+="</style>\n</head>\n<body>\n";
     s+="<canvas id=\"stage\"></canvas>\n";
-    // Embed the full Vectid engine inline
+    // Embed the full Flashy engine inline
     s+=sc+"\n"+engineSrc+"\n"+sce+"\n";
-    // Build the scene using the Vectid API
+    // Build the scene using the Flashy API
     s+=sc+"\n";
     s+="(function(){\n";
     s+="var data="+JSON.stringify(d)+";\n";
     s+="var W=data.width,H=data.height;\n";
     s+="var canvas=document.getElementById('stage');\n";
-    s+="var stage=new Vectid.Stage(canvas,{width:W,height:H,fps:data.fps,backgroundColor:parseInt((data.backgroundColor||'#ffffff').replace('#',''),16)});\n";
+    s+="var stage=new Flashy.Stage(canvas,{width:W,height:H,fps:data.fps,backgroundColor:parseInt((data.backgroundColor||'#ffffff').replace('#',''),16)});\n";
     s+="var root=stage.root;\n\n";
-    // Helper to build a Vectid shape from an EditorObject
+    // Helper to build a Flashy shape from an EditorObject
     s+="function buildObj(o){\n";
     s+="  var node;\n";
     s+="  if(o.type==='text'){\n";
     s+="    var style=(o.fontBold?'bold ':'')+(o.fontItalic?'italic ':'');\n";
-    s+="    node=new Vectid.TextField(o.text||'',{font:style+(o.fontSize||24)+'px '+(o.font||'Arial'),";
+    s+="    node=new Flashy.TextField(o.text||'',{font:style+(o.fontSize||24)+'px '+(o.font||'Arial'),";
     s+="color:parseInt((o.fillColor||'#000').replace('#',''),16),align:o.textAlign||'left'});\n";
     s+="  }else{\n";
-    s+="    node=new Vectid.Shape();\n";
+    s+="    node=new Flashy.Shape();\n";
     s+="    var g=node.graphics;\n";
     s+="    var fc=parseInt((o.fillColor||'#000').replace('#',''),16);\n";
     s+="    var sc2=parseInt((o.strokeColor||'#000').replace('#',''),16);\n";
@@ -2145,7 +2145,7 @@ function genHTML(callback){
       s+="for(var sname in libData){\n";
       s+="  var sym=libData[sname];\n";
       s+="  symbols[sname]=function(){\n";
-      s+="    var mc=new Vectid.MovieClip();\n";
+      s+="    var mc=new Flashy.MovieClip();\n";
       s+="    if(sym.objects)sym.objects.forEach(function(o){mc.addChild(buildObj(o));});\n";
       s+="    return mc;\n";
       s+="  };\n";
@@ -2157,7 +2157,7 @@ function genHTML(callback){
     s+="root.timeline.setTotalFrames(maxF);\n";
     s+="root.loop=true;\n\n";
     // Build frame scripts that reconstruct display list each frame with tween interpolation
-    s+="var easing=Vectid.Easing;\n";
+    s+="var easing=Flashy.Easing;\n";
     s+="for(var f=1;f<=maxF;f++){\n";
     s+="  (function(fr){\n";
     s+="    root.timeline.addFrameScript(fr,function(){\n";
@@ -2232,7 +2232,7 @@ function renderFrameToCanvas(frameNum, w, h) {
       var nk = layer.keyframes[ki + 1];
       if (nk) {
         var raw = (frameNum - kf.index) / (kf.duration - 1 || 1);
-        var ef = (typeof Vectid !== "undefined" && Vectid.Easing[kf.easing]) || function(t){return t;};
+        var ef = (typeof Flashy !== "undefined" && Flashy.Easing[kf.easing]) || function(t){return t;};
         var t = ef(Math.min(1, Math.max(0, raw)));
         for (var oi = 0; oi < kf.objects.length; oi++) {
           var a = kf.objects[oi], b = nk.objects[oi] || a;
@@ -2302,7 +2302,7 @@ function exportAsGIF() {
     var sx = sheet.getContext("2d");
     for (var i = 0; i < frames.length; i++) sx.drawImage(frames[i], (i%cols)*w, Math.floor(i/cols)*h);
     var dataURL = sheet.toDataURL("image/png");
-    var html = "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Vectid Animation</title>\n";
+    var html = "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Flashy Animation</title>\n";
     html += "<style>*{margin:0}body{background:#111;display:flex;align-items:center;justify-content:center;height:100vh}</style>\n";
     html += "</head><body><canvas id=\"c\"></canvas>\n<scr"+"ipt>\nvar img=new Image();img.onload=function(){\n";
     html += "var c=document.getElementById('c');c.width="+w+";c.height="+h+";\n";
@@ -2397,7 +2397,7 @@ function _objToSVG(o) {
 
 function exportEmbedSnippet() {
   genHTML(function(html) {
-    var snippet = '<!-- Vectid Animation Embed -->\n';
+    var snippet = '<!-- Flashy Animation Embed -->\n';
     snippet += '<!-- Host animation.html on your server, then use: -->\n';
     snippet += '<iframe src="animation.html" width="'+doc.width+'" height="'+doc.height+'" frameborder="0" style="border:none;"></iframe>';
     var overlay = document.createElement("div");
@@ -2419,14 +2419,14 @@ function exportEmbedSnippet() {
 
 function exportAsModule() {
   var d = serializeDoc();
-  var s = "// Vectid Animation Module\n";
+  var s = "// Flashy Animation Module\n";
   s += "// Usage: import { createAnimation } from './animation.js';\n";
   s += "//        createAnimation(document.getElementById('canvas'));\n\n";
   s += "export const sceneData = " + JSON.stringify(d, null, 2) + ";\n\n";
   s += "export function createAnimation(canvas, options) {\n";
-  s += "  if (typeof Vectid === 'undefined') throw new Error('vectid.js must be loaded first');\n";
+  s += "  if (typeof Flashy === 'undefined') throw new Error('flashy.js must be loaded first');\n";
   s += "  options = options || {};\n";
-  s += "  var stage = new Vectid.Stage(canvas, {\n";
+  s += "  var stage = new Flashy.Stage(canvas, {\n";
   s += "    width: sceneData.width, height: sceneData.height,\n";
   s += "    fps: options.fps || sceneData.fps,\n";
   s += "    backgroundColor: parseInt((sceneData.backgroundColor||'#fff').replace('#',''),16)\n";
@@ -2437,8 +2437,8 @@ function exportAsModule() {
   s += "  stage.root.loop = options.loop !== false;\n";
   s += "  function buildObj(o) {\n";
   s += "    var node;\n";
-  s += "    if (o.type==='text') { node = new Vectid.TextField(o.text||'',{font:(o.fontSize||24)+'px '+(o.font||'Arial'),color:parseInt((o.fillColor||'#000').replace('#',''),16)}); }\n";
-  s += "    else { node = new Vectid.Shape(); var g=node.graphics; var fc=parseInt((o.fillColor||'#000').replace('#',''),16);\n";
+  s += "    if (o.type==='text') { node = new Flashy.TextField(o.text||'',{font:(o.fontSize||24)+'px '+(o.font||'Arial'),color:parseInt((o.fillColor||'#000').replace('#',''),16)}); }\n";
+  s += "    else { node = new Flashy.Shape(); var g=node.graphics; var fc=parseInt((o.fillColor||'#000').replace('#',''),16);\n";
   s += "      if(o.fillType!=='none')g.beginFill(fc,o.fillAlpha!=null?o.fillAlpha:1);\n";
   s += "      if(o.strokeWidth>0&&o.strokeStyle!=='none')g.lineStyle(o.strokeWidth,parseInt((o.strokeColor||'#000').replace('#',''),16));\n";
   s += "      if(o.type==='rect')g.drawRect(0,0,o.width,o.height);\n";
@@ -2463,7 +2463,7 @@ function exportAsModule() {
   dlFile(s, "animation.js", "application/javascript");
 }
 
-// === Scene Inspector: Import from running Vectid stage ===
+// === Scene Inspector: Import from running Flashy stage ===
 function intToHex(n){
   if(typeof n==="string")return n;
   n=n|0;
@@ -2582,7 +2582,7 @@ function classifyGraphicsCmds(cmds){
 }
 
 function walkDisplayObject(dispObj,parentX,parentY){
-  // Convert a Vectid DisplayObject into an EditorObject
+  // Convert a Flashy DisplayObject into an EditorObject
   var objects=[];
   var dx=(dispObj.x||0)+parentX;
   var dy=(dispObj.y||0)+parentY;
@@ -2660,18 +2660,18 @@ function extractTimelineTweens(dispObj){
   return tweenData;
 }
 
-function importFromStage(vectidStage){
+function importFromStage(flashyStage){
   pushUndo();
 
   // Set document properties from stage
-  doc.width=vectidStage.width||550;
-  doc.height=vectidStage.height||400;
-  doc.fps=vectidStage.fps||24;
-  doc.backgroundColor=vectidStage.backgroundColor!=null?intToHex(vectidStage.backgroundColor):"#FFFFFF";
+  doc.width=flashyStage.width||550;
+  doc.height=flashyStage.height||400;
+  doc.fps=flashyStage.fps||24;
+  doc.backgroundColor=flashyStage.backgroundColor!=null?intToHex(flashyStage.backgroundColor):"#FFFFFF";
   doc.layers=[];
   doc.library={};
 
-  var root=vectidStage.root;
+  var root=flashyStage.root;
   if(!root||!root.children||root.children.length===0){
     doc.layers=[new Layer("Layer 1")];
     doc.totalFrames=60;
@@ -2899,7 +2899,7 @@ function init(){
   initBottomTabs();
   initPanelCollapse();
   initAIPanel();
-  window._vectidAI = {
+  window._flashyAI = {
     doc: doc,
     currentLayers: currentLayers,
     pushUndo: pushUndo,
@@ -2933,7 +2933,7 @@ if(document.readyState==="loading"){
 
 // === AI Assistant Panel ===
 var aiMessages = [];
-var aiApiKey = localStorage.getItem("vectid_ai_key") || "";
+var aiApiKey = localStorage.getItem("flashy_ai_key") || "";
 
 function initAIPanel() {
   var panel = document.getElementById("aiPanel");
@@ -3002,7 +3002,7 @@ function aiSend() {
   if (!aiApiKey) {
     aiApiKey = prompt("Enter your Anthropic API key to use the AI assistant.\nGet one at console.anthropic.com\n\nYour key is stored locally and never sent anywhere except Anthropic's API.");
     if (!aiApiKey) return;
-    localStorage.setItem("vectid_ai_key", aiApiKey);
+    localStorage.setItem("flashy_ai_key", aiApiKey);
   }
 
   aiAddMsg("user", text);
@@ -3036,7 +3036,7 @@ function aiCallAPI(userText, callback) {
     selectedObjects: selection.length
   });
 
-  var systemPrompt = "You are an expert Macromedia Flash 8 designer and ActionScript developer embedded in the Vectid Studio editor. You create intricate, elaborate, and visually stunning Flash-style vector animations and interactive content.\n\n" +
+  var systemPrompt = "You are an expert Macromedia Flash 8 designer and ActionScript developer embedded in the Flashy Studio editor. You create intricate, elaborate, and visually stunning Flash-style vector animations and interactive content.\n\n" +
     "CURRENT PROJECT STATE:\n" + docState + "\n\n" +
     "EDITOR DATA MODEL:\n" +
     "- doc.width, doc.height, doc.fps, doc.backgroundColor (hex string like '#FFFFFF')\n" +
@@ -3048,8 +3048,8 @@ function aiCallAPI(userText, callback) {
     "  fillColor (hex), fillAlpha, strokeColor (hex), strokeAlpha, strokeWidth,\n" +
     "  points (array for line/pencil), text, font, fontSize, symbolName,\n" +
     "  blendMode, fillType, strokeStyle, strokeCap, strokeJoin\n\n" +
-    "IMPORTANT: All code you generate runs as a <script> tag in the page. Access the editor through window._vectidAI (aliased as F).\n" +
-    "Always start your code block with: var F = window._vectidAI;\n\n" +
+    "IMPORTANT: All code you generate runs as a <script> tag in the page. Access the editor through window._flashyAI (aliased as F).\n" +
+    "Always start your code block with: var F = window._flashyAI;\n\n" +
     "AVAILABLE VIA F:\n" +
     "- F.doc — the document object (F.doc.width, F.doc.height, F.doc.fps, F.doc.backgroundColor, F.doc.layers, F.doc.library)\n" +
     "- F.pushUndo() — save undo state before changes\n" +
@@ -3065,8 +3065,8 @@ function aiCallAPI(userText, callback) {
     "INSTRUCTIONS:\n" +
     "When the user asks you to create something, respond with:\n" +
     "1. A brief description of what you'll create (2-3 sentences max)\n" +
-    "2. Then a code block wrapped in ```vectid-code\\n ... ``` that manipulates the editor state\n\n" +
-    "The code runs in the page scope via a script tag with access to window._vectidAI.\n" +
+    "2. Then a code block wrapped in ```flashy-code\\n ... ``` that manipulates the editor state\n\n" +
+    "The code runs in the page scope via a script tag with access to window._flashyAI.\n" +
     "Always call F.pushUndo() first, then create layers/objects, then call F.fullRefresh().\n" +
     "To add layers: F.currentLayers().push(new F.Layer('name'));\n" +
     "To add objects to a keyframe: layer.keyframes[0].objects.push(obj);\n" +
@@ -3100,7 +3100,7 @@ function aiCallAPI(userText, callback) {
     if (!res.ok) {
       if (res.status === 401) {
         aiApiKey = "";
-        localStorage.removeItem("vectid_ai_key");
+        localStorage.removeItem("flashy_ai_key");
         callback("API key invalid. Click Send again to enter a new key.");
         return;
       }
@@ -3115,9 +3115,9 @@ function aiCallAPI(userText, callback) {
         if (data.content[i].type === "text") text += data.content[i].text;
       }
     }
-    var codeMatch = text.match(/```vectid-code\s*\n([\s\S]*?)```/);
+    var codeMatch = text.match(/```flashy-code\s*\n([\s\S]*?)```/);
     var code = codeMatch ? codeMatch[1].trim() : null;
-    var displayText = text.replace(/```vectid-code\s*\n[\s\S]*?```/g, "").trim();
+    var displayText = text.replace(/```flashy-code\s*\n[\s\S]*?```/g, "").trim();
     if (!displayText && code) displayText = "Here's what I created:";
     callback(displayText, code);
   }).catch(function(err) {
