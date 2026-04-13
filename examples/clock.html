@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vectid - Mechanical Clock</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #ddaa44; letter-spacing: 2px; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.6; }
+  canvas { border: 1px solid #1a1a2e; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>Mechanical Clock</h1>
+<p class="info">Ornate vector clock with real time, visible gears, pendulum, and decorative frame.</p>
+<canvas id="stage"></canvas>
+<script src="../vectid.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const W = 960, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });
+  const root = stage.root;
+  const CX = W / 2, CY = H / 2 - 20;
+  const RADIUS = 200;
+
+  // ---- background ----
+  const bg = new Shape();
+  bg.graphics.beginGradientFill('radial',
+    ['#1a1510', '#0e0c08', '#060504'], [1, 1, 1], [0, 0.5, 1],
+    CX, CY, CX + W / 2, CY);
+  bg.graphics.drawRect(0, 0, W, H);
+  bg.graphics.endFill();
+  root.addChild(bg);
+
+  // ---- decorative frame (beveled ring) ----
+  const frame = new Shape();
+  const fg = frame.graphics;
+  fg.beginGradientFill('radial',
+    ['#8B7340', '#6B5320', '#3B2B10', '#2B1B08'], [1, 1, 1, 1], [0, 0.3, 0.8, 1],
+    CX, CY, CX + RADIUS + 30, CY);
+  fg.drawCircle(CX, CY, RADIUS + 28);
+  fg.endFill();
+  fg.beginFill('#0a0a0f', 1);
+  fg.drawCircle(CX, CY, RADIUS + 8);
+  fg.endFill();
+  // decorative arcs around frame
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+    const ox = CX + Math.cos(a) * (RADIUS + 18);
+    const oy = CY + Math.sin(a) * (RADIUS + 18);
+    fg.beginFill('#aa8844', 0.6);
+    fg.drawStar(ox, oy, 4, 8, 4, a);
+    fg.endFill();
+  }
+  root.addChild(frame);
+
+  // ---- gears behind the face ----
+  function createGear(gx, gy, teeth, outerR, innerR, color, speedMult) {
+    const gear = new MovieClip();
+    gear.x = gx; gear.y = gy;
+    const gs = new Shape();
+    gs.graphics.beginFill(color, 0.35);
+    gs.graphics.drawStar(0, 0, teeth, outerR, innerR, 0);
+    gs.graphics.endFill();
+    gs.graphics.beginFill('#0a0a0f', 1);
+    gs.graphics.drawCircle(0, 0, innerR * 0.4);
+    gs.graphics.endFill();
+    // spokes
+    gs.graphics.lineStyle(1.5, color, 0.2);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      gs.graphics.moveTo(Math.cos(a) * innerR * 0.45, Math.sin(a) * innerR * 0.45);
+      gs.graphics.lineTo(Math.cos(a) * innerR * 0.85, Math.sin(a) * innerR * 0.85);
+    }
+    gear.addChild(gs);
+    gear._speedMult = speedMult;
+    gear.addEventListener('enterFrame', function () {
+      this.rotation += 0.015 * this._speedMult;
+    });
+    return gear;
+  }
+  root.addChild(createGear(CX - 90, CY + 40, 16, 55, 42, '#886633', 1));
+  root.addChild(createGear(CX + 70, CY + 55, 12, 40, 30, '#887744', -1.33));
+  root.addChild(createGear(CX + 30, CY - 50, 10, 30, 22, '#776633', 1.6));
+  root.addChild(createGear(CX - 45, CY - 65, 8, 22, 16, '#887755', -2));
+
+  // ---- clock face ----
+  const face = new Shape();
+  face.graphics.beginGradientFill('radial',
+    ['#1a1810', '#141210', '#0e0c08'], [0.9, 0.85, 0.8], [0, 0.5, 1],
+    CX, CY, CX + RADIUS, CY);
+  face.graphics.drawCircle(CX, CY, RADIUS);
+  face.graphics.endFill();
+  // inner decorative ring
+  face.graphics.lineStyle(1, '#554422', 0.4);
+  face.graphics.drawCircle(CX, CY, RADIUS - 15);
+  face.graphics.lineStyle(0.5, '#443311', 0.3);
+  face.graphics.drawCircle(CX, CY, RADIUS - 5);
+  root.addChild(face);
+
+  // ---- tick marks ----
+  const ticks = new Shape();
+  for (let i = 0; i < 60; i++) {
+    const a = (i / 60) * Math.PI * 2 - Math.PI / 2;
+    const isHour = i % 5 === 0;
+    const outerR = RADIUS - 8;
+    const innerR = isHour ? RADIUS - 28 : RADIUS - 16;
+    const lw = isHour ? 2.5 : 0.8;
+    const col = isHour ? '#ccaa66' : '#665533';
+    ticks.graphics.lineStyle(lw, col, isHour ? 0.9 : 0.5);
+    ticks.graphics.moveTo(CX + Math.cos(a) * innerR, CY + Math.sin(a) * innerR);
+    ticks.graphics.lineTo(CX + Math.cos(a) * outerR, CY + Math.sin(a) * outerR);
+  }
+  root.addChild(ticks);
+
+  // ---- roman numerals ----
+  const romans = ['XII', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI'];
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+    const nr = RADIUS - 42;
+    const tf = new TextField(romans[i], {
+      font: 'bold 16px "Times New Roman", serif',
+      color: '#ccaa55',
+      align: 'center',
+      baseline: 'middle'
+    });
+    tf.x = CX + Math.cos(a) * nr;
+    tf.y = CY + Math.sin(a) * nr;
+    root.addChild(tf);
+  }
+
+  // ---- clock hands ----
+  function createHand(length, width, color, tailLen) {
+    const hand = new MovieClip();
+    hand.x = CX; hand.y = CY;
+    const hs = new Shape();
+    hs.graphics.beginFill(color, 1);
+    hs.graphics.moveTo(-width / 2, tailLen || 15);
+    hs.graphics.lineTo(0, -length);
+    hs.graphics.lineTo(width / 2, tailLen || 15);
+    hs.graphics.closePath();
+    hs.graphics.endFill();
+    hand.addChild(hs);
+    return hand;
+  }
+
+  const hourHand = createHand(110, 10, '#ccaa55', 18);
+  const minuteHand = createHand(150, 7, '#bbaa66', 22);
+  const secondHand = createHand(165, 2.5, '#cc4422', 30);
+  root.addChild(hourHand);
+  root.addChild(minuteHand);
+  root.addChild(secondHand);
+
+  // center cap
+  const cap = new Shape();
+  cap.graphics.beginGradientFill('radial',
+    ['#ddbb66', '#aa8833', '#665522'], [1, 1, 1], [0, 0.5, 1],
+    CX, CY, CX + 8, CY);
+  cap.graphics.drawCircle(CX, CY, 8);
+  cap.graphics.endFill();
+  root.addChild(cap);
+
+  // ---- date display ----
+  const dateBox = new Shape();
+  dateBox.graphics.beginFill('#111008', 0.8);
+  dateBox.graphics.drawRoundRect(CX + 45, CY - 8, 40, 16, 3);
+  dateBox.graphics.endFill();
+  dateBox.graphics.lineStyle(0.5, '#887744', 0.5);
+  dateBox.graphics.drawRoundRect(CX + 45, CY - 8, 40, 16, 3);
+  root.addChild(dateBox);
+
+  const dateText = new TextField('', {
+    font: 'bold 11px "Courier New", monospace',
+    color: '#ccaa55',
+    align: 'center',
+    baseline: 'middle'
+  });
+  dateText.x = CX + 65; dateText.y = CY;
+  root.addChild(dateText);
+
+  // ---- update hands with real time ----
+  root.addEventListener('enterFrame', function () {
+    const now = new Date();
+    const s = now.getSeconds() + now.getMilliseconds() / 1000;
+    const m = now.getMinutes() + s / 60;
+    const h = (now.getHours() % 12) + m / 60;
+    secondHand.rotation = (s / 60) * Math.PI * 2;
+    minuteHand.rotation = (m / 60) * Math.PI * 2;
+    hourHand.rotation = (h / 12) * Math.PI * 2;
+    dateText.text = String(now.getDate()).padStart(2, '0');
+  });
+
+  // ---- pendulum ----
+  const pendulumContainer = new MovieClip();
+  pendulumContainer.x = CX; pendulumContainer.y = CY + RADIUS + 10;
+  const pendArm = new Shape();
+  pendArm.graphics.lineStyle(2, '#886633', 0.8);
+  pendArm.graphics.moveTo(0, 0);
+  pendArm.graphics.lineTo(0, 90);
+  pendulumContainer.addChild(pendArm);
+  const pendBob = new Shape();
+  pendBob.graphics.beginGradientFill('radial',
+    ['#ddbb66', '#aa8833', '#775522'], [1, 1, 1], [0, 0.4, 1],
+    -3, -3, 18, 0);
+  pendBob.graphics.drawCircle(0, 90, 18);
+  pendBob.graphics.endFill();
+  pendulumContainer.addChild(pendBob);
+  pendulumContainer.timeline.addTween(pendulumContainer, 'rotation', -0.25, 0.25, 1, 30, 'sineInOut');
+  pendulumContainer.timeline.addTween(pendulumContainer, 'rotation', 0.25, -0.25, 31, 60, 'sineInOut');
+  root.addChild(pendulumContainer);
+
+  // ---- label ----
+  const title = new TextField('Mechanical Clock', { font: '11px sans-serif', color: '#ffffff', align: 'right' });
+  title.x = W - 10; title.y = H - 18; title.alpha = 0.3;
+  root.addChild(title);
+
+  window.__stage = stage;
+  stage.start();
+})();
+</script>
+</body>
+</html>

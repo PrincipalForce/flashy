@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vectid - Underwater Scene</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #020818; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #44bbee; letter-spacing: 2px; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.6; }
+  canvas { border: 1px solid #0a2040; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>Underwater Scene</h1>
+<p class="info">Fish schools, jellyfish, bubbles, seaweed, light rays, and a sea turtle in the deep ocean.</p>
+<canvas id="stage"></canvas>
+<script src="../vectid.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const W = 960, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });
+  const root = stage.root;
+
+  // ---- ocean gradient background ----
+  const bg = new Shape();
+  bg.graphics.beginGradientFill('linear',
+    ['#1a6088', '#0c3058', '#061828', '#030c18'], [1, 1, 1, 1], [0, 0.3, 0.7, 1],
+    0, 0, 0, H);
+  bg.graphics.drawRect(0, 0, W, H);
+  bg.graphics.endFill();
+  root.addChild(bg);
+
+  // ---- light rays from surface ----
+  const raysLayer = new MovieClip();
+  for (let i = 0; i < 6; i++) {
+    const ray = new MovieClip();
+    const rs = new Shape();
+    const rx = 80 + i * 160 + Math.random() * 60;
+    const rw = 30 + Math.random() * 50;
+    rs.graphics.beginGradientFill('linear',
+      ['#88ccff', '#44aaee00'], [0.12, 0], [0, 1],
+      0, 0, 0, H * 0.7);
+    rs.graphics.moveTo(-rw / 2, 0);
+    rs.graphics.lineTo(rw / 2 + 20, 0);
+    rs.graphics.lineTo(rw + 40, H * 0.7);
+    rs.graphics.lineTo(-rw, H * 0.7);
+    rs.graphics.closePath();
+    rs.graphics.endFill();
+    ray.addChild(rs);
+    ray.x = rx; ray.y = 0;
+    const swayFrames = 120 + Math.floor(Math.random() * 60);
+    ray.timeline.addTween(ray, 'rotation', -0.04, 0.04, 1, Math.floor(swayFrames / 2), 'sineInOut');
+    ray.timeline.addTween(ray, 'rotation', 0.04, -0.04, Math.floor(swayFrames / 2) + 1, swayFrames, 'sineInOut');
+    raysLayer.addChild(ray);
+  }
+  root.addChild(raysLayer);
+
+  // ---- seaweed ----
+  function createSeaweed(sx, segments, segLen, color) {
+    const weed = new MovieClip();
+    weed.x = sx; weed.y = H;
+    let current = weed;
+    for (let i = 0; i < segments; i++) {
+      const seg = new MovieClip();
+      const s = new Shape();
+      s.graphics.beginFill(color, 0.7 + Math.random() * 0.3);
+      s.graphics.moveTo(-3, 0);
+      s.graphics.curveTo(-5, -segLen / 2, -2, -segLen);
+      s.graphics.lineTo(2, -segLen);
+      s.graphics.curveTo(5, -segLen / 2, 3, 0);
+      s.graphics.closePath();
+      s.graphics.endFill();
+      seg.addChild(s);
+      seg.y = -segLen * 0.9;
+      const swayAmp = 0.06 + i * 0.02;
+      const period = 80 + Math.floor(Math.random() * 40);
+      const offset = i * 8;
+      seg.timeline.addTween(seg, 'rotation', -swayAmp, swayAmp, 1, Math.floor(period / 2), 'sineInOut');
+      seg.timeline.addTween(seg, 'rotation', swayAmp, -swayAmp, Math.floor(period / 2) + 1, period, 'sineInOut');
+      current.addChild(seg);
+      current = seg;
+    }
+    return weed;
+  }
+  const seaweedColors = ['#1a6633', '#227744', '#1a5533', '#2a7744', '#1a6644'];
+  for (let i = 0; i < 14; i++) {
+    const sx = 30 + Math.random() * (W - 60);
+    const segs = 4 + Math.floor(Math.random() * 4);
+    root.addChild(createSeaweed(sx, segs, 18 + Math.random() * 10, seaweedColors[i % seaweedColors.length]));
+  }
+
+  // ---- sandy bottom ----
+  const sand = new Shape();
+  sand.graphics.beginGradientFill('linear',
+    ['#2a1c0a', '#1a1208'], [0.6, 0.8], [0, 1],
+    0, H - 25, 0, H);
+  sand.graphics.drawRect(0, H - 25, W, 25);
+  sand.graphics.endFill();
+  // undulating top edge
+  sand.graphics.beginFill('#2a1c0a', 0.5);
+  sand.graphics.moveTo(0, H - 25);
+  for (let x = 0; x <= W; x += 40) {
+    sand.graphics.curveTo(x + 20, H - 30 - Math.random() * 8, x + 40, H - 25);
+  }
+  sand.graphics.lineTo(W, H);
+  sand.graphics.lineTo(0, H);
+  sand.graphics.closePath();
+  sand.graphics.endFill();
+  root.addChild(sand);
+
+  // ---- fish factory ----
+  function createFish(size, bodyColor, finColor) {
+    const fish = new MovieClip();
+    // body
+    const body = new Shape();
+    const g = body.graphics;
+    g.beginFill(bodyColor, 1);
+    g.moveTo(size, 0);
+    g.cubicCurveTo(size * 0.6, -size * 0.5, -size * 0.3, -size * 0.4, -size * 0.6, 0);
+    g.cubicCurveTo(-size * 0.3, size * 0.4, size * 0.6, size * 0.5, size, 0);
+    g.closePath();
+    g.endFill();
+    fish.addChild(body);
+    // tail
+    const tail = new MovieClip();
+    const ts = new Shape();
+    ts.graphics.beginFill(finColor, 0.8);
+    ts.graphics.moveTo(0, 0);
+    ts.graphics.lineTo(-size * 0.5, -size * 0.35);
+    ts.graphics.curveTo(-size * 0.6, 0, -size * 0.5, size * 0.35);
+    ts.graphics.closePath();
+    ts.graphics.endFill();
+    tail.addChild(ts);
+    tail.x = -size * 0.55;
+    const tailPeriod = 20 + Math.floor(Math.random() * 10);
+    tail.timeline.addTween(tail, 'rotation', -0.3, 0.3, 1, Math.floor(tailPeriod / 2), 'sineInOut');
+    tail.timeline.addTween(tail, 'rotation', 0.3, -0.3, Math.floor(tailPeriod / 2) + 1, tailPeriod, 'sineInOut');
+    fish.addChild(tail);
+    // eye
+    const eye = new Shape();
+    eye.graphics.beginFill('#ffffff', 1);
+    eye.graphics.drawCircle(size * 0.4, -size * 0.1, size * 0.12);
+    eye.graphics.endFill();
+    eye.graphics.beginFill('#000000', 1);
+    eye.graphics.drawCircle(size * 0.44, -size * 0.1, size * 0.06);
+    eye.graphics.endFill();
+    fish.addChild(eye);
+    return fish;
+  }
+
+  // ---- fish schools ----
+  const fishLayer = new MovieClip();
+  const fishSchools = [];
+  const schoolConfigs = [
+    { count: 7, size: 12, body: '#ff8844', fin: '#ee6622', y: 120, speed: 1.8, dir: 1 },
+    { count: 6, size: 10, body: '#44aaff', fin: '#2288dd', y: 250, speed: 1.2, dir: -1 },
+    { count: 8, size: 8, body: '#ffcc22', fin: '#ddaa00', y: 350, speed: 1.5, dir: 1 },
+    { count: 5, size: 14, body: '#ff66aa', fin: '#dd4488', y: 180, speed: 0.9, dir: -1 },
+  ];
+  for (const sc of schoolConfigs) {
+    const school = [];
+    for (let i = 0; i < sc.count; i++) {
+      const f = createFish(sc.size, sc.body, sc.fin);
+      f.x = Math.random() * W;
+      f.y = sc.y + (Math.random() - 0.5) * 50;
+      f.scaleX = sc.dir;
+      f._baseX = f.x;
+      f._speed = sc.speed + (Math.random() - 0.5) * 0.4;
+      f._dir = sc.dir;
+      f._wobblePhase = Math.random() * Math.PI * 2;
+      fishLayer.addChild(f);
+      school.push(f);
+    }
+    fishSchools.push(school);
+  }
+  fishLayer.addEventListener('enterFrame', function () {
+    for (const school of fishSchools) {
+      for (const f of school) {
+        f.x += f._speed * f._dir;
+        f._wobblePhase += 0.04;
+        f.y += Math.sin(f._wobblePhase) * 0.3;
+        if (f._dir > 0 && f.x > W + 30) f.x = -30;
+        if (f._dir < 0 && f.x < -30) f.x = W + 30;
+      }
+    }
+  });
+  root.addChild(fishLayer);
+
+  // ---- jellyfish ----
+  function createJellyfish(jx, jy, size) {
+    const jf = new MovieClip();
+    jf.x = jx; jf.y = jy;
+    // bell
+    const bell = new Shape();
+    bell.graphics.beginGradientFill('radial',
+      ['#cc88ff', '#8844cc', '#44228800'], [0.6, 0.4, 0], [0, 0.6, 1],
+      0, -size * 0.2, size, 0);
+    bell.graphics.moveTo(-size, 0);
+    bell.graphics.curveTo(-size, -size * 1.2, 0, -size * 1.2);
+    bell.graphics.curveTo(size, -size * 1.2, size, 0);
+    bell.graphics.curveTo(size * 0.5, size * 0.2, 0, size * 0.1);
+    bell.graphics.curveTo(-size * 0.5, size * 0.2, -size, 0);
+    bell.graphics.closePath();
+    bell.graphics.endFill();
+    jf.addChild(bell);
+    // tentacles
+    for (let i = 0; i < 6; i++) {
+      const tentacle = new MovieClip();
+      const seg1 = new MovieClip();
+      const s1 = new Shape();
+      s1.graphics.lineStyle(1.5, '#aa66dd', 0.5);
+      s1.graphics.moveTo(0, 0);
+      s1.graphics.lineTo(0, size * 0.6);
+      seg1.addChild(s1);
+      const seg2 = new MovieClip();
+      const s2 = new Shape();
+      s2.graphics.lineStyle(1, '#9955cc', 0.3);
+      s2.graphics.moveTo(0, 0);
+      s2.graphics.lineTo(0, size * 0.5);
+      seg2.addChild(s2);
+      seg2.y = size * 0.6;
+      const period = 60 + i * 8;
+      const phase = i * 10;
+      seg1.timeline.addTween(seg1, 'rotation', -0.2, 0.2, 1 + phase, Math.floor(period / 2) + phase, 'sineInOut');
+      seg1.timeline.addTween(seg1, 'rotation', 0.2, -0.2, Math.floor(period / 2) + phase + 1, period + phase, 'sineInOut');
+      seg2.timeline.addTween(seg2, 'rotation', 0.3, -0.3, 1 + phase, Math.floor(period / 2) + phase, 'sineInOut');
+      seg2.timeline.addTween(seg2, 'rotation', -0.3, 0.3, Math.floor(period / 2) + phase + 1, period + phase, 'sineInOut');
+      seg1.addChild(seg2);
+      tentacle.addChild(seg1);
+      tentacle.x = -size * 0.6 + i * (size * 0.24);
+      tentacle.y = size * 0.05;
+      jf.addChild(tentacle);
+    }
+    // bob up and down
+    jf._baseY = jy;
+    jf._bobPhase = Math.random() * Math.PI * 2;
+    jf.addEventListener('enterFrame', function () {
+      this._bobPhase += 0.02;
+      this.y = this._baseY + Math.sin(this._bobPhase) * 15;
+      this.x += 0.15;
+      if (this.x > W + 60) this.x = -60;
+    });
+    return jf;
+  }
+  root.addChild(createJellyfish(200, 160, 30));
+  root.addChild(createJellyfish(650, 280, 22));
+
+  // ---- bubbles ----
+  const bubbleLayer = new MovieClip();
+  const bubbles = [];
+  for (let i = 0; i < 25; i++) {
+    const bub = new MovieClip();
+    const r = 2 + Math.random() * 6;
+    const circle = new Shape();
+    circle.graphics.beginGradientFill('radial',
+      ['#aaddff', '#6699cc00'], [0.4, 0], [0.2, 1],
+      -r * 0.3, -r * 0.3, r, 0);
+    circle.graphics.drawCircle(0, 0, r);
+    circle.graphics.endFill();
+    // highlight
+    circle.graphics.beginFill('#ffffff', 0.5);
+    circle.graphics.drawCircle(-r * 0.25, -r * 0.25, r * 0.3);
+    circle.graphics.endFill();
+    bub.addChild(circle);
+    bub.x = Math.random() * W;
+    bub.y = H + Math.random() * 100;
+    bub._speed = 0.5 + Math.random() * 1.5;
+    bub._wobblePhase = Math.random() * Math.PI * 2;
+    bub._baseX = bub.x;
+    bub.alpha = 0.4 + Math.random() * 0.5;
+    bubbleLayer.addChild(bub);
+    bubbles.push(bub);
+  }
+  bubbleLayer.addEventListener('enterFrame', function () {
+    for (const b of bubbles) {
+      b.y -= b._speed;
+      b._wobblePhase += 0.05;
+      b.x = b._baseX + Math.sin(b._wobblePhase) * 8;
+      if (b.y < -20) {
+        b.y = H + 10;
+        b._baseX = Math.random() * W;
+      }
+    }
+  });
+  root.addChild(bubbleLayer);
+
+  // ---- sea turtle ----
+  const turtle = new MovieClip();
+  turtle.x = -80; turtle.y = 300;
+  // shell
+  const shell = new Shape();
+  shell.graphics.beginGradientFill('radial',
+    ['#558833', '#336622', '#224411'], [1, 1, 1], [0, 0.5, 1],
+    0, -5, 25, 0);
+  shell.graphics.drawEllipse(-22, -14, 44, 28);
+  shell.graphics.endFill();
+  // shell pattern
+  shell.graphics.lineStyle(1, '#447733', 0.5);
+  shell.graphics.moveTo(-10, -12); shell.graphics.lineTo(-5, 12);
+  shell.graphics.moveTo(0, -14); shell.graphics.lineTo(0, 14);
+  shell.graphics.moveTo(10, -12); shell.graphics.lineTo(5, 12);
+  turtle.addChild(shell);
+  // head
+  const head = new Shape();
+  head.graphics.beginFill('#448833', 1);
+  head.graphics.drawEllipse(18, -5, 14, 10);
+  head.graphics.endFill();
+  head.graphics.beginFill('#111111', 1);
+  head.graphics.drawCircle(28, -2, 1.5);
+  head.graphics.endFill();
+  turtle.addChild(head);
+  // flippers
+  const flipperPositions = [
+    { x: -12, y: -12, rot: -0.4, from: -0.5, to: 0.2 },
+    { x: -12, y: 12, rot: 0.4, from: 0.5, to: -0.2 },
+    { x: 10, y: -11, rot: -0.3, from: -0.4, to: 0.3 },
+    { x: 10, y: 11, rot: 0.3, from: 0.4, to: -0.3 },
+  ];
+  for (const fp of flipperPositions) {
+    const flipper = new MovieClip();
+    const fs = new Shape();
+    fs.graphics.beginFill('#447733', 0.9);
+    fs.graphics.moveTo(0, 0);
+    fs.graphics.curveTo(10, -4, 16, 0);
+    fs.graphics.curveTo(10, 4, 0, 0);
+    fs.graphics.endFill();
+    flipper.addChild(fs);
+    flipper.x = fp.x; flipper.y = fp.y;
+    flipper.timeline.addTween(flipper, 'rotation', fp.from, fp.to, 1, 30, 'sineInOut');
+    flipper.timeline.addTween(flipper, 'rotation', fp.to, fp.from, 31, 60, 'sineInOut');
+    turtle.addChild(flipper);
+  }
+  turtle.addEventListener('enterFrame', function () {
+    this.x += 0.6;
+    this.y += Math.sin(this.x * 0.01) * 0.3;
+    if (this.x > W + 80) this.x = -80;
+  });
+  root.addChild(turtle);
+
+  // ---- label ----
+  const title = new TextField('Underwater Scene', { font: '11px sans-serif', color: '#ffffff', align: 'right' });
+  title.x = W - 10; title.y = H - 18; title.alpha = 0.3;
+  root.addChild(title);
+
+  window.__stage = stage;
+  stage.start();
+})();
+</script>
+</body>
+</html>

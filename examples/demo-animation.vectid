@@ -1,0 +1,301 @@
+{
+  "width": 960,
+  "height": 540,
+  "fps": 24,
+  "backgroundColor": "#87ceeb",
+  "totalFrames": 60,
+  "layers": [
+    {
+      "name": "Sky",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "sky1",
+              "type": "rect",
+              "x": 0,
+              "y": 0,
+              "width": 960,
+              "height": 440,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "skyRect",
+              "fillColor": "#5dade2",
+              "fillAlpha": 1,
+              "strokeColor": "#000000",
+              "strokeAlpha": 0,
+              "strokeWidth": 0,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "ground1",
+              "type": "rect",
+              "x": 0,
+              "y": 440,
+              "width": 960,
+              "height": 100,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "groundRect",
+              "fillColor": "#1e7d32",
+              "fillAlpha": 1,
+              "strokeColor": "#000000",
+              "strokeAlpha": 0,
+              "strokeWidth": 0,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ball",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 15,
+          "tweenType": "motion",
+          "easing": "quadIn",
+          "script": "",
+          "objects": [
+            {
+              "id": "ball1",
+              "type": "oval",
+              "x": 480,
+              "y": 50,
+              "width": 60,
+              "height": 60,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "ball",
+              "fillColor": "#e63946",
+              "fillAlpha": 1,
+              "strokeColor": "#c62828",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        },
+        {
+          "index": 16,
+          "duration": 15,
+          "tweenType": "motion",
+          "easing": "quadOut",
+          "script": "",
+          "objects": [
+            {
+              "id": "ball1",
+              "type": "oval",
+              "x": 480,
+              "y": 420,
+              "width": 60,
+              "height": 60,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "ball",
+              "fillColor": "#e63946",
+              "fillAlpha": 1,
+              "strokeColor": "#c62828",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        },
+        {
+          "index": 31,
+          "duration": 15,
+          "tweenType": "motion",
+          "easing": "quadIn",
+          "script": "",
+          "objects": [
+            {
+              "id": "ball1",
+              "type": "oval",
+              "x": 480,
+              "y": 50,
+              "width": 60,
+              "height": 60,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "ball",
+              "fillColor": "#e63946",
+              "fillAlpha": 1,
+              "strokeColor": "#c62828",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        },
+        {
+          "index": 46,
+          "duration": 15,
+          "tweenType": "motion",
+          "easing": "quadOut",
+          "script": "",
+          "objects": [
+            {
+              "id": "ball1",
+              "type": "oval",
+              "x": 480,
+              "y": 420,
+              "width": 60,
+              "height": 60,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "ball",
+              "fillColor": "#e63946",
+              "fillAlpha": 1,
+              "strokeColor": "#c62828",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Shadow",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "shadow1",
+              "type": "oval",
+              "x": 470,
+              "y": 470,
+              "width": 80,
+              "height": 20,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 0.3,
+              "name": "shadow",
+              "fillColor": "#1a1a1a",
+              "fillAlpha": 1,
+              "strokeColor": "#000000",
+              "strokeAlpha": 0,
+              "strokeWidth": 0,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Title",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "title1",
+              "type": "text",
+              "x": 370,
+              "y": 10,
+              "width": 220,
+              "height": 40,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "title",
+              "fillColor": "#ffffff",
+              "fillAlpha": 1,
+              "strokeColor": "#000000",
+              "strokeAlpha": 0,
+              "strokeWidth": 0,
+              "points": null,
+              "text": "Bouncing Ball",
+              "font": "Arial",
+              "fontSize": 32,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "library": {}
+}

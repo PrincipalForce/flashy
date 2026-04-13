@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vectid - Neon City</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #050508; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #ff44cc; letter-spacing: 2px; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.6; }
+  canvas { border: 1px solid #1a1a2e; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>Neon City</h1>
+<p class="info">Cyberpunk cityscape with neon signs, rain, reflections, flying car, billboard, and steam vents.</p>
+<canvas id="stage"></canvas>
+<script src="../vectid.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const W = 960, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });
+  const root = stage.root;
+  const GROUND = 400;
+
+  // ---- dark sky gradient ----
+  const bg = new Shape();
+  bg.graphics.beginGradientFill('linear',
+    ['#0c0618', '#080412', '#04020a'], [1, 1, 1], [0, 0.5, 1],
+    0, 0, 0, GROUND);
+  bg.graphics.drawRect(0, 0, W, GROUND);
+  bg.graphics.endFill();
+  root.addChild(bg);
+
+  // ---- wet ground ----
+  const ground = new Shape();
+  ground.graphics.beginGradientFill('linear',
+    ['#0a0812', '#060410', '#080614'], [1, 1, 1], [0, 0.5, 1],
+    0, GROUND, 0, H);
+  ground.graphics.drawRect(0, GROUND, W, H - GROUND);
+  ground.graphics.endFill();
+  root.addChild(ground);
+
+  // ---- city skyline ----
+  const skyline = new Shape();
+  const buildings = [];
+  let bx = -5;
+  while (bx < W + 20) {
+    const bw = 30 + Math.random() * 70;
+    const bh = 80 + Math.random() * 200;
+    buildings.push({ x: bx, w: bw, h: bh });
+    bx += bw + Math.random() * 5;
+  }
+  for (const b of buildings) {
+    skyline.graphics.beginFill('#0a0a14', 1);
+    skyline.graphics.drawRect(b.x, GROUND - b.h, b.w, b.h);
+    skyline.graphics.endFill();
+    // dim windows
+    for (let wy = GROUND - b.h + 8; wy < GROUND - 5; wy += 12) {
+      for (let wx = b.x + 4; wx < b.x + b.w - 4; wx += 8) {
+        if (Math.random() > 0.5) {
+          const wc = Math.random() > 0.7 ? '#334466' : '#222233';
+          skyline.graphics.beginFill(wc, 0.3 + Math.random() * 0.3);
+          skyline.graphics.drawRect(wx, wy, 3, 4);
+          skyline.graphics.endFill();
+        }
+      }
+    }
+  }
+  root.addChild(skyline);
+
+  // ---- neon sign factory (glow via layered strokes) ----
+  function createNeonSign(sx, sy, color, drawFn) {
+    const sign = new MovieClip();
+    sign.x = sx; sign.y = sy;
+    // glow layers: widest & faintest first
+    const layers = [
+      { width: 8, alpha: 0.08 },
+      { width: 5, alpha: 0.15 },
+      { width: 3, alpha: 0.3 },
+      { width: 1.5, alpha: 0.9 },
+    ];
+    for (const l of layers) {
+      const s = new Shape();
+      s.graphics.lineStyle(l.width, color, l.alpha);
+      drawFn(s.graphics);
+      sign.addChild(s);
+    }
+    return sign;
+  }
+
+  // neon sign 1: circle + cross (pharmacy)
+  const neon1 = createNeonSign(150, 180, '#00ffcc', function (g) {
+    g.drawCircle(0, 0, 20);
+    g.moveTo(-12, 0); g.lineTo(12, 0);
+    g.moveTo(0, -12); g.lineTo(0, 12);
+  });
+  root.addChild(neon1);
+
+  // neon sign 2: triangle (bar)
+  const neon2 = createNeonSign(380, 150, '#ff00ff', function (g) {
+    g.moveTo(0, -25); g.lineTo(22, 15); g.lineTo(-22, 15); g.closePath();
+  });
+  // flicker
+  let flickerTimer2 = 0;
+  neon2.addEventListener('enterFrame', function () {
+    flickerTimer2++;
+    if (flickerTimer2 % 40 < 3) this.alpha = 0.2 + Math.random() * 0.3;
+    else this.alpha = 0.85 + Math.random() * 0.15;
+  });
+  root.addChild(neon2);
+
+  // neon sign 3: zigzag (decorative)
+  const neon3 = createNeonSign(620, 120, '#ffff00', function (g) {
+    g.moveTo(-30, 10); g.lineTo(-15, -10); g.lineTo(0, 10); g.lineTo(15, -10); g.lineTo(30, 10);
+  });
+  root.addChild(neon3);
+
+  // neon sign 4: text typing out
+  const neonTextMC = new MovieClip();
+  neonTextMC.x = 760; neonTextMC.y = 200;
+  const fullText = 'OPEN 24H';
+  const neonTextField = new TextField('', {
+    font: 'bold 18px monospace', color: '#00ffff', align: 'left', baseline: 'top'
+  });
+  neonTextMC.addChild(neonTextField);
+  let charIndex = 0;
+  let typeTimer = 0;
+  neonTextMC.addEventListener('enterFrame', function () {
+    typeTimer++;
+    if (typeTimer % 6 === 0) {
+      charIndex++;
+      if (charIndex > fullText.length + 15) charIndex = 0;
+      neonTextField.text = fullText.substring(0, Math.min(charIndex, fullText.length));
+    }
+  });
+  root.addChild(neonTextMC);
+
+  // ---- reflections on wet ground ----
+  function addReflection(original, oy) {
+    const refl = new MovieClip();
+    // approximate reflection as a mirrored low-alpha version
+    for (let ci = 0; ci < original.children.length; ci++) {
+      const child = original.children[ci];
+      if (child.graphics) {
+        const rs = new Shape();
+        rs.graphics._cmds = child.graphics._cmds.slice();
+        rs.graphics._bounds = child.graphics._bounds;
+        refl.addChild(rs);
+      }
+    }
+    refl.x = original.x;
+    refl.y = GROUND + (GROUND - oy) * 0.15 + 10;
+    refl.scaleY = -0.3;
+    refl.alpha = 0.15;
+    root.addChild(refl);
+  }
+  addReflection(neon1, 180);
+  addReflection(neon2, 150);
+  addReflection(neon3, 120);
+
+  // ---- rain ----
+  const rainLayer = new MovieClip();
+  const raindrops = [];
+  for (let i = 0; i < 200; i++) {
+    const drop = new Shape();
+    const len = 6 + Math.random() * 12;
+    const a = 0.1 + Math.random() * 0.3;
+    drop.graphics.lineStyle(0.8, '#8899bb', a);
+    drop.graphics.moveTo(0, 0);
+    drop.graphics.lineTo(-3, len);
+    drop.x = Math.random() * (W + 60);
+    drop.y = Math.random() * H - 20;
+    const speed = 6 + Math.random() * 8;
+    rainLayer.addChild(drop);
+    raindrops.push({ shape: drop, speed: speed });
+  }
+  rainLayer.addEventListener('enterFrame', function () {
+    for (const r of raindrops) {
+      r.shape.y += r.speed;
+      r.shape.x -= r.speed * 0.2;
+      if (r.shape.y > H + 10) {
+        r.shape.y = -15;
+        r.shape.x = Math.random() * (W + 60);
+      }
+    }
+  });
+  root.addChild(rainLayer);
+
+  // ---- steam/smoke from vents ----
+  function createSteamVent(vx, vy) {
+    const vent = new MovieClip();
+    vent.x = vx; vent.y = vy;
+    const particles = [];
+    function spawnSteam() {
+      const p = new MovieClip();
+      const ps = new Shape();
+      ps.graphics.beginFill('#aabbcc', 0.15);
+      ps.graphics.drawCircle(0, 0, 3 + Math.random() * 4);
+      ps.graphics.endFill();
+      p.addChild(ps);
+      p.x = (Math.random() - 0.5) * 8;
+      p.y = 0;
+      p._vx = (Math.random() - 0.5) * 0.5;
+      p._vy = -0.5 - Math.random() * 1;
+      p._life = 0;
+      p._maxLife = 40 + Math.floor(Math.random() * 30);
+      vent.addChild(p);
+      particles.push(p);
+    }
+    vent.addEventListener('enterFrame', function () {
+      if (Math.random() > 0.5) spawnSteam();
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p._life++;
+        p.x += p._vx;
+        p.y += p._vy;
+        p.scaleX = 1 + p._life * 0.04;
+        p.scaleY = p.scaleX;
+        p.alpha = 1 - p._life / p._maxLife;
+        if (p._life >= p._maxLife) {
+          vent.removeChild(p);
+          particles.splice(i, 1);
+        }
+      }
+    });
+    return vent;
+  }
+  root.addChild(createSteamVent(280, GROUND));
+  root.addChild(createSteamVent(530, GROUND));
+  root.addChild(createSteamVent(820, GROUND));
+
+  // ---- animated billboard ----
+  const billboard = new MovieClip();
+  billboard.x = 470; billboard.y = 100;
+  // frame
+  const bbFrame = new Shape();
+  bbFrame.graphics.lineStyle(2, '#666688', 0.6);
+  bbFrame.graphics.drawRect(-50, -25, 100, 50);
+  billboard.addChild(bbFrame);
+  // 3 ad panels
+  const adColors = ['#ff4488', '#44ff88', '#4488ff'];
+  const adTexts = ['CYBER', 'NEON', '2077'];
+  const adPanels = [];
+  for (let i = 0; i < 3; i++) {
+    const panel = new MovieClip();
+    const pbg = new Shape();
+    pbg.graphics.beginFill(adColors[i], 0.2);
+    pbg.graphics.drawRect(-48, -23, 96, 46);
+    pbg.graphics.endFill();
+    panel.addChild(pbg);
+    const ptf = new TextField(adTexts[i], {
+      font: 'bold 22px monospace', color: adColors[i], align: 'center', baseline: 'middle'
+    });
+    panel.addChild(ptf);
+    panel.visible = i === 0;
+    billboard.addChild(panel);
+    adPanels.push(panel);
+  }
+  let adIndex = 0;
+  let adTimer = 0;
+  billboard.addEventListener('enterFrame', function () {
+    adTimer++;
+    if (adTimer >= 90) {
+      adPanels[adIndex].visible = false;
+      adIndex = (adIndex + 1) % 3;
+      adPanels[adIndex].visible = true;
+      adTimer = 0;
+    }
+  });
+  root.addChild(billboard);
+
+  // ---- flying car ----
+  const flyingCar = new MovieClip();
+  flyingCar.x = -120; flyingCar.y = 80;
+  // body
+  const carBody = new Shape();
+  carBody.graphics.beginFill('#223344', 0.9);
+  carBody.graphics.moveTo(-25, 0);
+  carBody.graphics.curveTo(-25, -8, -15, -10);
+  carBody.graphics.lineTo(15, -10);
+  carBody.graphics.curveTo(25, -8, 30, -2);
+  carBody.graphics.lineTo(30, 3);
+  carBody.graphics.curveTo(25, 6, -20, 6);
+  carBody.graphics.curveTo(-28, 4, -25, 0);
+  carBody.graphics.closePath();
+  carBody.graphics.endFill();
+  // window
+  carBody.graphics.beginFill('#44aaff', 0.3);
+  carBody.graphics.drawRect(-10, -8, 18, 6);
+  carBody.graphics.endFill();
+  flyingCar.addChild(carBody);
+  // engine glow
+  const engineGlow = new Shape();
+  engineGlow.graphics.beginGradientFill('radial',
+    ['#00ccff', '#0088cc00'], [0.6, 0], [0, 1],
+    -22, 4, 8, 0);
+  engineGlow.graphics.drawCircle(-22, 4, 8);
+  engineGlow.graphics.endFill();
+  flyingCar.addChild(engineGlow);
+  // headlights
+  const headlight = new Shape();
+  headlight.graphics.beginGradientFill('linear',
+    ['#ffffff', '#ffffff00'], [0.4, 0], [0, 1],
+    30, 0, 70, 0);
+  headlight.graphics.moveTo(30, -3);
+  headlight.graphics.lineTo(60, -6);
+  headlight.graphics.lineTo(60, 6);
+  headlight.graphics.lineTo(30, 3);
+  headlight.graphics.closePath();
+  headlight.graphics.endFill();
+  flyingCar.addChild(headlight);
+
+  let carPhase = 0;
+  flyingCar.addEventListener('enterFrame', function () {
+    this.x += 2.5;
+    carPhase += 0.08;
+    this.y = 80 + Math.sin(carPhase) * 6;
+    if (this.x > W + 150) this.x = -150;
+  });
+  root.addChild(flyingCar);
+
+  // ---- chasing lights sign ----
+  const chasingSign = new MovieClip();
+  chasingSign.x = 100; chasingSign.y = 280;
+  const chasingDots = [];
+  for (let i = 0; i < 10; i++) {
+    const dot = new Shape();
+    dot.graphics.beginFill('#ff4444', 1);
+    dot.graphics.drawCircle(0, 0, 3);
+    dot.graphics.endFill();
+    dot.x = i * 12;
+    chasingSign.addChild(dot);
+    chasingDots.push(dot);
+  }
+  let chaseOffset = 0;
+  chasingSign.addEventListener('enterFrame', function () {
+    chaseOffset++;
+    for (let i = 0; i < chasingDots.length; i++) {
+      chasingDots[i].alpha = ((i + chaseOffset) % 4 === 0) ? 1 : 0.15;
+    }
+  });
+  root.addChild(chasingSign);
+
+  // ---- label ----
+  const title = new TextField('Neon City', { font: '11px sans-serif', color: '#ffffff', align: 'right' });
+  title.x = W - 10; title.y = H - 18; title.alpha = 0.3;
+  root.addChild(title);
+
+  window.__stage = stage;
+  stage.start();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vectid Studio</title>
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+<div id="app">
+  <div id="menubar"></div>
+  <div id="toolbar"></div>
+  <div id="main">
+    <div id="toolbox"></div>
+    <div id="stage-wrap"><canvas id="stageCanvas"></canvas></div>
+    <div id="right-col">
+      <div class="panel">
+        <div class="panel-header"><span class="title">Properties</span></div>
+        <div class="panel-body" id="propsPanel"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><span class="title">Color Mixer</span></div>
+        <div class="panel-body" id="colorPanel"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><span class="title">Library</span></div>
+        <div class="panel-body" id="libPanel"></div>
+      </div>
+    </div>
+  </div>
+  <div id="tl-section">
+    <div id="tl-head">
+      <span class="title">Timeline</span>
+    </div>
+    <div id="tl-body">
+      <div id="tl-layers"><div id="tl-layers-inner"><div id="layerList"></div></div></div>
+      <div id="tl-frames"><canvas id="tlCanvas"></canvas></div>
+    </div>
+  </div>
+  <div id="bottom-bar">
+    <div id="bottom-tabs">
+      <span class="bottom-tab active" data-tab="props">Properties</span>
+      <span class="bottom-tab" data-tab="actions">Actions</span>
+      <span class="bottom-tab" data-tab="ai">AI Assistant</span>
+    </div>
+    <div class="bottom-panel" id="bp-props" style="display:block"></div>
+    <div class="bottom-panel" id="bp-actions" style="display:none">
+      <textarea id="frame-script" placeholder="// Frame script (JavaScript)"></textarea>
+    </div>
+    <div class="bottom-panel" id="bp-ai" style="display:none">
+      <div id="aiPanel"></div>
+    </div>
+  </div>
+</div>
+<script src="vectid.js"></script>
+<script src="editor-app.js"></script>
+</body>
+</html>

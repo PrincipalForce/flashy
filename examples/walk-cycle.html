@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vectid - Character Walk Cycle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a12; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #70cc90; letter-spacing: 2px; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.6; }
+  canvas { border: 1px solid #1a1a2e; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>Walk Cycle</h1>
+<p class="info">Articulated stick figure with nested limb MovieClips, scrolling parallax landscape, and day/night cycle.</p>
+<canvas id="stage"></canvas>
+<script src="../vectid.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const W = 960, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });
+  const root = stage.root;
+
+  // ---- day/night sky ----
+  const skyMC = new MovieClip();
+  const skyShape = new Shape();
+  skyMC.addChild(skyShape);
+  root.addChild(skyMC);
+
+  // Day/night cycle state
+  let dayPhase = 0;
+  function drawSky() {
+    const g = skyShape.graphics;
+    g.clear();
+    const t = (Math.sin(dayPhase) + 1) / 2; // 0 = night, 1 = day
+    const r1 = Math.round(10 + t * 100), g1 = Math.round(15 + t * 150), b1 = Math.round(40 + t * 200);
+    const r2 = Math.round(5 + t * 40), g2 = Math.round(5 + t * 60), b2 = Math.round(20 + t * 80);
+    const topColor = '#' + ((1 << 24) + (r1 << 16) + (g1 << 8) + b1).toString(16).slice(1);
+    const botColor = '#' + ((1 << 24) + (r2 << 16) + (g2 << 8) + b2).toString(16).slice(1);
+    g.beginGradientFill('linear', [topColor, botColor], [1, 1], [0, 1], 0, 0, 0, H);
+    g.drawRect(0, 0, W, H);
+    g.endFill();
+  }
+  drawSky();
+
+  // ---- parallax layers ----
+  const GROUND_Y = 400;
+
+  // far mountains
+  function createMountains(color, baseY, count, maxH, speed) {
+    const mc = new MovieClip();
+    const shape = new Shape();
+    mc.addChild(shape);
+    const peaks = [];
+    const totalW = W * 2;
+    for (let i = 0; i < count; i++) {
+      peaks.push({ x: (totalW / count) * i + Math.random() * 60, h: 40 + Math.random() * maxH });
+    }
+    function drawMountains(offset) {
+      const g = shape.graphics;
+      g.clear();
+      g.beginFill(color, 1);
+      g.moveTo(0, baseY);
+      for (const p of peaks) {
+        const px = ((p.x - offset) % totalW + totalW) % totalW - 80;
+        g.lineTo(px - 60, baseY);
+        g.lineTo(px, baseY - p.h);
+        g.lineTo(px + 60, baseY);
+      }
+      g.lineTo(W + 20, baseY);
+      g.lineTo(W + 20, H);
+      g.lineTo(0, H);
+      g.closePath();
+      g.endFill();
+    }
+    mc._offset = 0;
+    mc._speed = speed;
+    mc._drawFn = drawMountains;
+    drawMountains(0);
+    return mc;
+  }
+
+  const farMountains = createMountains('#1a2244', 360, 12, 120, 0.3);
+  root.addChild(farMountains);
+  const nearHills = createMountains('#2a3a30', 390, 16, 60, 0.8);
+  root.addChild(nearHills);
+
+  // ground
+  const ground = new Shape();
+  ground.graphics.beginFill('#2d4a1e', 1);
+  ground.graphics.drawRect(0, GROUND_Y, W, H - GROUND_Y);
+  ground.graphics.endFill();
+  // grass line
+  ground.graphics.beginFill('#3d6a2e', 1);
+  ground.graphics.drawRect(0, GROUND_Y, W, 6);
+  ground.graphics.endFill();
+  root.addChild(ground);
+
+  // ---- scrolling trees ----
+  function createTree(tx, ty) {
+    const tree = new MovieClip();
+    tree.x = tx; tree.y = ty;
+    // trunk
+    const trunk = new Shape();
+    trunk.graphics.beginFill('#4a3520', 1);
+    trunk.graphics.drawRect(-4, -40, 8, 40);
+    trunk.graphics.endFill();
+    tree.addChild(trunk);
+    // foliage layers
+    const foliage = new Shape();
+    const g = foliage.graphics;
+    g.beginFill('#2a7a30', 1);
+    g.moveTo(0, -80); g.lineTo(-20, -45); g.lineTo(20, -45); g.closePath(); g.endFill();
+    g.beginFill('#35883a', 1);
+    g.moveTo(0, -65); g.lineTo(-25, -30); g.lineTo(25, -30); g.closePath(); g.endFill();
+    g.beginFill('#2a7a30', 1);
+    g.moveTo(0, -50); g.lineTo(-28, -15); g.lineTo(28, -15); g.closePath(); g.endFill();
+    tree.addChild(foliage);
+    return tree;
+  }
+
+  const treesContainer = new MovieClip();
+  const treeSpacing = 160;
+  const numTrees = Math.ceil(W / treeSpacing) + 2;
+  const trees = [];
+  for (let i = 0; i < numTrees; i++) {
+    const t = createTree(i * treeSpacing + Math.random() * 40, GROUND_Y);
+    t.scaleX = 0.6 + Math.random() * 0.5;
+    t.scaleY = t.scaleX;
+    treesContainer.addChild(t);
+    trees.push(t);
+  }
+  root.addChild(treesContainer);
+
+  // ---- clouds ----
+  function createCloud(cx, cy, w) {
+    const cloud = new MovieClip();
+    cloud.x = cx; cloud.y = cy;
+    const s = new Shape();
+    const g = s.graphics;
+    g.beginFill('#ffffff', 0.6);
+    g.drawEllipse(-w / 2, -10, w, 20);
+    g.endFill();
+    g.beginFill('#ffffff', 0.5);
+    g.drawEllipse(-w / 3, -22, w * 0.6, 18);
+    g.endFill();
+    g.beginFill('#ffffff', 0.4);
+    g.drawEllipse(w * 0.05, -18, w * 0.4, 14);
+    g.endFill();
+    cloud.addChild(s);
+    return cloud;
+  }
+
+  const cloudContainer = new MovieClip();
+  const clouds = [];
+  for (let i = 0; i < 6; i++) {
+    const c = createCloud(Math.random() * W, 40 + Math.random() * 120, 60 + Math.random() * 80);
+    c._speed = 0.2 + Math.random() * 0.4;
+    cloudContainer.addChild(c);
+    clouds.push(c);
+  }
+  root.addChild(cloudContainer);
+
+  // ---- character ----
+  const character = new MovieClip();
+  character.x = W * 0.35;
+  character.y = GROUND_Y;
+
+  const CYCLE = 30; // frames per walk cycle
+
+  // head (bobs up/down)
+  const head = new MovieClip();
+  head.y = -120;
+  const headShape = new Shape();
+  headShape.graphics.beginGradientFill('radial',
+    ['#ffddbb', '#ddaa88'], [1, 1], [0, 1], 0, 0, 12, 0);
+  headShape.graphics.drawCircle(0, 0, 12);
+  headShape.graphics.endFill();
+  // eyes
+  headShape.graphics.beginFill('#333333', 1);
+  headShape.graphics.drawCircle(4, -2, 2);
+  headShape.graphics.drawCircle(-4, -2, 2);
+  headShape.graphics.endFill();
+  head.addChild(headShape);
+  head.timeline.setTotalFrames(CYCLE);
+  head.timeline.addTween(head, 'y', -120, -124, 1, Math.round(CYCLE / 4), 'sineInOut');
+  head.timeline.addTween(head, 'y', -124, -120, Math.round(CYCLE / 4), Math.round(CYCLE / 2), 'sineInOut');
+  head.timeline.addTween(head, 'y', -120, -124, Math.round(CYCLE / 2), Math.round(CYCLE * 3 / 4), 'sineInOut');
+  head.timeline.addTween(head, 'y', -124, -120, Math.round(CYCLE * 3 / 4), CYCLE, 'sineInOut');
+  character.addChild(head);
+
+  // torso
+  const torso = new Shape();
+  torso.graphics.lineStyle(5, '#cc5544', 1);
+  torso.graphics.moveTo(0, -105);
+  torso.graphics.lineTo(0, -60);
+  torso.graphics.endFill();
+  character.addChild(torso);
+
+  // limb factory: upper + lower segment with knee/elbow joint
+  function createLimb(upperLen, lowerLen, color, thickness) {
+    const limb = new MovieClip();
+    // upper segment
+    const upper = new Shape();
+    upper.graphics.lineStyle(thickness, color, 1);
+    upper.graphics.moveTo(0, 0);
+    upper.graphics.lineTo(0, upperLen);
+    upper.graphics.endFill();
+    limb.addChild(upper);
+    // lower segment (nested MC for knee/elbow)
+    const lower = new MovieClip();
+    lower.y = upperLen;
+    const lowerShape = new Shape();
+    lowerShape.graphics.lineStyle(thickness - 1, color, 1);
+    lowerShape.graphics.moveTo(0, 0);
+    lowerShape.graphics.lineTo(0, lowerLen);
+    lowerShape.graphics.endFill();
+    lower.addChild(lowerShape);
+    // joint circle
+    const joint = new Shape();
+    joint.graphics.beginFill(color, 1);
+    joint.graphics.drawCircle(0, 0, thickness * 0.6);
+    joint.graphics.endFill();
+    lower.addChild(joint);
+    limb.addChild(lower);
+    limb._lower = lower;
+    return limb;
+  }
+
+  const H2 = Math.round(CYCLE / 2), Q1 = Math.round(CYCLE / 4), Q3 = Math.round(CYCLE * 3 / 4);
+
+  // right leg — big swing, deep knee bend on back-swing
+  const rightLeg = createLimb(26, 24, '#cc5544', 5);
+  rightLeg.x = 3; rightLeg.y = -60;
+  rightLeg.timeline.setTotalFrames(CYCLE);
+  rightLeg.timeline.addTween(rightLeg, 'rotation', -0.55, 0.45, 1, H2, 'sineInOut');
+  rightLeg.timeline.addTween(rightLeg, 'rotation', 0.45, -0.55, H2, CYCLE, 'sineInOut');
+  rightLeg.timeline.addTween(rightLeg._lower, 'rotation', 0.0, 0.9, 1, Q1, 'sineOut');
+  rightLeg.timeline.addTween(rightLeg._lower, 'rotation', 0.9, 0.05, Q1, H2, 'sineIn');
+  rightLeg.timeline.addTween(rightLeg._lower, 'rotation', 0.05, 0.15, H2, Q3, 'sineOut');
+  rightLeg.timeline.addTween(rightLeg._lower, 'rotation', 0.15, 0.0, Q3, CYCLE, 'sineIn');
+  character.addChild(rightLeg);
+
+  // left leg — opposite phase
+  const leftLeg = createLimb(26, 24, '#aa4433', 5);
+  leftLeg.x = -3; leftLeg.y = -60;
+  leftLeg.timeline.setTotalFrames(CYCLE);
+  leftLeg.timeline.addTween(leftLeg, 'rotation', 0.45, -0.55, 1, H2, 'sineInOut');
+  leftLeg.timeline.addTween(leftLeg, 'rotation', -0.55, 0.45, H2, CYCLE, 'sineInOut');
+  leftLeg.timeline.addTween(leftLeg._lower, 'rotation', 0.05, 0.15, 1, Q1, 'sineOut');
+  leftLeg.timeline.addTween(leftLeg._lower, 'rotation', 0.15, 0.0, Q1, H2, 'sineIn');
+  leftLeg.timeline.addTween(leftLeg._lower, 'rotation', 0.0, 0.9, H2, Q3, 'sineOut');
+  leftLeg.timeline.addTween(leftLeg._lower, 'rotation', 0.9, 0.05, Q3, CYCLE, 'sineIn');
+  character.addChild(leftLeg);
+
+  // feet (small shapes at end of lower leg)
+  function addFoot(limb, color) {
+    const foot = new Shape();
+    foot.graphics.beginFill(color, 1);
+    foot.graphics.drawEllipse(-3, -2, 12, 5);
+    foot.graphics.endFill();
+    foot.y = 24;
+    limb._lower.addChild(foot);
+  }
+  addFoot(rightLeg, '#884030');
+  addFoot(leftLeg, '#773828');
+
+  // right arm — swings opposite to right leg, elbow bends
+  const rightArm = createLimb(20, 18, '#cc5544', 4);
+  rightArm.x = 4; rightArm.y = -105;
+  rightArm.timeline.setTotalFrames(CYCLE);
+  rightArm.timeline.addTween(rightArm, 'rotation', 0.5, -0.5, 1, H2, 'sineInOut');
+  rightArm.timeline.addTween(rightArm, 'rotation', -0.5, 0.5, H2, CYCLE, 'sineInOut');
+  rightArm.timeline.addTween(rightArm._lower, 'rotation', -0.5, -0.1, 1, H2, 'sineInOut');
+  rightArm.timeline.addTween(rightArm._lower, 'rotation', -0.1, -0.5, H2, CYCLE, 'sineInOut');
+  character.addChild(rightArm);
+
+  // left arm
+  const leftArm = createLimb(20, 18, '#aa4433', 4);
+  leftArm.x = -4; leftArm.y = -105;
+  leftArm.timeline.setTotalFrames(CYCLE);
+  leftArm.timeline.addTween(leftArm, 'rotation', -0.5, 0.5, 1, H2, 'sineInOut');
+  leftArm.timeline.addTween(leftArm, 'rotation', 0.5, -0.5, H2, CYCLE, 'sineInOut');
+  leftArm.timeline.addTween(leftArm._lower, 'rotation', -0.1, -0.5, 1, H2, 'sineInOut');
+  leftArm.timeline.addTween(leftArm._lower, 'rotation', -0.5, -0.1, H2, CYCLE, 'sineInOut');
+  character.addChild(leftArm);
+
+  root.addChild(character);
+
+  // ---- scroll everything ----
+  let scrollOffset = 0;
+  const scrollSpeed = 2.5;
+
+  root.addEventListener('enterFrame', function () {
+    scrollOffset += scrollSpeed;
+    dayPhase += 0.002;
+    drawSky();
+
+    // parallax scroll
+    farMountains._offset += farMountains._speed;
+    farMountains._drawFn(farMountains._offset);
+    nearHills._offset += nearHills._speed;
+    nearHills._drawFn(nearHills._offset);
+
+    // scroll trees
+    for (const t of trees) {
+      t.x -= scrollSpeed * 1.2;
+      if (t.x < -50) t.x += numTrees * treeSpacing;
+    }
+
+    // scroll clouds
+    for (const c of clouds) {
+      c.x -= c._speed;
+      if (c.x < -100) { c.x = W + 100; c.y = 40 + Math.random() * 120; }
+    }
+  });
+
+  // ---- info label ----
+  const label = new TextField('Vectid Walk Cycle Demo', { font: '11px sans-serif', color: '#ffffff', align: 'right' });
+  label.x = W - 10; label.y = H - 18; label.alpha = 0.3;
+  root.addChild(label);
+
+  window.__stage = stage;
+  stage.start();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "name": "vectid",
+  "version": "0.1.0",
+  "description": "HTML5 Canvas vector animation engine — a modern Flash alternative with timeline, nested MovieClips, tweening, and a full authoring IDE",
+  "main": "vectid.js",
+  "keywords": [
+    "flash",
+    "animation",
+    "canvas",
+    "vector",
+    "movieclip",
+    "timeline",
+    "tween",
+    "swf",
+    "fla",
+    "html5",
+    "2d",
+    "game-engine"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "files": [
+    "vectid.js",
+    "vectid-swf.js",
+    "vectid-fla.js"
+  ],
+  "scripts": {
+    "start": "python -m http.server 8000",
+    "dev": "python -m http.server 8000"
+  }
+}

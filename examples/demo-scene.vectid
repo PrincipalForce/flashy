@@ -1,0 +1,416 @@
+{
+  "width": 960,
+  "height": 540,
+  "fps": 24,
+  "backgroundColor": "#87ceeb",
+  "totalFrames": 60,
+  "layers": [
+    {
+      "name": "Sky",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "sky1",
+              "type": "rect",
+              "x": 0,
+              "y": 0,
+              "width": 960,
+              "height": 380,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "sky",
+              "fillColor": "#87ceeb",
+              "fillAlpha": 1,
+              "strokeColor": "#000000",
+              "strokeAlpha": 0,
+              "strokeWidth": 0,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Sun",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "sun1",
+              "type": "oval",
+              "x": 780,
+              "y": 50,
+              "width": 90,
+              "height": 90,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "sun",
+              "fillColor": "#ffd93d",
+              "fillAlpha": 1,
+              "strokeColor": "#ff8c00",
+              "strokeAlpha": 1,
+              "strokeWidth": 4,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Mountains",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "mtn1",
+              "type": "line",
+              "x": 0,
+              "y": 200,
+              "width": 400,
+              "height": 180,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "mountain1",
+              "fillColor": "#4a6741",
+              "fillAlpha": 1,
+              "strokeColor": "#3d5a3d",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": [200, 200, 400, 380, 0, 380, 200, 200],
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            },
+            {
+              "id": "mtn2",
+              "type": "line",
+              "x": 250,
+              "y": 230,
+              "width": 450,
+              "height": 150,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "mountain2",
+              "fillColor": "#5a7d52",
+              "fillAlpha": 1,
+              "strokeColor": "#4a6741",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": [475, 230, 700, 380, 250, 380, 475, 230],
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            },
+            {
+              "id": "mtn3",
+              "type": "line",
+              "x": 550,
+              "y": 250,
+              "width": 410,
+              "height": 130,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "mountain3",
+              "fillColor": "#6b8f63",
+              "fillAlpha": 1,
+              "strokeColor": "#5a7d52",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": [755, 250, 960, 380, 550, 380, 755, 250],
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ground",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "ground1",
+              "type": "rect",
+              "x": 0,
+              "y": 380,
+              "width": 960,
+              "height": 160,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "ground",
+              "fillColor": "#4caf50",
+              "fillAlpha": 1,
+              "strokeColor": "#000000",
+              "strokeAlpha": 0,
+              "strokeWidth": 0,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tree",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 60,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "trunk1",
+              "type": "rect",
+              "x": 680,
+              "y": 320,
+              "width": 30,
+              "height": 80,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "trunk",
+              "fillColor": "#5d4037",
+              "fillAlpha": 1,
+              "strokeColor": "#3e2723",
+              "strokeAlpha": 1,
+              "strokeWidth": 1,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            },
+            {
+              "id": "foliage1",
+              "type": "oval",
+              "x": 650,
+              "y": 250,
+              "width": 90,
+              "height": 90,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "foliage",
+              "fillColor": "#2e7d32",
+              "fillAlpha": 1,
+              "strokeColor": "#1b5e20",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cloud",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 59,
+          "tweenType": "motion",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "cloud1",
+              "type": "oval",
+              "x": 100,
+              "y": 70,
+              "width": 120,
+              "height": 50,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 0.85,
+              "name": "cloud",
+              "fillColor": "#ffffff",
+              "fillAlpha": 1,
+              "strokeColor": "#e0e0e0",
+              "strokeAlpha": 0.5,
+              "strokeWidth": 1,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        },
+        {
+          "index": 60,
+          "duration": 1,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "cloud1",
+              "type": "oval",
+              "x": 800,
+              "y": 70,
+              "width": 120,
+              "height": 50,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 0.85,
+              "name": "cloud",
+              "fillColor": "#ffffff",
+              "fillAlpha": 1,
+              "strokeColor": "#e0e0e0",
+              "strokeAlpha": 0.5,
+              "strokeWidth": 1,
+              "points": null,
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bird",
+      "visible": true,
+      "locked": false,
+      "keyframes": [
+        {
+          "index": 1,
+          "duration": 59,
+          "tweenType": "motion",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "bird1",
+              "type": "line",
+              "x": 50,
+              "y": 100,
+              "width": 30,
+              "height": 12,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "bird",
+              "fillColor": "#000000",
+              "fillAlpha": 0,
+              "strokeColor": "#1a1a1a",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": [50, 108, 60, 100, 65, 100, 75, 108],
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        },
+        {
+          "index": 60,
+          "duration": 1,
+          "tweenType": "none",
+          "easing": "linear",
+          "script": "",
+          "objects": [
+            {
+              "id": "bird1",
+              "type": "line",
+              "x": 900,
+              "y": 80,
+              "width": 30,
+              "height": 12,
+              "rotation": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "alpha": 1,
+              "name": "bird",
+              "fillColor": "#000000",
+              "fillAlpha": 0,
+              "strokeColor": "#1a1a1a",
+              "strokeAlpha": 1,
+              "strokeWidth": 2,
+              "points": [900, 88, 910, 80, 915, 80, 925, 88],
+              "text": "",
+              "font": "Arial",
+              "fontSize": 24,
+              "symbolName": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "library": {}
+}

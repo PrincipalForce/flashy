@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vectid - Fireworks Show</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #050510; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #ff8844; letter-spacing: 2px; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.6; }
+  canvas { border: 1px solid #1a1a2e; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>Fireworks Show</h1>
+<p class="info">Rockets launch from the city, explode into colorful particle bursts with gravity and fade.</p>
+<canvas id="stage"></canvas>
+<script src="../vectid.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const W = 960, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });
+  const root = stage.root;
+
+  // ---- night sky gradient ----
+  const bg = new Shape();
+  bg.graphics.beginGradientFill('linear',
+    ['#0a0a2e', '#050518', '#020210'], [1, 1, 1], [0, 0.6, 1],
+    0, 0, 0, H);
+  bg.graphics.drawRect(0, 0, W, H);
+  bg.graphics.endFill();
+  root.addChild(bg);
+
+  // ---- twinkling stars ----
+  const starsLayer = new MovieClip();
+  const starList = [];
+  for (let i = 0; i < 80; i++) {
+    const s = new Shape();
+    const r = 0.4 + Math.random() * 1.2;
+    s.graphics.beginFill('#ffffff', 0.3 + Math.random() * 0.7);
+    s.graphics.drawCircle(0, 0, r);
+    s.graphics.endFill();
+    s.x = Math.random() * W;
+    s.y = Math.random() * H * 0.65;
+    starsLayer.addChild(s);
+    starList.push({ shape: s, baseAlpha: s.alpha, phase: Math.random() * Math.PI * 2, speed: 0.03 + Math.random() * 0.06 });
+  }
+  starsLayer.addEventListener('enterFrame', function () {
+    for (const st of starList) {
+      st.phase += st.speed;
+      st.shape.alpha = st.baseAlpha * (0.4 + 0.6 * Math.abs(Math.sin(st.phase)));
+    }
+  });
+  root.addChild(starsLayer);
+
+  // ---- city silhouette ----
+  const city = new Shape();
+  const g = city.graphics;
+  const buildingData = [];
+  // generate random buildings
+  let bx = -10;
+  while (bx < W + 20) {
+    const bw = 25 + Math.random() * 55;
+    const bh = 40 + Math.random() * 120;
+    buildingData.push({ x: bx, w: bw, h: bh });
+    bx += bw + Math.random() * 8;
+  }
+  // draw building silhouettes
+  g.beginFill('#0a0a18', 1);
+  for (const b of buildingData) {
+    g.drawRect(b.x, H - b.h, b.w, b.h);
+  }
+  g.endFill();
+  // lit windows
+  for (const b of buildingData) {
+    for (let wy = H - b.h + 8; wy < H - 10; wy += 14) {
+      for (let wx = b.x + 5; wx < b.x + b.w - 5; wx += 10) {
+        if (Math.random() > 0.4) {
+          const warm = Math.random() > 0.3 ? '#ffdd66' : '#88ccff';
+          const wa = 0.3 + Math.random() * 0.5;
+          g.beginFill(warm, wa);
+          g.drawRect(wx, wy, 4, 5);
+          g.endFill();
+        }
+      }
+    }
+  }
+  root.addChild(city);
+
+  // ---- firework system ----
+  const fireworksLayer = new MovieClip();
+  root.addChild(fireworksLayer);
+
+  const explosionColors = [
+    ['#ff4444', '#ff8866', '#ffcc44'],
+    ['#44ff88', '#88ffcc', '#ccffee'],
+    ['#4488ff', '#88bbff', '#ccddff'],
+    ['#ff44ff', '#ff88ff', '#ffccff'],
+    ['#ffcc00', '#ffee44', '#ffffff'],
+    ['#ff6600', '#ff9944', '#ffcc88'],
+    ['#00ffcc', '#44ffdd', '#88ffee'],
+  ];
+
+  function createRocket(targetX, targetY) {
+    const rocket = new MovieClip();
+    rocket.x = targetX + (Math.random() - 0.5) * 40;
+    rocket.y = H + 5;
+
+    const startX = rocket.x;
+    const startY = rocket.y;
+    const flightFrames = 25 + Math.floor(Math.random() * 15);
+
+    // glowing trail layers
+    const trailWidths = [6, 4, 2];
+    const trailAlphas = [0.15, 0.3, 0.8];
+    const trailColors = ['#ff8800', '#ffcc44', '#ffffff'];
+    for (let t = 0; t < 3; t++) {
+      const trail = new Shape();
+      trail.graphics.lineStyle(trailWidths[t], trailColors[t], trailAlphas[t]);
+      trail.graphics.moveTo(0, 0);
+      trail.graphics.lineTo(0, 20);
+      rocket.addChild(trail);
+    }
+
+    // rocket head
+    const head = new Shape();
+    head.graphics.beginFill('#ffffff', 0.9);
+    head.graphics.drawCircle(0, 0, 2);
+    head.graphics.endFill();
+    rocket.addChild(head);
+
+    // tween rocket to target
+    rocket.timeline.addTween(rocket, 'x', startX, targetX, 1, flightFrames, 'linear');
+    rocket.timeline.addTween(rocket, 'y', startY, targetY, 1, flightFrames, 'cubicOut');
+
+    // explode at end of flight
+    rocket.timeline.addFrameScript(flightFrames, function () {
+      this.stop();
+      createExplosion(this.x, this.y);
+      fireworksLayer.removeChild(this);
+    });
+
+    fireworksLayer.addChild(rocket);
+  }
+
+  function createExplosion(ex, ey) {
+    const explosion = new MovieClip();
+    explosion.x = ex;
+    explosion.y = ey;
+
+    const palette = explosionColors[Math.floor(Math.random() * explosionColors.length)];
+    const particleCount = 30 + Math.floor(Math.random() * 30);
+    const particles = [];
+    const lifeFrames = 40 + Math.floor(Math.random() * 20);
+
+    for (let i = 0; i < particleCount; i++) {
+      const p = new MovieClip();
+      const angle = (i / particleCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+      const speed = 2.5 + Math.random() * 4;
+      const color = palette[Math.floor(Math.random() * palette.length)];
+      const sz = 1 + Math.random() * 2;
+
+      const dot = new Shape();
+      dot.graphics.beginFill(color, 1);
+      dot.graphics.drawCircle(0, 0, sz);
+      dot.graphics.endFill();
+      p.addChild(dot);
+
+      // glow layer
+      const glow = new Shape();
+      glow.graphics.beginFill(color, 0.3);
+      glow.graphics.drawCircle(0, 0, sz * 2.5);
+      glow.graphics.endFill();
+      p.addChild(glow);
+
+      p._vx = Math.cos(angle) * speed;
+      p._vy = Math.sin(angle) * speed;
+
+      // alpha fade tween
+      p.timeline.addTween(p, 'alpha', 1, 0, 1, lifeFrames, 'cubicIn');
+      p.timeline.addTween(p, 'scaleX', 1, 0.3, 1, lifeFrames, 'quadIn');
+      p.timeline.addTween(p, 'scaleY', 1, 0.3, 1, lifeFrames, 'quadIn');
+
+      explosion.addChild(p);
+      particles.push(p);
+    }
+
+    // gravity + movement
+    explosion.addEventListener('enterFrame', function () {
+      for (const p of particles) {
+        p._vy += 0.12; // gravity
+        p._vx *= 0.98; // drag
+        p._vy *= 0.98;
+        p.x += p._vx;
+        p.y += p._vy;
+      }
+    });
+
+    // cleanup after life is done
+    explosion.timeline.setTotalFrames(lifeFrames + 5);
+    explosion.timeline.addFrameScript(lifeFrames + 5, function () {
+      this.stop();
+      fireworksLayer.removeChild(this);
+    });
+
+    fireworksLayer.addChild(explosion);
+  }
+
+  // ---- launch scheduler ----
+  let frameCount = 0;
+  let nextLaunch = 20;
+  root.addEventListener('enterFrame', function () {
+    frameCount++;
+    if (frameCount >= nextLaunch) {
+      const count = 1 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < count; i++) {
+        const tx = 100 + Math.random() * (W - 200);
+        const ty = 60 + Math.random() * (H * 0.4);
+        createRocket(tx, ty);
+      }
+      nextLaunch = frameCount + 30 + Math.floor(Math.random() * 50);
+    }
+  });
+
+  // ---- ground glow ----
+  const groundGlow = new Shape();
+  groundGlow.graphics.beginGradientFill('linear',
+    ['#ff660000', '#ff440008', '#ff220000'], [0, 0.08, 0], [0, 0.5, 1],
+    0, H - 80, 0, H);
+  groundGlow.graphics.drawRect(0, H - 80, W, 80);
+  groundGlow.graphics.endFill();
+  root.addChild(groundGlow);
+
+  // ---- label ----
+  const title = new TextField('Fireworks Show', { font: '11px sans-serif', color: '#ffffff', align: 'right' });
+  title.x = W - 10; title.y = H - 18; title.alpha = 0.3;
+  root.addChild(title);
+
+  window.__stage = stage;
+  stage.start();
+})();
+</script>
+</body>
+</html>

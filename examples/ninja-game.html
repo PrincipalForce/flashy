@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vectid - Shadow Blade</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #08081a; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Courier New', monospace; color: #c0c8e0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #ff6688; letter-spacing: 4px; text-shadow: 0 0 12px #ff4466; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.55; }
+  canvas { border: 1px solid #1a1a3a; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>SHADOW BLADE</h1>
+<p class="info">WASD / Arrows to move &amp; jump | SPACE or Click to attack | Wall-jump off walls</p>
+<canvas id="stage"></canvas>
+<script src="../vectid.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField } = Vectid;
+  const W = 960, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });
+  const root = stage.root;
+
+  // ===== CONSTANTS =====
+  const GRAVITY = 0.65;
+  const JUMP_VEL = -12;
+  const WALL_JUMP_VEL_X = 7;
+  const WALL_SLIDE_SPEED = 1.8;
+  const MOVE_ACCEL = 0.9;
+  const MOVE_DECEL = 0.75;
+  const MAX_SPEED = 5.5;
+  const GROUND_Y = 470;
+  const ATTACK_FRAMES = 12;
+  const COMBO_TIMEOUT = 60; // frames (2 sec at 30fps)
+
+  // ===== GAME STATE =====
+  let gameState = 'title'; // title, playing, gameover
+  let score = 0, combo = 0, comboTimer = 0, health = 3;
+  let shakeFrames = 0, shakeMag = 0;
+  let frameCount = 0;
+  let scrollX = 0, scrollSpeed = 0;
+
+  // Input
+  const keys = {};
+  document.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; keys[e.code] = true; });
+  document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; keys[e.code] = false; });
+  let clickAttack = false;
+  canvas.addEventListener('mousedown', () => { clickAttack = true; });
+
+  // ===== LAYERS =====
+  const bgLayer = new MovieClip();
+  const midLayer = new MovieClip();
+  const nearLayer = new MovieClip();
+  const platformLayer = new MovieClip();
+  const entityLayer = new MovieClip();
+  const particleLayer = new MovieClip();
+  const hudLayer = new MovieClip();
+  root.addChild(bgLayer);
+  root.addChild(midLayer);
+  root.addChild(nearLayer);
+  root.addChild(platformLayer);
+  root.addChild(entityLayer);
+  root.addChild(particleLayer);
+  root.addChild(hudLayer);
+
+  // ===== BACKGROUND GRADIENT =====
+  const bgShape = new Shape();
+  bgShape.graphics.beginGradientFill('linear',
+    [0x0a0a2e, 0x101035, 0x080820], [1, 1, 1], [0, 0.5, 1],
+    0, 0, 0, H);
+  bgShape.graphics.drawRect(0, 0, W, H).endFill();
+  bgLayer.addChild(bgShape);
+
+  // ===== PARALLAX MOUNTAINS =====
+  function createMountains() {
+    const mtn = new Shape();
+    const g = mtn.graphics;
+    g.beginFill(0x12123a, 0.6);
+    g.moveTo(0, H);
+    for (let x = 0; x <= W + 200; x += 60) {
+      const peak = 280 + Math.sin(x * 0.008) * 80 + Math.cos(x * 0.015) * 40;
+      g.lineTo(x, peak);
+    }
+    g.lineTo(W + 200, H).closePath().endFill();
+    return mtn;
+  }
+  const mountains1 = createMountains();
+  bgLayer.addChild(mountains1);
+  const mountains2 = createMountains();
+  mountains2.x = W + 200;
+  bgLayer.addChild(mountains2);
+
+  // ===== PARALLAX TREES =====
+  function createTreeLine() {
+    const trees = new MovieClip();
+    for (let i = 0; i < 20; i++) {
+      const t = new Shape();
+      const tx = i * 80 + Math.random() * 30;
+      const th = 40 + Math.random() * 50;
+      t.graphics.lineStyle(2, 0x1a2a1a, 0.7);
+      t.graphics.moveTo(tx, GROUND_Y).lineTo(tx, GROUND_Y - th);
+      // branches
+      t.graphics.moveTo(tx, GROUND_Y - th * 0.6).lineTo(tx - 12, GROUND_Y - th * 0.8);
+      t.graphics.moveTo(tx, GROUND_Y - th * 0.4).lineTo(tx + 10, GROUND_Y - th * 0.65);
+      // foliage
+      t.graphics.beginFill(0x1a3320, 0.5).drawCircle(tx, GROUND_Y - th - 8, 14 + Math.random() * 8).endFill();
+      trees.addChild(t);
+    }
+    return trees;
+  }
+  const treeLine1 = createTreeLine();
+  midLayer.addChild(treeLine1);
+
+  // ===== CHERRY BLOSSOM PETALS =====
+  const petals = [];
+  function spawnPetal() {
+    const p = new Shape();
+    p.graphics.beginFill(0xffaacc, 0.6 + Math.random() * 0.3);
+    p.graphics.drawEllipse(-3, -2, 6, 4).endFill();
+    p.x = Math.random() * (W + 200);
+    p.y = -10 - Math.random() * 40;
+    p._vx = -0.3 - Math.random() * 0.8;
+    p._vy = 0.5 + Math.random() * 1.2;
+    p._rotSpeed = (Math.random() - 0.5) * 0.1;
+    p._wobble = Math.random() * Math.PI * 2;
+    particleLayer.addChild(p);
+    petals.push(p);
+  }
+  for (let i = 0; i < 25; i++) {
+    spawnPetal();
+    petals[petals.length - 1].y = Math.random() * H;
+  }
+
+  // ===== PLATFORMS =====
+  const platforms = [];
+  function createPlatform(px, py, pw) {
+    const plat = { x: px, y: py, w: pw, h: 14, mc: new MovieClip() };
+    const g = plat.mc.graphics;
+    // body
+    g.beginFill(0x2a2a44, 0.9).drawRect(0, 4, pw, 10).endFill();
+    // grass top
+    g.lineStyle(3, 0x44aa55, 0.8);
+    g.moveTo(0, 2).lineTo(pw, 2);
+    // grass tufts
+    g.lineStyle(1, 0x55cc66, 0.5);
+    for (let i = 0; i < pw; i += 12) {
+      g.moveTo(i + 2, 2).lineTo(i + 5, -3);
+      g.moveTo(i + 8, 2).lineTo(i + 6, -2);
+    }
+    plat.mc.x = px;
+    plat.mc.y = py;
+    platformLayer.addChild(plat.mc);
+    platforms.push(plat);
+    return plat;
+  }
+
+  // Ground
+  function createGround(gx) {
+    return createPlatform(gx, GROUND_Y, 400);
+  }
+
+  function generatePlatforms() {
+    // Initial ground segments
+    for (let i = 0; i < 8; i++) {
+      createGround(i * 380 - 100);
+    }
+    // Floating platforms
+    for (let i = 0; i < 12; i++) {
+      const px = 200 + i * 250 + Math.random() * 100;
+      const py = 280 + Math.random() * 140;
+      const pw = 80 + Math.random() * 100;
+      createPlatform(px, py, pw);
+    }
+    // High platforms
+    for (let i = 0; i < 6; i++) {
+      const px = 400 + i * 400 + Math.random() * 150;
+      const py = 160 + Math.random() * 80;
+      createPlatform(px, py, 60 + Math.random() * 80);
+    }
+  }
+
+  // ===== STICK FIGURE DRAWING =====
+  function drawStickNinja(mc, color, headR, bodyLen, armLen, legLen) {
+    // Clear and redraw - used each frame for pose changes
+    mc.graphics.clear();
+    const pose = mc._pose || {};
+    const g = mc.graphics;
+
+    // Shadow on ground
+    if (mc._groundY != null) {
+      g.beginFill(0x000000, 0.2);
+      g.drawEllipse(-12, mc._groundY - mc.y - 2, 24, 6);
+      g.endFill();
+    }
+
+    // Head
+    g.lineStyle(2, color, 1);
+    g.beginFill(0x000000, 0.3);
+    g.drawCircle(0, -bodyLen - headR, headR);
+    g.endFill();
+
+    // Headband (trails behind the ninja — drawn in local space where +x = facing direction)
+    g.lineStyle(2, 0xff3344, 0.9);
+    g.moveTo(-headR + 1, -bodyLen - headR);
+    const bandWave = Math.sin(frameCount * 0.15) * 3;
+    g.lineTo(-headR - 8, -bodyLen - headR - 2 + bandWave);
+    g.lineTo(-headR - 16, -bodyLen - headR + 1 + bandWave * 1.3);
+    g.lineTo(-headR - 22, -bodyLen - headR + 3 + bandWave * 0.8);
+
+    // Torso
+    g.lineStyle(2.5, color, 1);
+    g.moveTo(0, -bodyLen);
+    g.lineTo(0, 0);
+
+    // Arms
+    const lArmAngle = pose.lArm || -0.5;
+    const rArmAngle = pose.rArm || 0.5;
+    const lForeAngle = pose.lFore || 0.3;
+    const rForeAngle = pose.rFore || -0.3;
+
+    const shoulderY = -bodyLen + 4;
+    // Left arm
+    const lElbowX = Math.sin(lArmAngle) * armLen * 0.55;
+    const lElbowY = shoulderY + Math.cos(lArmAngle) * armLen * 0.55;
+    const lHandX = lElbowX + Math.sin(lArmAngle + lForeAngle) * armLen * 0.5;
+    const lHandY = lElbowY + Math.cos(lArmAngle + lForeAngle) * armLen * 0.5;
+    g.lineStyle(2, color, 1);
+    g.moveTo(0, shoulderY).lineTo(lElbowX, lElbowY).lineTo(lHandX, lHandY);
+
+    // Right arm
+    const rElbowX = Math.sin(rArmAngle) * armLen * 0.55;
+    const rElbowY = shoulderY + Math.cos(rArmAngle) * armLen * 0.55;
+    const rHandX = rElbowX + Math.sin(rArmAngle + rForeAngle) * armLen * 0.5;
+    const rHandY = rElbowY + Math.cos(rArmAngle + rForeAngle) * armLen * 0.5;
+    g.lineStyle(2, color, 1);
+    g.moveTo(0, shoulderY).lineTo(rElbowX, rElbowY).lineTo(rHandX, rHandY);
+
+    // Katana (in right hand)
+    if (mc._isNinja) {
+      const swordAngle = pose.sword || rArmAngle + rForeAngle;
+      const sLen = 28;
+      const sx = rHandX + Math.sin(swordAngle) * sLen * 0.3;
+      const sy = rHandY - Math.cos(swordAngle) * sLen * 0.3;
+      const ex = rHandX + Math.sin(swordAngle) * sLen;
+      const ey = rHandY - Math.cos(swordAngle) * sLen;
+      // blade
+      g.lineStyle(2, 0xccccee, 0.9);
+      g.moveTo(rHandX, rHandY);
+      g.curveTo(sx + 3, sy, ex, ey);
+      // guard
+      g.lineStyle(2, 0x886633, 1);
+      const gx = rHandX + Math.sin(swordAngle) * 3;
+      const gy = rHandY - Math.cos(swordAngle) * 3;
+      g.moveTo(gx - 3, gy - 1).lineTo(gx + 3, gy + 1);
+    }
+
+    // Legs
+    const lLegAngle = pose.lLeg || -0.15;
+    const rLegAngle = pose.rLeg || 0.15;
+    const lShinAngle = pose.lShin || 0.1;
+    const rShinAngle = pose.rShin || -0.1;
+
+    const hipY = 0;
+    // Left leg
+    const lKneeX = Math.sin(lLegAngle) * legLen * 0.5;
+    const lKneeY = hipY + Math.cos(lLegAngle) * legLen * 0.5;
+    const lFootX = lKneeX + Math.sin(lLegAngle + lShinAngle) * legLen * 0.5;
+    const lFootY = lKneeY + Math.cos(lLegAngle + lShinAngle) * legLen * 0.5;
+    g.lineStyle(2, color, 1);
+    g.moveTo(0, hipY).lineTo(lKneeX, lKneeY).lineTo(lFootX, lFootY);
+
+    // Right leg
+    const rKneeX = Math.sin(rLegAngle) * legLen * 0.5;
+    const rKneeY = hipY + Math.cos(rLegAngle) * legLen * 0.5;
+    const rFootX = rKneeX + Math.sin(rLegAngle + rShinAngle) * legLen * 0.5;
+    const rFootY = rKneeY + Math.cos(rLegAngle + rShinAngle) * legLen * 0.5;
+    g.lineStyle(2, color, 1);
+    g.moveTo(0, hipY).lineTo(rKneeX, rKneeY).lineTo(rFootX, rFootY);
+  }
+
+  // ===== NINJA =====
+  const ninja = new MovieClip();
+  ninja._isNinja = true;
+  ninja._pose = {};
+  ninja._groundY = GROUND_Y;
+  ninja.x = 200;
+  ninja.y = GROUND_Y - 40;
+  ninja._vx = 0;
+  ninja._vy = 0;
+  ninja._onGround = false;
+  ninja._facing = 1; // 1 = right, -1 = left
+  ninja._attacking = false;
+  ninja._attackFrame = 0;
+  ninja._wallSliding = false;
+  ninja._wallDir = 0;
+  ninja._invincible = 0;
+  entityLayer.addChild(ninja);
+
+  function setPoseIdle() {
+    const bob = Math.sin(frameCount * 0.08) * 1.5;
+    ninja._pose = {
+      lArm: -0.3 + bob * 0.03, rArm: 0.3 - bob * 0.03,
+      lFore: 0.6, rFore: -0.6,
+      lLeg: -0.12, rLeg: 0.12,
+      lShin: 0.08, rShin: -0.08,
+      sword: 0.8
+    };
+    ninja.y += bob * 0.1; // subtle breathing
+  }
+
+  function setPoseRun(t) {
+    const s = Math.sin(t * 0.35);
+    const c = Math.cos(t * 0.35);
+    ninja._pose = {
+      lArm: -s * 0.7, rArm: s * 0.7,
+      lFore: 0.5 - s * 0.2, rFore: -0.5 + s * 0.2,
+      lLeg: s * 0.6, rLeg: -s * 0.6,
+      lShin: Math.max(0, -c * 0.5), rShin: Math.max(0, c * 0.5),
+      sword: 0.6 + s * 0.15
+    };
+  }
+
+  function setPoseJump() {
+    ninja._pose = {
+      lArm: -1.2, rArm: 1.0,
+      lFore: -0.3, rFore: -0.4,
+      lLeg: 0.5, rLeg: -0.3,
+      lShin: -0.8, rShin: 0.6,
+      sword: -0.5
+    };
+  }
+
+  function setPoseWallSlide(dir) {
+    ninja._pose = {
+      lArm: dir * -0.8, rArm: dir * -1.2,
+      lFore: 0.3, rFore: 0.2,
+      lLeg: 0.1, rLeg: -0.1,
+      lShin: 0.4, rShin: 0.3,
+      sword: dir * -0.8
+    };
+  }
+
+  function setPoseAttack(frame) {
+    const t = frame / ATTACK_FRAMES;
+    const swing = Math.sin(t * Math.PI) * 2.5;
+    ninja._pose = {
+      lArm: -0.3, rArm: -1.5 + swing,
+      lFore: 0.5, rFore: -0.2 - swing * 0.3,
+      lLeg: ninja._onGround ? -0.1 : 0.4, rLeg: ninja._onGround ? 0.2 : -0.2,
+      lShin: 0.05, rShin: 0.05,
+      sword: -1.8 + swing * 1.2
+    };
+  }
+
+  // ===== SWORD TRAIL PARTICLES =====
+  const slashTrails = [];
+  function spawnSlashTrail(x, y, facing) {
+    for (let i = 0; i < 5; i++) {
+      const tr = new Shape();
+      const ang = (-0.8 + i * 0.4) * facing;
+      const len = 20 + Math.random() * 15;
+      const sx = x + facing * 15;
+      const sy = y - 20 + i * 3;
+      tr.graphics.lineStyle(2.5 - i * 0.3, 0xccddff, 0.8 - i * 0.12);
+      tr.graphics.moveTo(sx, sy);
+      tr.graphics.lineTo(sx + Math.cos(ang) * len, sy + Math.sin(ang) * len);
+      tr.x = 0; tr.y = 0;
+      tr._life = 8 + i;
+      tr._maxLife = tr._life;
+      particleLayer.addChild(tr);
+      slashTrails.push(tr);
+    }
+  }
+
+  // ===== DEATH PARTICLES =====
+  const deathParticles = [];
+  function spawnDeathBurst(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+      const p = new Shape();
+      const sz = 1 + Math.random() * 3;
+      p.graphics.beginFill(color, 1).drawCircle(0, 0, sz).endFill();
+      p.x = x; p.y = y;
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 2 + Math.random() * 5;
+      p._vx = Math.cos(angle) * speed;
+      p._vy = Math.sin(angle) * speed - 2;
+      p._life = 18 + Math.random() * 14;
+      p._maxLife = p._life;
+      particleLayer.addChild(p);
+      deathParticles.push(p);
+    }
+  }
+
+  // ===== ENEMIES =====
+  const enemies = [];
+  function createEnemy(ex, ey, patrolLeft, patrolRight) {
+    const e = new MovieClip();
+    e._isNinja = false;
+    e._pose = {};
+    e._groundY = ey;
+    e.x = ex;
+    e.y = ey - 32;
+    e._vx = 1.2;
+    e._patrolLeft = patrolLeft;
+    e._patrolRight = patrolRight;
+    e._facing = 1;
+    e._alive = true;
+    e._shootTimer = 60 + Math.floor(Math.random() * 90);
+    entityLayer.addChild(e);
+    enemies.push(e);
+    return e;
+  }
+
+  // ===== SHURIKENS =====
+  const shurikens = [];
+  function spawnShuriken(ex, ey, tx, ty) {
+    const s = new Shape();
+    s.graphics.beginFill(0xcc3333, 0.9);
+    s.graphics.drawStar(0, 0, 4, 6, 2, 0);
+    s.graphics.endFill();
+    s.x = ex; s.y = ey;
+    const dx = tx - ex, dy = ty - ey;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    s._vx = (dx / dist) * 4.5;
+    s._vy = (dy / dist) * 4.5;
+    s._life = 120;
+    entityLayer.addChild(s);
+    shurikens.push(s);
+  }
+
+  // ===== SCROLLS (COLLECTIBLES) =====
+  const scrolls = [];
+  function createScroll(sx, sy) {
+    const sc = new MovieClip();
+    sc.x = sx; sc.y = sy;
+    sc._baseY = sy;
+    sc._collected = false;
+    // Draw small scroll shape
+    const g = sc.graphics;
+    g.beginFill(0xeedd99, 0.9).drawRoundRect(-6, -8, 12, 16, 3).endFill();
+    g.lineStyle(1, 0xaa8844, 0.7);
+    g.moveTo(-4, -4).lineTo(4, -4);
+    g.moveTo(-4, 0).lineTo(4, 0);
+    g.moveTo(-4, 4).lineTo(3, 4);
+    // end caps
+    g.beginFill(0xccaa66, 1).drawRect(-7, -9, 14, 3).endFill();
+    g.beginFill(0xccaa66, 1).drawRect(-7, 6, 14, 3).endFill();
+    entityLayer.addChild(sc);
+    scrolls.push(sc);
+  }
+
+  // ===== HUD =====
+  const scoreTf = new TextField('0', { font: 'bold 28px Courier New', color: 0xffffff, align: 'left', baseline: 'top' });
+  scoreTf.x = 14; scoreTf.y = 12;
+  hudLayer.addChild(scoreTf);
+
+  const scoreLabel = new TextField('SCORE', { font: '11px Courier New', color: 0x888899, align: 'left', baseline: 'top' });
+  scoreLabel.x = 14; scoreLabel.y = 2;
+  hudLayer.addChild(scoreLabel);
+
+  const comboTf = new TextField('', { font: 'bold 20px Courier New', color: 0xff8844, align: 'left', baseline: 'top' });
+  comboTf.x = 14; comboTf.y = 44;
+  hudLayer.addChild(comboTf);
+
+  // Health bar
+  const healthBg = new Shape();
+  healthBg.graphics.beginFill(0x331111, 0.6).drawRoundRect(0, 0, 106, 14, 3).endFill();
+  healthBg.x = W - 120; healthBg.y = 12;
+  hudLayer.addChild(healthBg);
+
+  const healthBar = new Shape();
+  healthBar.x = W - 118; healthBar.y = 14;
+  hudLayer.addChild(healthBar);
+
+  function updateHealthBar() {
+    healthBar.graphics.clear();
+    const w = (health / 3) * 100;
+    const col = health > 1 ? 0x44cc66 : 0xff3344;
+    healthBar.graphics.beginFill(col, 0.9).drawRoundRect(0, 0, w, 10, 2).endFill();
+  }
+
+  // Life icons
+  const lifeIcons = new MovieClip();
+  lifeIcons.x = W - 120; lifeIcons.y = 30;
+  hudLayer.addChild(lifeIcons);
+
+  function updateLivesDisplay() {
+    lifeIcons.removeAllChildren();
+    lifeIcons.graphics.clear();
+    for (let i = 0; i < health; i++) {
+      const ic = new Shape();
+      ic.graphics.lineStyle(1.5, 0xddddee, 0.8);
+      ic.graphics.drawCircle(i * 20, 8, 4); // head
+      ic.graphics.moveTo(i * 20, 12).lineTo(i * 20, 20); // body
+      // headband
+      ic.graphics.lineStyle(1, 0xff3344, 0.8);
+      ic.graphics.moveTo(i * 20 + 4, 8).lineTo(i * 20 + 8, 7);
+      lifeIcons.addChild(ic);
+    }
+  }
+
+  // ===== TITLE SCREEN =====
+  const titleLayer = new MovieClip();
+  root.addChild(titleLayer);
+
+  const titleBg = new Shape();
+  titleBg.graphics.beginFill(0x000000, 0.7).drawRect(0, 0, W, H).endFill();
+  titleLayer.addChild(titleBg);
+
+  const titleText = new TextField('SHADOW BLADE', {
+    font: 'bold 56px Courier New', color: 0xff4466, align: 'center', baseline: 'middle',
+    stroke: 0x000000, strokeWidth: 4
+  });
+  titleText.x = W / 2; titleText.y = H / 2 - 80;
+  titleText.shadowBlur = 20; titleText.shadowColor = 0xff2244;
+  titleLayer.addChild(titleText);
+
+  // Silhouette ninja on title
+  const silhouette = new Shape();
+  silhouette.graphics.lineStyle(3, 0x220a10, 1);
+  // body
+  silhouette.graphics.drawCircle(W / 2, H / 2 - 10, 10);
+  silhouette.graphics.moveTo(W / 2, H / 2).lineTo(W / 2, H / 2 + 30);
+  // arms in attack pose
+  silhouette.graphics.moveTo(W / 2, H / 2 + 5).lineTo(W / 2 - 20, H / 2 - 5);
+  silhouette.graphics.moveTo(W / 2, H / 2 + 5).lineTo(W / 2 + 25, H / 2 - 15);
+  // sword
+  silhouette.graphics.lineStyle(2, 0x441122, 0.9);
+  silhouette.graphics.moveTo(W / 2 + 25, H / 2 - 15).lineTo(W / 2 + 50, H / 2 - 35);
+  // legs
+  silhouette.graphics.lineStyle(3, 0x220a10, 1);
+  silhouette.graphics.moveTo(W / 2, H / 2 + 30).lineTo(W / 2 - 15, H / 2 + 55);
+  silhouette.graphics.moveTo(W / 2, H / 2 + 30).lineTo(W / 2 + 12, H / 2 + 55);
+  titleLayer.addChild(silhouette);
+
+  const startText = new TextField('Press SPACE to start', {
+    font: '18px Courier New', color: 0xccccdd, align: 'center', baseline: 'middle'
+  });
+  startText.x = W / 2; startText.y = H / 2 + 90;
+  titleLayer.addChild(startText);
+
+  // ===== GAME OVER SCREEN =====
+  const goLayer = new MovieClip();
+  goLayer.visible = false;
+  root.addChild(goLayer);
+
+  const goBg = new Shape();
+  goBg.graphics.beginFill(0x000000, 0.6).drawRect(0, 0, W, H).endFill();
+  goLayer.addChild(goBg);
+
+  const goText = new TextField('GAME OVER', {
+    font: 'bold 52px Courier New', color: 0xff2244, align: 'center', baseline: 'middle',
+    stroke: 0x000000, strokeWidth: 3
+  });
+  goText.x = W / 2; goText.y = H / 2 - 30;
+  goText.shadowBlur = 16; goText.shadowColor = 0xff2244;
+  goLayer.addChild(goText);
+
+  const goScoreTf = new TextField('', {
+    font: '22px Courier New', color: 0xeeeeff, align: 'center', baseline: 'middle'
+  });
+  goScoreTf.x = W / 2; goScoreTf.y = H / 2 + 20;
+  goLayer.addChild(goScoreTf);
+
+  const goRestart = new TextField('Press R to restart', {
+    font: '16px Courier New', color: 0x8888aa, align: 'center', baseline: 'middle'
+  });
+  goRestart.x = W / 2; goRestart.y = H / 2 + 60;
+  goLayer.addChild(goRestart);
+
+  // ===== PLATFORM COLLISION =====
+  function checkPlatformCollision(obj, radius) {
+    let onGround = false;
+    let groundY = H + 100;
+    for (let i = 0; i < platforms.length; i++) {
+      const p = platforms[i];
+      const px = p.x - scrollX * p._scrollMult;
+      // Horizontal overlap?
+      if (obj.x >= px - 4 && obj.x <= px + p.w + 4) {
+        // Falling onto top?
+        if (obj._vy >= 0 && obj.y >= p.y - radius - 4 && obj.y <= p.y + 4) {
+          obj.y = p.y - radius + 2;
+          obj._vy = 0;
+          onGround = true;
+          groundY = p.y;
+        }
+      }
+      // Wall check (for ninja wall slide)
+      if (obj === ninja && !onGround) {
+        if (obj.y > p.y && obj.y < p.y + p.h + 30) {
+          // Left wall
+          if (obj.x >= px - 8 && obj.x <= px + 4) {
+            obj._touchingWall = -1;
+            obj._wallPlatX = px;
+          }
+          // Right wall
+          if (obj.x >= px + p.w - 4 && obj.x <= px + p.w + 8) {
+            obj._touchingWall = 1;
+            obj._wallPlatX = px + p.w;
+          }
+        }
+      }
+    }
+    if (onGround) obj._groundY = groundY;
+    return onGround;
+  }
+
+  // ===== INIT LEVEL =====
+  function initLevel() {
+    // Clear old
+    platforms.forEach(p => p.mc.removeFromParent());
+    platforms.length = 0;
+    enemies.forEach(e => e.removeFromParent());
+    enemies.length = 0;
+    scrolls.forEach(s => s.removeFromParent());
+    scrolls.length = 0;
+    shurikens.forEach(s => s.removeFromParent());
+    shurikens.length = 0;
+
+    // Tag all platforms with scroll multiplier
+    generatePlatforms();
+    platforms.forEach(p => { p._scrollMult = 1; });
+
+    // Enemies on some platforms
+    for (let i = 0; i < platforms.length; i++) {
+      if (i < 3) continue; // skip first ground segments
+      if (Math.random() < 0.4 && platforms[i].w > 70) {
+        const p = platforms[i];
+        createEnemy(p.x + p.w / 2, p.y, p.x + 10, p.x + p.w - 10);
+      }
+    }
+
+    // Scrolls
+    for (let i = 0; i < 8; i++) {
+      const sx = 300 + i * 350 + Math.random() * 200;
+      const sy = 180 + Math.random() * 200;
+      createScroll(sx, sy);
+    }
+  }
+
+  // ===== EXTEND LEVEL (procedural) =====
+  let furthestPlatX = 0;
+  function extendLevel() {
+    // Find furthest platform
+    let maxX = 0;
+    for (let i = 0; i < platforms.length; i++) {
+      const px = platforms[i].x + platforms[i].w;
+      if (px > maxX) maxX = px;
+    }
+    furthestPlatX = maxX;
+
+    // If camera is approaching the edge, generate more
+    const cameraRight = scrollX + W + 400;
+    if (cameraRight > furthestPlatX - 600) {
+      // Ground
+      for (let i = 0; i < 3; i++) {
+        const gx = furthestPlatX + 20 + i * 380 + Math.random() * 40;
+        // Occasional gap
+        if (Math.random() < 0.25) continue;
+        const p = createPlatform(gx, GROUND_Y, 300 + Math.random() * 200);
+        p._scrollMult = 1;
+      }
+      // Floating
+      for (let i = 0; i < 4; i++) {
+        const px = furthestPlatX + 100 + i * 250 + Math.random() * 120;
+        const py = 220 + Math.random() * 180;
+        const pw = 70 + Math.random() * 110;
+        const p = createPlatform(px, py, pw);
+        p._scrollMult = 1;
+        // Enemy?
+        if (Math.random() < 0.45 && pw > 70) {
+          createEnemy(px + pw / 2, py, px + 10, px + pw - 10);
+        }
+      }
+      // Scroll
+      if (Math.random() < 0.5) {
+        createScroll(furthestPlatX + 200 + Math.random() * 300, 150 + Math.random() * 200);
+      }
+    }
+
+    // Remove off-screen platforms to the left
+    for (let i = platforms.length - 1; i >= 0; i--) {
+      if (platforms[i].x + platforms[i].w < scrollX - 200) {
+        platforms[i].mc.removeFromParent();
+        platforms.splice(i, 1);
+      }
+    }
+    // Remove off-screen enemies
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      if (enemies[i].x < scrollX - 200) {
+        enemies[i].removeFromParent();
+        enemies.splice(i, 1);
+      }
+    }
+    // Remove off-screen scrolls
+    for (let i = scrolls.length - 1; i >= 0; i--) {
+      if (scrolls[i].x < scrollX - 200) {
+        scrolls[i].removeFromParent();
+        scrolls.splice(i, 1);
+      }
+    }
+  }
+
+  // ===== SCREEN SHAKE =====
+  function doShake(mag, frames) {
+    shakeFrames = frames || 8;
+    shakeMag = mag || 5;
+  }
+
+  // ===== RESTART =====
+  function restartGame() {
+    score = 0; combo = 0; comboTimer = 0; health = 3;
+    scrollX = 0; frameCount = 0;
+    ninja.x = 200; ninja.y = GROUND_Y - 40;
+    ninja._vx = 0; ninja._vy = 0;
+    ninja._attacking = false;
+    ninja._invincible = 0;
+    ninja.alpha = 1;
+    deathParticles.forEach(p => p.removeFromParent());
+    deathParticles.length = 0;
+    slashTrails.forEach(t => t.removeFromParent());
+    slashTrails.length = 0;
+    shurikens.forEach(s => s.removeFromParent());
+    shurikens.length = 0;
+    initLevel();
+    updateHealthBar();
+    updateLivesDisplay();
+    goLayer.visible = false;
+    gameState = 'playing';
+  }
+
+  // ===== MAIN GAME LOOP =====
+  root.addEventListener('enterFrame', function () {
+    frameCount++;
+
+    // Update petals always
+    for (let i = petals.length - 1; i >= 0; i--) {
+      const p = petals[i];
+      p.x += p._vx - (gameState === 'playing' ? scrollSpeed * 0.3 : 0);
+      p.y += p._vy;
+      p.rotation += p._rotSpeed;
+      p._wobble += 0.05;
+      p.x += Math.sin(p._wobble) * 0.3;
+      if (p.y > H + 10 || p.x < -20) {
+        p.y = -10;
+        p.x = Math.random() * (W + 100);
+      }
+    }
+    if (frameCount % 8 === 0 && petals.length < 35) spawnPetal();
+
+    // Title blink
+    if (gameState === 'title') {
+      startText.alpha = 0.5 + Math.sin(frameCount * 0.1) * 0.5;
+      if (keys[' '] || keys['Space']) {
+        gameState = 'playing';
+        titleLayer.visible = false;
+        initLevel();
+        updateHealthBar();
+        updateLivesDisplay();
+      }
+      return;
+    }
+
+    // Game over
+    if (gameState === 'gameover') {
+      if (keys['r']) restartGame();
+      // Shake
+      if (shakeFrames > 0) {
+        root.x = (Math.random() - 0.5) * shakeMag;
+        root.y = (Math.random() - 0.5) * shakeMag;
+        shakeFrames--; shakeMag *= 0.85;
+      } else { root.x = 0; root.y = 0; }
+      return;
+    }
+
+    // ===== PLAYING =====
+    // Screen shake
+    if (shakeFrames > 0) {
+      root.x = (Math.random() - 0.5) * shakeMag;
+      root.y = (Math.random() - 0.5) * shakeMag;
+      shakeFrames--; shakeMag *= 0.85;
+    } else { root.x = 0; root.y = 0; }
+
+    // --- Ninja input ---
+    const left = keys['a'] || keys['arrowleft'];
+    const right = keys['d'] || keys['arrowright'];
+    const jump = keys['w'] || keys['arrowup'] || keys[' '] && !ninja._attacking;
+    const attack = keys[' '] || clickAttack;
+    clickAttack = false;
+
+    // Horizontal movement with acceleration
+    if (left) {
+      ninja._vx -= MOVE_ACCEL;
+      ninja._facing = -1;
+    } else if (right) {
+      ninja._vx += MOVE_ACCEL;
+      ninja._facing = 1;
+    } else {
+      ninja._vx *= MOVE_DECEL;
+      if (Math.abs(ninja._vx) < 0.2) ninja._vx = 0;
+    }
+    ninja._vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, ninja._vx));
+
+    // Wall slide detection
+    ninja._touchingWall = 0;
+    ninja._wallSliding = false;
+
+    // Apply gravity
+    ninja._vy += GRAVITY;
+
+    // Move
+    ninja.x += ninja._vx;
+    ninja.y += ninja._vy;
+
+    // Platform collision
+    ninja._onGround = checkPlatformCollision(ninja, 32);
+
+    // Wall slide
+    if (!ninja._onGround && ninja._touchingWall !== 0) {
+      const pushingIntoWall = (ninja._touchingWall === -1 && left) || (ninja._touchingWall === 1 && right);
+      if (pushingIntoWall && ninja._vy > 0) {
+        ninja._wallSliding = true;
+        ninja._wallDir = ninja._touchingWall;
+        ninja._vy = Math.min(ninja._vy, WALL_SLIDE_SPEED);
+      }
+    }
+
+    // Jump
+    if (jump && !ninja._attacking) {
+      if (ninja._onGround) {
+        ninja._vy = JUMP_VEL;
+        ninja._onGround = false;
+      } else if (ninja._wallSliding) {
+        ninja._vy = JUMP_VEL * 0.85;
+        ninja._vx = -ninja._wallDir * WALL_JUMP_VEL_X;
+        ninja._wallSliding = false;
+        ninja._facing = -ninja._wallDir;
+      }
+    }
+
+    // Fall limit
+    if (ninja.y > H + 50) {
+      health--;
+      updateHealthBar();
+      updateLivesDisplay();
+      if (health <= 0) {
+        gameState = 'gameover';
+        goLayer.visible = true;
+        goScoreTf.text = 'Final Score: ' + score;
+        doShake(8, 15);
+        spawnDeathBurst(ninja.x - scrollX, ninja.y, 0xffffff, 25);
+        return;
+      }
+      // Respawn
+      ninja.x = scrollX + 200;
+      ninja.y = GROUND_Y - 60;
+      ninja._vx = 0; ninja._vy = 0;
+      ninja._invincible = 60;
+    }
+
+    // Attack
+    if (attack && !ninja._attacking) {
+      ninja._attacking = true;
+      ninja._attackFrame = 0;
+      spawnSlashTrail(ninja.x - scrollX, ninja.y - 10, ninja._facing);
+    }
+    if (ninja._attacking) {
+      ninja._attackFrame++;
+      if (ninja._attackFrame >= ATTACK_FRAMES) {
+        ninja._attacking = false;
+      }
+    }
+
+    // Invincibility flicker
+    if (ninja._invincible > 0) {
+      ninja._invincible--;
+      ninja.alpha = (frameCount % 4 < 2) ? 0.4 : 1.0;
+    } else {
+      ninja.alpha = 1;
+    }
+
+    // Scrolling - camera follows ninja
+    const targetScrollX = ninja.x - 250;
+    scrollX += (targetScrollX - scrollX) * 0.08;
+    if (scrollX < 0) scrollX = 0;
+    scrollSpeed = targetScrollX - scrollX;
+
+    // Position layers with parallax
+    const sx = -scrollX;
+    platformLayer.x = sx;
+    entityLayer.x = sx;
+    mountains1.x = -scrollX * 0.15;
+    mountains2.x = W + 200 - scrollX * 0.15;
+    if (mountains1.x < -(W + 200)) mountains1.x += (W + 200) * 2;
+    if (mountains2.x < -(W + 200)) mountains2.x += (W + 200) * 2;
+    treeLine1.x = -scrollX * 0.4;
+
+    // Extend level procedurally
+    extendLevel();
+
+    // --- Ninja animation pose ---
+    if (ninja._attacking) {
+      setPoseAttack(ninja._attackFrame);
+    } else if (ninja._wallSliding) {
+      setPoseWallSlide(ninja._wallDir);
+    } else if (!ninja._onGround) {
+      setPoseJump();
+    } else if (Math.abs(ninja._vx) > 0.5) {
+      setPoseRun(frameCount);
+    } else {
+      setPoseIdle();
+    }
+    ninja.scaleX = ninja._facing;
+    drawStickNinja(ninja, 0xddddee, 7, 22, 18, 20);
+
+    // --- Update enemies ---
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (!e._alive) continue;
+
+      // Patrol
+      e.x += e._vx;
+      if (e.x >= e._patrolRight) { e._vx = -Math.abs(e._vx); e._facing = -1; }
+      if (e.x <= e._patrolLeft) { e._vx = Math.abs(e._vx); e._facing = 1; }
+      e.scaleX = e._facing;
+
+      // Run animation
+      const et = frameCount + i * 20;
+      const es = Math.sin(et * 0.25);
+      e._pose = {
+        lArm: -es * 0.5, rArm: es * 0.5,
+        lFore: 0.4, rFore: -0.4,
+        lLeg: es * 0.5, rLeg: -es * 0.5,
+        lShin: Math.max(0, -Math.cos(et * 0.25) * 0.4),
+        rShin: Math.max(0, Math.cos(et * 0.25) * 0.4),
+        sword: 0.5
+      };
+      drawStickNinja(e, 0xee4444, 6, 18, 14, 16);
+
+      // Throw shuriken
+      e._shootTimer--;
+      if (e._shootTimer <= 0) {
+        e._shootTimer = 80 + Math.floor(Math.random() * 80);
+        const distToNinja = Math.abs(e.x - ninja.x);
+        if (distToNinja < 500) {
+          spawnShuriken(e.x, e.y - 12, ninja.x, ninja.y - 15);
+        }
+      }
+
+      // Collision with ninja attack
+      if (ninja._attacking && ninja._attackFrame < 8) {
+        const dx = (ninja.x) - e.x;
+        const dy = (ninja.y - 15) - (e.y - 10);
+        const attackRange = 50;
+        if (Math.abs(dx) < attackRange && Math.abs(dy) < 40 &&
+            ((ninja._facing === 1 && dx <= 10) || (ninja._facing === -1 && dx >= -10))) {
+          // Kill enemy
+          e._alive = false;
+          e.removeFromParent();
+          enemies.splice(i, 1);
+          spawnDeathBurst(e.x, e.y - 10, 0xff4444, 15);
+          doShake(4, 6);
+
+          // Score + combo
+          combo++;
+          comboTimer = COMBO_TIMEOUT;
+          score += 100 * combo;
+          continue;
+        }
+      }
+
+      // Enemy touches ninja (damage)
+      if (ninja._invincible <= 0) {
+        const dx = ninja.x - e.x;
+        const dy = ninja.y - e.y;
+        if (Math.abs(dx) < 20 && Math.abs(dy) < 25) {
+          health--;
+          updateHealthBar();
+          updateLivesDisplay();
+          ninja._invincible = 60;
+          ninja._vx = (dx > 0 ? 1 : -1) * 6;
+          ninja._vy = -6;
+          doShake(5, 8);
+          if (health <= 0) {
+            gameState = 'gameover';
+            goLayer.visible = true;
+            goScoreTf.text = 'Final Score: ' + score;
+            doShake(10, 15);
+            spawnDeathBurst(ninja.x, ninja.y, 0xffffff, 30);
+            return;
+          }
+        }
+      }
+    }
+
+    // --- Update shurikens ---
+    for (let i = shurikens.length - 1; i >= 0; i--) {
+      const s = shurikens[i];
+      s.x += s._vx;
+      s.y += s._vy;
+      s.rotation += 0.3;
+      s._life--;
+      if (s._life <= 0 || s.x < scrollX - 50 || s.x > scrollX + W + 50) {
+        s.removeFromParent();
+        shurikens.splice(i, 1);
+        continue;
+      }
+      // Hit ninja?
+      if (ninja._invincible <= 0) {
+        const dx = ninja.x - s.x;
+        const dy = (ninja.y - 15) - s.y;
+        if (Math.abs(dx) < 14 && Math.abs(dy) < 18) {
+          health--;
+          updateHealthBar();
+          updateLivesDisplay();
+          ninja._invincible = 60;
+          ninja._vx += s._vx * 0.5;
+          ninja._vy = -4;
+          doShake(4, 6);
+          s.removeFromParent();
+          shurikens.splice(i, 1);
+          spawnDeathBurst(ninja.x, ninja.y - 15, 0xffaa44, 8);
+          if (health <= 0) {
+            gameState = 'gameover';
+            goLayer.visible = true;
+            goScoreTf.text = 'Final Score: ' + score;
+            doShake(10, 15);
+            spawnDeathBurst(ninja.x, ninja.y, 0xffffff, 30);
+            return;
+          }
+        }
+      }
+    }
+
+    // --- Update scrolls ---
+    for (let i = scrolls.length - 1; i >= 0; i--) {
+      const sc = scrolls[i];
+      sc.y = sc._baseY + Math.sin(frameCount * 0.06 + i) * 6;
+      sc.rotation = Math.sin(frameCount * 0.04 + i * 2) * 0.15;
+      // Collect?
+      const dx = ninja.x - sc.x;
+      const dy = ninja.y - 20 - sc.y;
+      if (Math.abs(dx) < 22 && Math.abs(dy) < 22 && !sc._collected) {
+        sc._collected = true;
+        sc.removeFromParent();
+        scrolls.splice(i, 1);
+        score += 250;
+        // Gold sparkle
+        spawnDeathBurst(sc.x, sc.y, 0xffdd44, 10);
+      }
+    }
+
+    // --- Combo timer ---
+    if (comboTimer > 0) {
+      comboTimer--;
+      if (comboTimer <= 0) combo = 0;
+    }
+
+    // --- Update particles ---
+    for (let i = deathParticles.length - 1; i >= 0; i--) {
+      const p = deathParticles[i];
+      p.x += p._vx;
+      p.y += p._vy;
+      p._vy += 0.15;
+      p._life--;
+      p.alpha = Math.max(0, p._life / p._maxLife);
+      if (p._life <= 0) { p.removeFromParent(); deathParticles.splice(i, 1); }
+    }
+
+    for (let i = slashTrails.length - 1; i >= 0; i--) {
+      const t = slashTrails[i];
+      t._life--;
+      t.alpha = Math.max(0, t._life / t._maxLife);
+      if (t._life <= 0) { t.removeFromParent(); slashTrails.splice(i, 1); }
+    }
+
+    // --- HUD ---
+    scoreTf.text = '' + score;
+    if (combo > 1) {
+      comboTf.text = combo + 'x COMBO';
+      comboTf.alpha = Math.min(1, comboTimer / 15);
+    } else {
+      comboTf.text = '';
+    }
+  });
+
+  // ===== INIT =====
+  window.__stage = stage;
+  stage.start();
+})();
+</script>
+</body>
+</html>

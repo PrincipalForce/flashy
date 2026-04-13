@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vectid - Solar System</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a12; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #f0d060; letter-spacing: 2px; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.6; }
+  canvas { border: 1px solid #1a1a2e; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>Solar System</h1>
+<p class="info">Nested MovieClip orbits, gradient fills, parallax starfield, and a periodic comet.</p>
+<canvas id="stage"></canvas>
+<script src="../vectid.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField, Graphics, Easing } = Vectid;
+  const W = 960, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 30, backgroundColor: null });
+  const root = stage.root;
+  const CX = W / 2, CY = H / 2;
+  const PI2 = Math.PI * 2;
+
+  // ---- background gradient ----
+  const bg = new Shape();
+  bg.graphics.beginGradientFill('radial',
+    ['#0c0c24', '#060612', '#020208'], [1, 1, 1], [0, 0.5, 1],
+    CX, CY, CX + W / 2, CY);
+  bg.graphics.drawRect(0, 0, W, H);
+  bg.graphics.endFill();
+  root.addChild(bg);
+
+  // ---- parallax starfield (3 layers) ----
+  function makeStarLayer(count, speed, minSize, maxSize, alpha) {
+    const mc = new MovieClip();
+    mc.loop = true;
+    const stars = [];
+    for (let i = 0; i < count; i++) {
+      const s = new Shape();
+      const r = minSize + Math.random() * (maxSize - minSize);
+      const bright = 0.4 + Math.random() * 0.6;
+      s.graphics.beginFill('#ffffff', bright * alpha);
+      s.graphics.drawCircle(0, 0, r);
+      s.graphics.endFill();
+      s.x = Math.random() * W;
+      s.y = Math.random() * H;
+      mc.addChild(s);
+      stars.push({ shape: s, speed: speed * (0.7 + Math.random() * 0.6) });
+    }
+    mc.addEventListener('enterFrame', function () {
+      for (const st of stars) {
+        st.shape.x -= st.speed;
+        if (st.shape.x < -5) { st.shape.x = W + 5; st.shape.y = Math.random() * H; }
+      }
+    });
+    return mc;
+  }
+  root.addChild(makeStarLayer(60, 0.15, 0.3, 0.8, 0.4));
+  root.addChild(makeStarLayer(40, 0.35, 0.5, 1.2, 0.6));
+  root.addChild(makeStarLayer(25, 0.7, 0.8, 1.8, 0.9));
+
+  // ---- sun (nested MC with pulsing glow) ----
+  const sun = new MovieClip();
+  sun.x = CX; sun.y = CY;
+
+  const sunGlow = new MovieClip();
+  const glowShape = new Shape();
+  glowShape.graphics.beginGradientFill('radial',
+    ['#fff8e0', '#ffcc00', '#ff6600', '#ff220000'], [1, 1, 0.8, 0], [0, 0.3, 0.6, 1],
+    0, 0, 50, 0);
+  glowShape.graphics.drawCircle(0, 0, 50);
+  glowShape.graphics.endFill();
+  sunGlow.addChild(glowShape);
+  sunGlow.timeline.setTotalFrames(90);
+  sunGlow.timeline.addTween(sunGlow, 'scaleX', 0.9, 1.15, 1, 45, 'sineInOut');
+  sunGlow.timeline.addTween(sunGlow, 'scaleY', 0.9, 1.15, 1, 45, 'sineInOut');
+  sunGlow.timeline.addTween(sunGlow, 'scaleX', 1.15, 0.9, 46, 90, 'sineInOut');
+  sunGlow.timeline.addTween(sunGlow, 'scaleY', 1.15, 0.9, 46, 90, 'sineInOut');
+  sun.addChild(sunGlow);
+
+  const sunCore = new Shape();
+  sunCore.graphics.beginGradientFill('radial',
+    ['#ffffee', '#ffdd44', '#ee8800'], [1, 1, 1], [0, 0.5, 1], 0, 0, 28, 0);
+  sunCore.graphics.drawCircle(0, 0, 28);
+  sunCore.graphics.endFill();
+  sun.addChild(sunCore);
+  root.addChild(sun);
+
+  // ---- planet factory ----
+  function createPlanet(cfg) {
+    const orbit = new MovieClip();
+    orbit.x = CX; orbit.y = CY;
+
+    // orbit ring (faint)
+    const ring = new Shape();
+    ring.graphics.lineStyle(0.5, '#ffffff', 0.08);
+    ring.graphics.drawEllipse(-cfg.dist, -cfg.dist * 0.4, cfg.dist * 2, cfg.dist * 0.8);
+    ring.graphics.endFill();
+    orbit.addChild(ring);
+
+    const planet = new MovieClip();
+    planet.name = cfg.name;
+
+    // planet body
+    const body = new Shape();
+    body.graphics.beginGradientFill('radial',
+      [cfg.colorLight, cfg.colorDark], [1, 1], [0.2, 1], -cfg.radius * 0.3, -cfg.radius * 0.3, cfg.radius, 0);
+    body.graphics.drawCircle(0, 0, cfg.radius);
+    body.graphics.endFill();
+    planet.addChild(body);
+
+    // optional: draw extras (Saturn rings, Jupiter bands)
+    if (cfg.drawExtra) cfg.drawExtra(planet, cfg);
+
+    // moons
+    if (cfg.moons) {
+      for (const m of cfg.moons) {
+        const moonMC = new MovieClip();
+        const moonShape = new Shape();
+        moonShape.graphics.beginFill(m.color || '#cccccc', 1);
+        moonShape.graphics.drawCircle(0, 0, m.radius);
+        moonShape.graphics.endFill();
+        moonMC.addChild(moonShape);
+        moonMC._moonAngle = Math.random() * PI2;
+        moonMC._moonDist = m.dist;
+        moonMC._moonSpeed = m.speed;
+        moonMC.addEventListener('enterFrame', function () {
+          this._moonAngle += this._moonSpeed;
+          this.x = Math.cos(this._moonAngle) * this._moonDist;
+          this.y = Math.sin(this._moonAngle) * this._moonDist * 0.5;
+        });
+        planet.addChild(moonMC);
+      }
+    }
+
+    orbit.addChild(planet);
+
+    // orbital motion via enterFrame
+    let angle = cfg.startAngle || Math.random() * PI2;
+    const wobbleAmp = cfg.wobble || 0;
+    let wobblePhase = 0;
+    orbit.addEventListener('enterFrame', function () {
+      angle += cfg.speed;
+      wobblePhase += 0.02;
+      const wobbleOffset = Math.sin(wobblePhase) * wobbleAmp;
+      planet.x = Math.cos(angle) * cfg.dist;
+      planet.y = Math.sin(angle) * cfg.dist * 0.4 + wobbleOffset;
+      planet.scaleX = 0.7 + 0.3 * ((Math.sin(angle) + 1) / 2);
+      planet.scaleY = planet.scaleX;
+    });
+    return orbit;
+  }
+
+  // Mercury
+  root.addChild(createPlanet({
+    name: 'Mercury', dist: 70, radius: 4, speed: 0.025,
+    colorLight: '#d4c4a8', colorDark: '#6b5b45', wobble: 1
+  }));
+
+  // Venus
+  root.addChild(createPlanet({
+    name: 'Venus', dist: 100, radius: 7, speed: 0.018,
+    colorLight: '#f0d890', colorDark: '#a07830', wobble: 1.5
+  }));
+
+  // Earth with moon
+  root.addChild(createPlanet({
+    name: 'Earth', dist: 140, radius: 8, speed: 0.012,
+    colorLight: '#5588dd', colorDark: '#224488', wobble: 1,
+    moons: [{ radius: 2, dist: 16, speed: 0.06, color: '#ccccbb' }]
+  }));
+
+  // Mars
+  root.addChild(createPlanet({
+    name: 'Mars', dist: 180, radius: 5.5, speed: 0.009,
+    colorLight: '#dd6633', colorDark: '#882211', wobble: 2,
+    moons: [{ radius: 1.2, dist: 11, speed: 0.08, color: '#aa9988' }]
+  }));
+
+  // Jupiter with storm bands
+  root.addChild(createPlanet({
+    name: 'Jupiter', dist: 230, radius: 18, speed: 0.005,
+    colorLight: '#e8c888', colorDark: '#886644', wobble: 2,
+    moons: [
+      { radius: 2, dist: 28, speed: 0.04, color: '#ddcc99' },
+      { radius: 1.5, dist: 34, speed: -0.03, color: '#bbaa88' }
+    ],
+    drawExtra: function (planet, cfg) {
+      const bands = new MovieClip();
+      bands.name = 'bands';
+      const bandColors = ['#cc9955', '#aa7733', '#ddbb77', '#bb8844'];
+      for (let i = 0; i < 4; i++) {
+        const band = new Shape();
+        const yOff = -12 + i * 7;
+        band.graphics.beginFill(bandColors[i], 0.4);
+        band.graphics.drawEllipse(-cfg.radius + 2, yOff, (cfg.radius - 2) * 2, 5);
+        band.graphics.endFill();
+        bands.addChild(band);
+      }
+      // great red spot
+      const spot = new Shape();
+      spot.graphics.beginFill('#cc4422', 0.5);
+      spot.graphics.drawEllipse(4, 2, 7, 5);
+      spot.graphics.endFill();
+      bands.addChild(spot);
+      planet.addChild(bands);
+    }
+  }));
+
+  // Saturn with rings
+  root.addChild(createPlanet({
+    name: 'Saturn', dist: 290, radius: 14, speed: 0.003,
+    colorLight: '#f0d888', colorDark: '#a08844', wobble: 1.5,
+    moons: [
+      { radius: 1.8, dist: 36, speed: 0.035, color: '#ddccaa' }
+    ],
+    drawExtra: function (planet, cfg) {
+      const rings = new Shape();
+      const g = rings.graphics;
+      // draw rings using curveTo arcs
+      const ringColors = [['#ddcc88', 0.25], ['#ccbb77', 0.35], ['#bbaa66', 0.2]];
+      for (let r = 0; r < 3; r++) {
+        const innerR = cfg.radius + 4 + r * 5;
+        const outerR = innerR + 4;
+        g.lineStyle(2, ringColors[r][0], ringColors[r][1]);
+        // top half of elliptical ring
+        g.moveTo(-outerR, 0);
+        g.curveTo(-outerR, -outerR * 0.35, 0, -outerR * 0.35);
+        g.curveTo(outerR, -outerR * 0.35, outerR, 0);
+        // bottom half
+        g.moveTo(-outerR, 0);
+        g.curveTo(-outerR, outerR * 0.35, 0, outerR * 0.35);
+        g.curveTo(outerR, outerR * 0.35, outerR, 0);
+      }
+      planet.addChildAt(rings, 0);
+    }
+  }));
+
+  // Uranus
+  root.addChild(createPlanet({
+    name: 'Uranus', dist: 350, radius: 10, speed: 0.002,
+    colorLight: '#88ccdd', colorDark: '#447788', wobble: 1
+  }));
+
+  // ---- comet ----
+  const cometContainer = new MovieClip();
+  cometContainer.visible = false;
+  let cometTimer = 0;
+  const cometResetInterval = 300; // frames
+
+  function setupComet() {
+    cometContainer.removeAllChildren();
+    // tail
+    const tail = new Shape();
+    tail.graphics.beginGradientFill('linear',
+      ['#ffffff', '#aaddff', '#aaddff00'], [0.8, 0.4, 0], [0, 0.3, 1],
+      0, 0, -120, 20);
+    tail.graphics.moveTo(0, 0);
+    tail.graphics.lineTo(-80, 8);
+    tail.graphics.curveTo(-120, 14, -140, 22);
+    tail.graphics.lineTo(-140, -18);
+    tail.graphics.curveTo(-120, -10, -80, -6);
+    tail.graphics.closePath();
+    tail.graphics.endFill();
+    cometContainer.addChild(tail);
+
+    // head
+    const head = new Shape();
+    head.graphics.beginGradientFill('radial',
+      ['#ffffff', '#aaccff', '#4488cc00'], [1, 0.8, 0], [0, 0.4, 1], 0, 0, 8, 0);
+    head.graphics.drawCircle(0, 0, 8);
+    head.graphics.endFill();
+    cometContainer.addChild(head);
+  }
+  setupComet();
+  root.addChild(cometContainer);
+
+  // comet flight via frame script
+  let cometX, cometY, cometVX, cometVY;
+  function launchComet() {
+    cometContainer.visible = true;
+    const side = Math.random() < 0.5 ? -1 : 1;
+    cometX = side < 0 ? W + 40 : -40;
+    cometY = 20 + Math.random() * H * 0.3;
+    cometVX = -side * (6 + Math.random() * 4);
+    cometVY = 1.5 + Math.random() * 2;
+    cometContainer.rotation = Math.atan2(cometVY, cometVX);
+  }
+
+  root.addEventListener('enterFrame', function () {
+    cometTimer++;
+    if (!cometContainer.visible) {
+      if (cometTimer >= cometResetInterval) { launchComet(); cometTimer = 0; }
+    } else {
+      cometX += cometVX;
+      cometY += cometVY;
+      cometContainer.x = cometX;
+      cometContainer.y = cometY;
+      cometContainer.rotation = Math.atan2(cometVY, cometVX);
+      if (cometX < -60 || cometX > W + 60 || cometY > H + 60) {
+        cometContainer.visible = false;
+      }
+    }
+  });
+
+  // ---- title label ----
+  const title = new TextField('Solar System', { font: '11px sans-serif', color: '#ffffff', align: 'right' });
+  title.x = W - 10; title.y = H - 18; title.alpha = 0.3;
+  root.addChild(title);
+
+  window.__stage = stage;
+  stage.start();
+})();
+</script>
+</body>
+</html>
