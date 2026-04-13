@@ -227,6 +227,7 @@ var TOOLS=[
   {id:"oval",label:"Oval Tool (O)",key:"o",svg:'<ellipse cx="7" cy="7" rx="5" ry="4" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
   {id:"pencil",label:"Pencil Tool (Y)",key:"y",svg:'<path d="M2,12 L4,10 L10,4 L12,2 L11,3 L5,9 L3,11 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"brush",label:"Brush Tool (B)",key:"b",svg:'<path d="M9,1 Q12,4 8,8 Q6,10 3,13 Q2,12 4,9 Q5,7 6,6 L9,1 Z" fill="currentColor"/>'},
+  {id:"bucket",label:"Paint Bucket (K)",key:"k",svg:'<path d="M3,5 L7,1 L11,5 L7,9 Z" fill="currentColor" opacity="0.4"/><path d="M2,9 L2,13 L12,13 L12,9 L10,7 L7,10 L4,7 Z" fill="currentColor"/>'},
   {id:"eyedrop",label:"Eyedropper (I)",key:"i",svg:'<path d="M10,1 L12,3 L11,4 L5,10 L3,11 L2,9 L8,3 L9,2 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"hand",label:"Hand Tool (H)",key:"h",svg:'<path d="M7,13 Q3,13 3,9 L3,6 Q3,5 4,5 Q5,5 5,6 L5,7 L5,4 Q5,3 6,3 Q7,3 7,4 L7,7 L7,3 Q7,2 8,2 Q9,2 9,3 L9,7 L9,5 Q9,4 10,4 Q11,4 11,5 L11,10 Q11,13 7,13 Z" fill="none" stroke="currentColor" stroke-width="0.8"/>'},
   {id:"zoom",label:"Zoom Tool (Z)",key:"z",svg:'<circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1.2"/><line x1="9" y1="9" x2="13" y2="13" stroke="currentColor" stroke-width="1.5"/>'}
@@ -246,6 +247,39 @@ function buildToolbox(){
     tb.appendChild(btn);
   });
 }
+// Custom SVG cursors for each tool
+var toolCursors={};
+function buildCursor(svg,hotX,hotY){
+  var full='<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'+svg+'</svg>';
+  return 'url("data:image/svg+xml,'+encodeURIComponent(full)+'") '+hotX+' '+hotY+', auto';
+}
+function initCursors(){
+  // Selection arrow — black arrow with white outline
+  toolCursors.select=buildCursor('<path d="M4,1 L4,17 L8,13 L12,19 L15,17 L11,11 L17,11 Z" fill="#000" stroke="#fff" stroke-width="1.2"/>',4,1);
+  // Transform — arrow with corner squares
+  toolCursors.transform=buildCursor('<path d="M4,1 L4,17 L8,13 L12,19 L15,17 L11,11 L17,11 Z" fill="#000" stroke="#fff" stroke-width="1"/>',4,1);
+  // Text — I-beam
+  toolCursors.text=buildCursor('<line x1="12" y1="3" x2="12" y2="21" stroke="#000" stroke-width="1.5"/><line x1="8" y1="3" x2="16" y2="3" stroke="#000" stroke-width="1.5"/><line x1="8" y1="21" x2="16" y2="21" stroke="#000" stroke-width="1.5"/><line x1="12" y1="3" x2="12" y2="21" stroke="#fff" stroke-width="0.5"/>',12,12);
+  // Line — crosshair
+  toolCursors.line=buildCursor('<line x1="12" y1="2" x2="12" y2="22" stroke="#000" stroke-width="1"/><line x1="2" y1="12" x2="22" y2="12" stroke="#000" stroke-width="1"/><line x1="12" y1="2" x2="12" y2="22" stroke="#fff" stroke-width="0.3"/><line x1="2" y1="12" x2="22" y2="12" stroke="#fff" stroke-width="0.3"/>',12,12);
+  // Rect — crosshair with tiny rect
+  toolCursors.rect=buildCursor('<line x1="12" y1="2" x2="12" y2="22" stroke="#000" stroke-width="1"/><line x1="2" y1="12" x2="22" y2="12" stroke="#000" stroke-width="1"/><rect x="14" y="14" width="6" height="5" fill="none" stroke="#000" stroke-width="0.8"/>',12,12);
+  // Oval — crosshair with tiny oval
+  toolCursors.oval=buildCursor('<line x1="12" y1="2" x2="12" y2="22" stroke="#000" stroke-width="1"/><line x1="2" y1="12" x2="22" y2="12" stroke="#000" stroke-width="1"/><ellipse cx="17" cy="17" rx="4" ry="3" fill="none" stroke="#000" stroke-width="0.8"/>',12,12);
+  // Pencil — pencil tip
+  toolCursors.pencil=buildCursor('<path d="M5,19 L7,13 L17,3 L21,7 L11,17 Z" fill="#FFC" stroke="#000" stroke-width="0.8"/><path d="M5,19 L7,13 L9,15 Z" fill="#F90" stroke="#000" stroke-width="0.5"/><path d="M4,20 L5,19 L6,20 Z" fill="#333"/>',4,20);
+  // Brush — brush tip angled
+  toolCursors.brush=buildCursor('<path d="M14,2 Q20,6 16,12 Q13,16 6,20 Q5,18 8,14 Q10,11 12,9 L14,2 Z" fill="#666" stroke="#000" stroke-width="0.6"/><circle cx="6" cy="20" r="1.5" fill="#000"/>',6,20);
+  // Bucket — paint bucket
+  toolCursors.bucket=buildCursor('<path d="M8,4 L13,1 L18,6 L13,11 Z" fill="#FF0" stroke="#000" stroke-width="0.8"/><path d="M5,11 L5,19 L19,19 L19,11 L16,8 L13,11 L10,8 Z" fill="#FF0" stroke="#000" stroke-width="0.8"/><path d="M20,13 Q23,16 20,19" fill="none" stroke="#39F" stroke-width="1.5"/>',12,18);
+  // Eyedropper
+  toolCursors.eyedrop=buildCursor('<path d="M17,1 L21,5 L19,7 L11,15 L8,16 L7,13 L15,5 L17,3 Z" fill="#DDD" stroke="#000" stroke-width="0.8"/><path d="M8,16 L7,13 L5,19 Z" fill="#000"/>',5,19);
+  // Hand — open hand
+  toolCursors.hand='grab';
+  // Zoom — magnifying glass
+  toolCursors.zoom='zoom-in';
+}
+initCursors();
 function setTool(id){
   curTool=id;
   var btns=document.querySelectorAll(".tool-btn");
@@ -254,11 +288,7 @@ function setTool(id){
   }
   var cv=document.getElementById("stageCanvas");
   if(cv){
-    if(id==="hand")cv.style.cursor="grab";
-    else if(id==="zoom")cv.style.cursor="zoom-in";
-    else if(id==="text")cv.style.cursor="text";
-    else if(id==="eyedrop")cv.style.cursor="crosshair";
-    else cv.style.cursor="default";
+    cv.style.cursor=toolCursors[id]||"default";
   }
 }
 
@@ -618,9 +648,20 @@ function onMouseDown(e){
     if(e.shiftKey||e.altKey){zoom=Math.max(0.1,zoom/1.5);}
     else{zoom=Math.min(10,zoom*1.5);}
     updateZoomUI();render();dragging=false;
+  }else if(curTool==="bucket"){
+    var hit4=hitTest(p.x,p.y);
+    if(hit4){
+      pushUndo();
+      hit4.fillColor=fillColor;
+      hit4.fillAlpha=fillAlpha;
+      hit4.fillType="solid";
+      selection=[hit4];
+      render();updateProps();
+    }
+    dragging=false;
   }else if(curTool==="eyedrop"){
     var hit2=hitTest(p.x,p.y);
-    if(hit2){fillColor=hit2.fillColor;strokeColor=hit2.strokeColor;updateColorUI();}
+    if(hit2){fillColor=hit2.fillColor;strokeColor=hit2.strokeColor;strokeWidth=hit2.strokeWidth;updateColorUI();}
     dragging=false;
   }else if(curTool==="transform"){
     var hit3=hitTest(p.x,p.y);
