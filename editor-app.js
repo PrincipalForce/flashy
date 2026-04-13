@@ -294,27 +294,36 @@ function setTool(id){
 
 // === Canvas / Stage ===
 var canvas,ctx;
+var canvasW=0,canvasH=0; // logical (CSS) size of canvas
 function resizeCanvas(){
   canvas=document.getElementById("stageCanvas");
   if(!canvas)return;
   var wrap=canvas.parentElement;
-  canvas.width=wrap.clientWidth;
-  canvas.height=wrap.clientHeight;
+  canvasW=wrap.clientWidth;
+  canvasH=wrap.clientHeight;
+  var dpr=window.devicePixelRatio||1;
+  canvas.width=canvasW*dpr;
+  canvas.height=canvasH*dpr;
+  canvas.style.width=canvasW+"px";
+  canvas.style.height=canvasH+"px";
   ctx=canvas.getContext("2d");
+  ctx.setTransform(dpr,0,0,dpr,0,0);
   render();
 }
 function centerStage(){
   canvas=document.getElementById("stageCanvas");
   if(!canvas)return;
-  panX=(canvas.width-doc.width*zoom)/2;
-  panY=(canvas.height-doc.height*zoom)/2;
+  panX=(canvasW-doc.width*zoom)/2;
+  panY=(canvasH-doc.height*zoom)/2;
 }
 function s2s(x,y){return{x:(x-panX)/zoom,y:(y-panY)/zoom};}
 function s2c(x,y){return{x:x*zoom+panX,y:y*zoom+panY};}
 
 function render(){
   if(!ctx)return;
-  var w=canvas.width,h=canvas.height;
+  var dpr=window.devicePixelRatio||1;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  var w=canvasW,h=canvasH;
   ctx.clearRect(0,0,w,h);
   // pasteboard
   ctx.fillStyle="#C0C0C0";
@@ -1865,7 +1874,7 @@ function doAction(a){
   case "zoomOut":zoom=Math.max(0.1,zoom/1.5);updateZoomUI();render();break;
   case "zoom100":zoom=1;updateZoomUI();centerStage();render();break;
   case "zoomFit":
-    var cw=canvas?canvas.width:800,ch=canvas?canvas.height:600;
+    var cw=canvasW||800,ch=canvasH||600;
     zoom=Math.min((cw-40)/doc.width,(ch-40)/doc.height);
     updateZoomUI();centerStage();render();
     break;
