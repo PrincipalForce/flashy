@@ -40,7 +40,7 @@ A browser-based authoring IDE inspired by Macromedia Flash MX2004:
 
 ```bash
 # Clone and serve
-git clone https://github.com/YOUR_USERNAME/vectid.git
+git clone https://github.com/PrincipalForce/vectid.git
 cd vectid
 python -m http.server 8000
 
