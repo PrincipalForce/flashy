@@ -419,14 +419,53 @@ function renderObj(o){
     }
     ctx.textAlign="start";
   }else if(o.type==="symbol"){
-    // render symbol contents as a simple rect placeholder
-    ctx.fillStyle="#CCCCFF";ctx.globalAlpha=o.alpha*0.5;
-    ctx.fillRect(-hw,-hh,o.width,o.height);
-    ctx.strokeStyle="#6666CC";ctx.lineWidth=1;ctx.globalAlpha=o.alpha;
-    ctx.strokeRect(-hw,-hh,o.width,o.height);
-    ctx.fillStyle="#333";ctx.font="10px Arial";ctx.textBaseline="middle";ctx.textAlign="center";
-    ctx.fillText(o.symbolName||"Symbol",0,0);
-    ctx.textAlign="start";
+    var sym=doc.library[o.symbolName];
+    if(sym){
+      // Render the symbol's actual objects
+      var symObjs=sym.objects;
+      // If symbol has layers, render from the layers at frame 1
+      if(sym.layers){
+        symObjs=[];
+        for(var sli=sym.layers.length-1;sli>=0;sli--){
+          var sl=sym.layers[sli];
+          if(!sl.visible)continue;
+          var skf=sl.getKeyframeAt(1);
+          if(skf){
+            for(var soi=0;soi<skf.objects.length;soi++)symObjs.push(skf.objects[soi]);
+          }
+        }
+      }
+      if(symObjs&&symObjs.length>0){
+        // We're currently at the symbol's center (x+w/2, y+h/2).
+        // Symbol children are positioned relative to (0,0) in symbol space.
+        // Shift back to top-left corner so children render correctly.
+        ctx.translate(-hw,-hh);
+        for(var si=0;si<symObjs.length;si++){
+          renderObj(symObjs[si]);
+        }
+        ctx.translate(hw,hh); // restore for label below
+      }else{
+        // Empty symbol — show placeholder
+        ctx.fillStyle="#CCCCFF";ctx.globalAlpha=o.alpha*0.3;
+        ctx.fillRect(-hw,-hh,o.width,o.height);
+        ctx.strokeStyle="#6666CC";ctx.lineWidth=1;ctx.globalAlpha=o.alpha;
+        ctx.strokeRect(-hw,-hh,o.width,o.height);
+      }
+      // Draw symbol name label below
+      ctx.globalAlpha=o.alpha*0.4;
+      ctx.fillStyle="#88f";ctx.font="9px Arial";ctx.textBaseline="top";ctx.textAlign="center";
+      ctx.fillText(o.symbolName||"Symbol",0,hh+2);
+      ctx.textAlign="start";
+    }else{
+      // Missing symbol reference
+      ctx.fillStyle="#FF6666";ctx.globalAlpha=o.alpha*0.5;
+      ctx.fillRect(-hw,-hh,o.width,o.height);
+      ctx.strokeStyle="#CC3333";ctx.lineWidth=1;ctx.globalAlpha=o.alpha;
+      ctx.strokeRect(-hw,-hh,o.width,o.height);
+      ctx.fillStyle="#fff";ctx.font="9px Arial";ctx.textBaseline="middle";ctx.textAlign="center";
+      ctx.fillText("Missing: "+(o.symbolName||"?"),0,0);
+      ctx.textAlign="start";
+    }
   }
   ctx.restore();
 }
@@ -521,6 +560,7 @@ function initMouse(){
   canvas.addEventListener("mousedown",onMouseDown);
   canvas.addEventListener("mousemove",onMouseMove);
   canvas.addEventListener("mouseup",onMouseUp);
+  canvas.addEventListener("dblclick",onDblClick);
   canvas.addEventListener("wheel",onWheel,{passive:false});
   canvas.addEventListener("contextmenu",function(e){e.preventDefault();showCtx(e);});
 }
@@ -537,6 +577,14 @@ function hitTest(x,y){
   return null;
 }
 var moveStartX=0,moveStartY=0,moveObjStarts=[];
+function onDblClick(e){
+  if(curTool!=="select")return;
+  var p=getStagePos(e);
+  var hit=hitTest(p.x,p.y);
+  if(hit&&hit.type==="symbol"&&hit.symbolName&&doc.library[hit.symbolName]){
+    enterSymbol(hit.symbolName);
+  }
+}
 function onMouseDown(e){
   if(e.button===2)return;
   var p=getStagePos(e);
@@ -544,16 +592,6 @@ function onMouseDown(e){
   if(curTool==="select"){
     var hit=hitTest(p.x,p.y);
     if(hit){
-      var now=Date.now();
-      if(hit===lastClickTarget&&now-lastClickTime<400){
-        if(hit.type==="symbol"&&hit.symbolName&&doc.library[hit.symbolName]){
-          enterSymbol(hit.symbolName);
-          lastClickTime=0;
-          return;
-        }
-      }
-      lastClickTime=now;
-      lastClickTarget=hit;
       if(e.shiftKey){
         var idx=selection.indexOf(hit);
         if(idx>=0)selection.splice(idx,1);else selection.push(hit);
@@ -2143,12 +2181,23 @@ function genHTML(callback){
     if(libKeys.length){
       s+="var libData=data.library;\n";
       s+="for(var sname in libData){\n";
-      s+="  var sym=libData[sname];\n";
-      s+="  symbols[sname]=function(){\n";
-      s+="    var mc=new Flashy.MovieClip();\n";
-      s+="    if(sym.objects)sym.objects.forEach(function(o){mc.addChild(buildObj(o));});\n";
-      s+="    return mc;\n";
-      s+="  };\n";
+      s+="  (function(name,sym){\n";
+      s+="    symbols[name]=function(){\n";
+      s+="      var mc=new Flashy.MovieClip();\n";
+      s+="      var objs=sym.objects||[];\n";
+      s+="      if(sym.layers){\n";
+      s+="        objs=[];sym.layers.forEach(function(l){\n";
+      s+="          if(l.visible===false)return;\n";
+      s+="          var kf=null;for(var i=l.keyframes.length-1;i>=0;i--){\n";
+      s+="            if(1>=l.keyframes[i].index&&1<l.keyframes[i].index+l.keyframes[i].duration){kf=l.keyframes[i];break;}\n";
+      s+="          }\n";
+      s+="          if(kf)objs=objs.concat(kf.objects);\n";
+      s+="        });\n";
+      s+="      }\n";
+      s+="      objs.forEach(function(o){mc.addChild(buildObj(o));});\n";
+      s+="      return mc;\n";
+      s+="    };\n";
+      s+="  })(sname,libData[sname]);\n";
       s+="}\n";
     }
     // Compute max frame across all layers
@@ -2981,7 +3030,28 @@ if(document.readyState==="loading"){
 
 // === AI Assistant Panel ===
 var aiMessages = [];
-var aiApiKey = localStorage.getItem("flashy_ai_key") || "";
+var aiApiKey = "";
+// Try to load API key from multiple sources:
+// 1. Window global (set by server-side template or config script)
+// 2. Meta tag <meta name="anthropic-api-key" content="sk-...">
+// 3. localStorage (previously saved by user)
+(function loadApiKey(){
+  // Check window global (e.g. set from env var by a server)
+  if(window.ANTHROPIC_API_KEY) { aiApiKey = window.ANTHROPIC_API_KEY; return; }
+  if(window.FLASHY_API_KEY) { aiApiKey = window.FLASHY_API_KEY; return; }
+  // Check meta tag
+  var meta = document.querySelector('meta[name="anthropic-api-key"]');
+  if(meta && meta.content) { aiApiKey = meta.content; return; }
+  // Check localStorage
+  var stored = localStorage.getItem("flashy_ai_key");
+  if(stored) { aiApiKey = stored; return; }
+  // Also try fetching from a local config endpoint (for dev servers)
+  fetch("/api/config").then(function(r){
+    if(r.ok) return r.json();
+  }).then(function(data){
+    if(data && data.anthropicApiKey) { aiApiKey = data.anthropicApiKey; }
+  }).catch(function(){});
+})();
 
 function initAIPanel() {
   var panel = document.getElementById("aiPanel");
@@ -3048,7 +3118,7 @@ function aiSend() {
   input.value = "";
 
   if (!aiApiKey) {
-    aiApiKey = prompt("Enter your Anthropic API key to use the AI assistant.\nGet one at console.anthropic.com\n\nYour key is stored locally and never sent anywhere except Anthropic's API.");
+    aiApiKey = prompt("Enter your Anthropic API key to use the AI assistant.\nGet one at console.anthropic.com\n\nYour key is stored in localStorage.\n\nTip: Set window.ANTHROPIC_API_KEY or add\n<meta name=\"anthropic-api-key\" content=\"sk-...\"> to skip this prompt.");
     if (!aiApiKey) return;
     localStorage.setItem("flashy_ai_key", aiApiKey);
   }
