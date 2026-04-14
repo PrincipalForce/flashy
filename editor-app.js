@@ -1097,9 +1097,9 @@ function initTLClicks(){
       if(en>s)rangeInfo=" ("+s+"-"+en+")";
     }
     showTLContextMenu(e.clientX,e.clientY,[
-      {label:"Insert Keyframe (F6)",action:function(){doAction("insertKF");}},
-      {label:"Insert Blank Keyframe (F7)",action:function(){doAction("insertBlankKF");}},
-      {label:"Insert Frame (F5)",action:function(){doAction("insertFrame");}},
+      {label:"Insert Keyframe (F6)",action:function(){doAction("insKF");}},
+      {label:"Insert Blank Keyframe (F7)",action:function(){doAction("insBlankKF");}},
+      {label:"Insert Frame (F5)",action:function(){doAction("insFrame");}},
       {sep:true},
       {label:"Insert Blank Frames"+rangeInfo,action:function(){
         pushUndo();var layer=layers[curLayer];if(!layer)return;
@@ -1130,7 +1130,7 @@ function initTLClicks(){
         fullRefresh();
       }},
       {sep:true},
-      {label:"Clear Keyframe",action:function(){doAction("clearKF");}},
+      {label:"Clear Keyframe",action:function(){doAction("removeKF");}},
       {sep:true},
       {label:"Create Motion Tween",action:function(){doAction("motionTween");}},
       {label:"Create Shape Tween",action:function(){
