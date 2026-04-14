@@ -959,9 +959,9 @@ function renderTLFrames(){
           }else if(kf.tweenType==="shape"){
             tlCtx.fillStyle="#3D5B3D"; // green for shape tween
           }else if(kf.objects.length>0){
-            tlCtx.fillStyle="#4A4A4A"; // gray for static keyframe with content
+            tlCtx.fillStyle="#555555"; // gray for static keyframe with content
           }else{
-            tlCtx.fillStyle="#3C3C3C"; // dark for empty keyframe
+            tlCtx.fillStyle="#484848"; // lighter gray for empty keyframe (visible against bg)
           }
           tlCtx.fillRect(x+0.5,y+0.5,fw-1,fh-1);
           // keyframe dot — filled for content, hollow for empty
@@ -996,7 +996,7 @@ function renderTLFrames(){
             tlCtx.strokeStyle="#88DD88";tlCtx.lineWidth=1;
             tlCtx.beginPath();tlCtx.moveTo(x,y+fh/2);tlCtx.lineTo(x+fw-1,y+fh/2);tlCtx.stroke();
           }else{
-            tlCtx.fillStyle="#353535"; // no tween — dark gray
+            tlCtx.fillStyle="#424242"; // no tween — visible gray
             tlCtx.fillRect(x+0.5,y+0.5,fw-1,fh-1);
           }
         }
@@ -1004,11 +1004,11 @@ function renderTLFrames(){
         tlCtx.strokeStyle="#222";tlCtx.lineWidth=0.3;
         tlCtx.strokeRect(x+0.5,y+0.5,fw-1,fh-1);
       }
-      // end-of-span marker
-      if(kf.duration>1){
+      // end-of-span marker — vertical bar at the end of the keyframe span
+      if(kf.duration>0){
         var ex=(kf.index-1+kf.duration-1)*fw+fw-2;
-        tlCtx.fillStyle="#888";
-        tlCtx.fillRect(ex,y+3,1,fh-6);
+        tlCtx.fillStyle=kf.duration>1?"#AAA":"#666";
+        tlCtx.fillRect(ex,y+2,2,fh-4);
       }
     });
     // layer separator line
