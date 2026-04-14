@@ -512,9 +512,12 @@ function renderObj(o){
 // === renderTween ===
 function renderTween(a,b,t,type,easing){
   var e=t;
-  if(easing==="easeIn")e=t*t;
-  else if(easing==="easeOut")e=1-(1-t)*(1-t);
-  else if(easing==="easeInOut")e=t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+  // Use Flashy engine easing if available, fall back to basic curves
+  if(typeof Flashy!=="undefined"&&Flashy.Easing&&Flashy.Easing[easing]){
+    e=Flashy.Easing[easing](Math.max(0,Math.min(1,t)));
+  }else if(easing==="easeIn"||easing==="quadIn")e=t*t;
+  else if(easing==="easeOut"||easing==="quadOut")e=1-(1-t)*(1-t);
+  else if(easing==="easeInOut"||easing==="quadInOut")e=t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
   var tmp=a.clone();
   tmp.x=a.x+(b.x-a.x)*e;
   tmp.y=a.y+(b.y-a.y)*e;
@@ -950,31 +953,50 @@ function renderTLFrames(){
         var frameNum=kf.index+d;
         var isSelected=selectedKF&&selectedKF.layerIdx===li&&frameNum>=kf.index&&frameNum<kf.index+kf.duration&&d===0;
         if(d===0){
-          // keyframe cell
-          if(kf.objects.length>0){
-            tlCtx.fillStyle=kf.tweenType!=="none"?"#445577":"#4A4A4A";
+          // keyframe cell — bright colors for tween types like real Flash
+          if(kf.tweenType==="motion"){
+            tlCtx.fillStyle="#3D3D6B"; // purple-blue for motion tween
+          }else if(kf.tweenType==="shape"){
+            tlCtx.fillStyle="#3D5B3D"; // green for shape tween
+          }else if(kf.objects.length>0){
+            tlCtx.fillStyle="#4A4A4A"; // gray for static keyframe with content
           }else{
-            tlCtx.fillStyle="#3C3C3C";
+            tlCtx.fillStyle="#3C3C3C"; // dark for empty keyframe
           }
           tlCtx.fillRect(x+0.5,y+0.5,fw-1,fh-1);
-          // keyframe dot
-          tlCtx.fillStyle=kf.objects.length>0?"#DDD":"#777";
-          tlCtx.beginPath();tlCtx.arc(x+fw/2,y+fh/2,2.5,0,Math.PI*2);tlCtx.fill();
+          // keyframe dot — filled for content, hollow for empty
+          if(kf.objects.length>0){
+            tlCtx.fillStyle="#EEE";
+            tlCtx.beginPath();tlCtx.arc(x+fw/2,y+fh/2,2.5,0,Math.PI*2);tlCtx.fill();
+          }else{
+            tlCtx.strokeStyle="#888";tlCtx.lineWidth=1;
+            tlCtx.beginPath();tlCtx.arc(x+fw/2,y+fh/2,2,0,Math.PI*2);tlCtx.stroke();
+          }
           // selected keyframe highlight
           if(isSelected){
-            tlCtx.strokeStyle="#4488CC";tlCtx.lineWidth=2;
+            tlCtx.strokeStyle="#66AAFF";tlCtx.lineWidth=2;
             tlCtx.strokeRect(x+1,y+1,fw-2,fh-2);
           }
         }else{
-          // continuation frame
-          if(kf.tweenType!=="none"){
-            tlCtx.fillStyle="#3A4A5A";
+          // continuation frames — very distinct tween colors
+          if(kf.tweenType==="motion"){
+            tlCtx.fillStyle="#4444AA"; // bright purple-blue span
             tlCtx.fillRect(x+0.5,y+0.5,fw-1,fh-1);
-            // tween arrow line
-            tlCtx.strokeStyle="#5588AA";tlCtx.lineWidth=1;
+            // tween arrow
+            tlCtx.strokeStyle="#8888DD";tlCtx.lineWidth=1;
+            tlCtx.beginPath();tlCtx.moveTo(x,y+fh/2);tlCtx.lineTo(x+fw-1,y+fh/2);tlCtx.stroke();
+            // small arrow head every 5 frames
+            if(d%5===4){
+              tlCtx.fillStyle="#8888DD";
+              tlCtx.beginPath();tlCtx.moveTo(x+fw-1,y+fh/2-3);tlCtx.lineTo(x+fw+2,y+fh/2);tlCtx.lineTo(x+fw-1,y+fh/2+3);tlCtx.fill();
+            }
+          }else if(kf.tweenType==="shape"){
+            tlCtx.fillStyle="#44AA44"; // bright green span
+            tlCtx.fillRect(x+0.5,y+0.5,fw-1,fh-1);
+            tlCtx.strokeStyle="#88DD88";tlCtx.lineWidth=1;
             tlCtx.beginPath();tlCtx.moveTo(x,y+fh/2);tlCtx.lineTo(x+fw-1,y+fh/2);tlCtx.stroke();
           }else{
-            tlCtx.fillStyle="#353535";
+            tlCtx.fillStyle="#353535"; // no tween — dark gray
             tlCtx.fillRect(x+0.5,y+0.5,fw-1,fh-1);
           }
         }
@@ -1923,12 +1945,12 @@ function doAction(a){
   case "motionTween":
   case "shapeTween":
     pushUndo();
-    var kft=CKF();
+    var kft=(selectedKF&&selectedKF.kf)?selectedKF.kf:CKF();
     if(kft){kft.tweenType=a==="motionTween"?"motion":"shape";fullRefresh();}
     break;
   case "removeTween":
     pushUndo();
-    var kft2=CKF();
+    var kft2=(selectedKF&&selectedKF.kf)?selectedKF.kf:CKF();
     if(kft2){kft2.tweenType="none";fullRefresh();}
     break;
   case "convertSym":
