@@ -3204,45 +3204,80 @@ function aiCallAPI(userText, callback) {
     selectedObjects: selection.length
   });
 
-  var systemPrompt = "You are an expert Macromedia Flash 8 designer and ActionScript developer embedded in the Flashy Studio editor. You create intricate, elaborate, and visually stunning Flash-style vector animations and interactive content.\n\n" +
-    "CURRENT PROJECT STATE:\n" + docState + "\n\n" +
-    "EDITOR DATA MODEL:\n" +
-    "- doc.width, doc.height, doc.fps, doc.backgroundColor (hex string like '#FFFFFF')\n" +
-    "- doc.layers[] = array of Layer objects. doc.library = {} symbol definitions\n" +
-    "- Layer has: name, visible, locked, keyframes[]\n" +
-    "- KeyFrame has: index (1-based), duration, tweenType ('none'/'motion'/'shape'), easing (string), objects[], script\n" +
-    "- EditorObject(type) where type = 'rect'|'oval'|'line'|'pencil'|'text'|'symbol'\n" +
-    "  Properties: x, y, width, height, rotation, scaleX, scaleY, alpha,\n" +
-    "  fillColor (hex), fillAlpha, strokeColor (hex), strokeAlpha, strokeWidth,\n" +
-    "  points (array for line/pencil), text, font, fontSize, symbolName,\n" +
-    "  blendMode, fillType, strokeStyle, strokeCap, strokeJoin\n\n" +
-    "IMPORTANT: All code you generate runs as a <script> tag in the page. Access the editor through window._flashyAI (aliased as F).\n" +
-    "Always start your code block with: var F = window._flashyAI;\n\n" +
-    "AVAILABLE VIA F:\n" +
-    "- F.doc — the document object (F.doc.width, F.doc.height, F.doc.fps, F.doc.backgroundColor, F.doc.layers, F.doc.library)\n" +
-    "- F.pushUndo() — save undo state before changes\n" +
-    "- F.fullRefresh() — redraw everything after changes\n" +
-    "- F.currentLayers() — get the active layer array\n" +
-    "- F.Layer(name) — constructor: new F.Layer(name)\n" +
-    "- F.KeyFrame(index) — constructor: new F.KeyFrame(index)\n" +
-    "- F.EditorObject(type) — constructor: new F.EditorObject(type)\n" +
-    "- F.centerStage(), F.render(), F.updateTL(), F.updateProps()\n" +
-    "- F.curFrame(), F.setCurFrame(n), F.curLayer(), F.setCurLayer(n)\n" +
-    "- F.selection(), F.setSelection(arr)\n" +
-    "- layer.insertKeyframe(frame), layer.extendToFrame(frame), layer.insertBlankKeyframe(frame)\n\n" +
-    "INSTRUCTIONS:\n" +
-    "When the user asks you to create something, respond with:\n" +
-    "1. A brief description of what you'll create (2-3 sentences max)\n" +
-    "2. Then a code block wrapped in ```flashy-code\\n ... ``` that manipulates the editor state\n\n" +
-    "The code runs in the page scope via a script tag with access to window._flashyAI.\n" +
-    "Always call F.pushUndo() first, then create layers/objects, then call F.fullRefresh().\n" +
-    "To add layers: F.currentLayers().push(new F.Layer('name'));\n" +
-    "To add objects to a keyframe: layer.keyframes[0].objects.push(obj);\n" +
-    "Be creative and visually elaborate. Use rich colors, multiple layers, tweens with different easings.\n" +
-    "For animations, create multiple keyframes with tweenType='motion' and set easing.\n" +
-    "Position objects relative to F.doc.width and F.doc.height.\n" +
-    "Use rich colors — avoid plain black on white unless specifically asked.\n" +
-    "DO NOT explain the code. Just describe what you made and provide the code block.";
+  var systemPrompt = "You are an expert Flash designer embedded in Flashy Studio. Generate code that manipulates the editor's document model.\n\n" +
+    "PROJECT: " + docState + "\n\n" +
+    "ACCESS: var F = window._flashyAI;\n" +
+    "- F.doc.width, F.doc.height, F.doc.fps, F.doc.backgroundColor\n" +
+    "- F.doc.layers (array), F.doc.library (object)\n" +
+    "- F.pushUndo(), F.fullRefresh(), F.currentLayers()\n" +
+    "- new F.Layer(name), new F.KeyFrame(index), new F.EditorObject(type)\n" +
+    "- F.setCurFrame(n), F.setCurLayer(n)\n\n" +
+    "WORKING EXAMPLE — adds a red rectangle on a new layer:\n" +
+    "```flashy-code\n" +
+    "var F = window._flashyAI;\n" +
+    "F.pushUndo();\n" +
+    "var layer = new F.Layer('My Layer');\n" +
+    "var rect = new F.EditorObject('rect');\n" +
+    "rect.x = 100; rect.y = 100; rect.width = 200; rect.height = 150;\n" +
+    "rect.fillColor = '#FF3333'; rect.fillAlpha = 1;\n" +
+    "rect.strokeColor = '#990000'; rect.strokeWidth = 2;\n" +
+    "layer.keyframes[0].objects.push(rect);\n" +
+    "layer.keyframes[0].duration = F.doc.totalFrames || 60;\n" +
+    "F.doc.layers.unshift(layer);\n" +
+    "F.fullRefresh();\n" +
+    "```\n\n" +
+    "WORKING EXAMPLE — animated circle bouncing across with tween:\n" +
+    "```flashy-code\n" +
+    "var F = window._flashyAI;\n" +
+    "F.pushUndo();\n" +
+    "var layer = new F.Layer('Bouncing Ball');\n" +
+    "// Keyframe 1: ball on the left\n" +
+    "var kf1 = layer.keyframes[0];\n" +
+    "kf1.duration = 30;\n" +
+    "kf1.tweenType = 'motion';\n" +
+    "kf1.easing = 'bounceOut';\n" +
+    "var ball1 = new F.EditorObject('oval');\n" +
+    "ball1.x = 50; ball1.y = 200; ball1.width = 60; ball1.height = 60;\n" +
+    "ball1.fillColor = '#3399FF'; ball1.fillAlpha = 1;\n" +
+    "kf1.objects.push(ball1);\n" +
+    "// Keyframe 2: ball on the right (tween interpolates between kf1 and kf2)\n" +
+    "var kf2 = new F.KeyFrame(31);\n" +
+    "kf2.duration = 30;\n" +
+    "kf2.tweenType = 'motion';\n" +
+    "kf2.easing = 'bounceOut';\n" +
+    "var ball2 = new F.EditorObject('oval');\n" +
+    "ball2.x = 700; ball2.y = 200; ball2.width = 60; ball2.height = 60;\n" +
+    "ball2.fillColor = '#3399FF'; ball2.fillAlpha = 1;\n" +
+    "kf2.objects.push(ball2);\n" +
+    "layer.keyframes.push(kf2);\n" +
+    "// Keyframe 3: ball back on the left\n" +
+    "var kf3 = new F.KeyFrame(61);\n" +
+    "kf3.duration = 1;\n" +
+    "var ball3 = new F.EditorObject('oval');\n" +
+    "ball3.x = 50; ball3.y = 200; ball3.width = 60; ball3.height = 60;\n" +
+    "ball3.fillColor = '#3399FF'; ball3.fillAlpha = 1;\n" +
+    "kf3.objects.push(ball3);\n" +
+    "layer.keyframes.push(kf3);\n" +
+    "F.doc.layers.unshift(layer);\n" +
+    "F.doc.totalFrames = Math.max(F.doc.totalFrames, 61);\n" +
+    "F.fullRefresh();\n" +
+    "```\n\n" +
+    "RULES:\n" +
+    "- ALWAYS start with: var F = window._flashyAI;\n" +
+    "- ALWAYS call F.pushUndo() before changes and F.fullRefresh() after\n" +
+    "- EditorObject types: 'rect', 'oval', 'line', 'pencil', 'text'\n" +
+    "- Object properties: x, y, width, height, fillColor (hex string), fillAlpha (0-1), strokeColor, strokeWidth, strokeAlpha, rotation (degrees), alpha (0-1), scaleX, scaleY\n" +
+    "- For text: set .text, .font, .fontSize, .fillColor\n" +
+    "- For lines: set .points = [x1,y1,x2,y2,...]\n" +
+    "- Layer has keyframes[]. First keyframe is keyframes[0] at index 1\n" +
+    "- For tweens: kf.tweenType='motion', kf.easing='bounceOut'|'elasticOut'|'sineInOut'|'cubicOut'|'linear'|etc\n" +
+    "- EACH keyframe MUST have the SAME number of objects for tweening to work\n" +
+    "- Objects in kf1 and kf2 are matched by array index — kf1.objects[0] tweens to kf2.objects[0]\n" +
+    "- Add layers with: F.doc.layers.unshift(layer) (unshift = top, push = bottom)\n" +
+    "- Set F.doc.totalFrames if your animation needs more frames\n" +
+    "- Be visually rich — use multiple layers, colors, gradients aren't available but use multiple colored shapes\n" +
+    "- Wrap code in ```flashy-code ... ``` block\n" +
+    "- Brief description first (1-2 sentences), then the code block. Nothing else.";
 
   var messages = [];
   var recent = aiMessages.slice(-6);
@@ -3283,9 +3318,20 @@ function aiCallAPI(userText, callback) {
         if (data.content[i].type === "text") text += data.content[i].text;
       }
     }
-    var codeMatch = text.match(/```flashy-code\s*\n([\s\S]*?)```/);
+    // Extract code block — accept flashy-code, javascript, js, or plain code blocks
+    var codeMatch = text.match(/```(?:flashy-code|javascript|js)?\s*\n([\s\S]*?)```/);
     var code = codeMatch ? codeMatch[1].trim() : null;
-    var displayText = text.replace(/```flashy-code\s*\n[\s\S]*?```/g, "").trim();
+    // If no fenced block but text contains F = window._flashyAI, treat entire response as code
+    if (!code && text.indexOf("window._flashyAI") >= 0 && text.indexOf("F.pushUndo") >= 0) {
+      var lines = text.split("\n");
+      var codeLines = [];
+      var inCode = false;
+      for (var li = 0; li < lines.length; li++) {
+        if (lines[li].indexOf("var F") >= 0 || inCode) { inCode = true; codeLines.push(lines[li]); }
+      }
+      if (codeLines.length > 2) code = codeLines.join("\n");
+    }
+    var displayText = text.replace(/```(?:flashy-code|javascript|js)?\s*\n[\s\S]*?```/g, "").trim();
     if (!displayText && code) displayText = "Here's what I created:";
     callback(displayText, code);
   }).catch(function(err) {
@@ -3294,14 +3340,20 @@ function aiCallAPI(userText, callback) {
 }
 
 function aiApplyCode(code) {
+  // Wrap in try/catch so errors are reported
+  var wrappedCode = "(function(){\ntry{\n" + code + "\n}catch(_e){" +
+    "var _chat=document.getElementById('ai-chat');" +
+    "if(_chat){var _d=document.createElement('div');_d.className='ai-msg system';" +
+    "_d.textContent='Error: '+_e.message;_chat.appendChild(_d);_chat.scrollTop=_chat.scrollHeight;}" +
+    "console.error('AI code error:',_e);" +
+    "}\n})();";
   try {
     var script = document.createElement("script");
-    script.textContent = code;
+    script.textContent = wrappedCode;
     document.head.appendChild(script);
     document.head.removeChild(script);
-    fullRefresh();
   } catch(e) {
-    aiAddMsg("system", "Error: " + e.message);
+    aiAddMsg("system", "Script injection error: " + e.message);
   }
 }
 
