@@ -2107,6 +2107,15 @@ function stopPlay(){
 
 // === Keyboard Shortcuts ===
 function initKeys(){
+  // Use capture phase to intercept F5/F6/F7 before browser handles them
+  window.addEventListener("keydown",function(e){
+    // Intercept F-keys early to prevent browser refresh (F5) etc.
+    if(e.key==="F5"||e.key==="F6"||e.key==="F7"||e.key==="F8"){
+      if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  },true); // capture = true
   document.addEventListener("keydown",function(e){
     // Don't handle if typing in input
     if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
