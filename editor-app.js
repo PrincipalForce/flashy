@@ -1123,15 +1123,24 @@ function initTLClicks(){
       {label:"Insert Blank Keyframe (F7)",action:function(){doAction("insBlankKF");}},
       {label:"Insert Frame (F5)",action:function(){doAction("insFrame");}},
       {sep:true},
-      {label:"Insert Blank Frames"+rangeInfo,action:function(){
+      {label:"Insert Frames"+rangeInfo,action:function(){
         pushUndo();var layer=layers[curLayer];if(!layer)return;
+        var count=1;
         if(tlSelRange){
           var s2=Math.min(tlSelRange.startFrame,tlSelRange.endFrame);
           var e2=Math.max(tlSelRange.startFrame,tlSelRange.endFrame);
-          var count=e2-s2+1;
-          for(var ff=0;ff<count;ff++){layer.extendToFrame(s2+ff);}
+          count=e2-s2+1;
+        }
+        // Insert N frames at curFrame by extending the keyframe there
+        var kfIns=layer.getKeyframeAt(curFrame);
+        if(kfIns){
+          kfIns.duration+=count;
+          var idxIns=layer.keyframes.indexOf(kfIns);
+          for(var ki=idxIns+1;ki<layer.keyframes.length;ki++){
+            layer.keyframes[ki].index+=count;
+          }
         }else{
-          layer.extendToFrame(f);
+          layer.extendToFrame(curFrame+count-1);
         }
         fullRefresh();
       }},
@@ -1912,7 +1921,24 @@ function doAction(a){
     break;
   case "insFrame":
     pushUndo();
-    var l4=CL();if(l4){l4.extendToFrame(curFrame);fullRefresh();}
+    var l4=CL();
+    if(l4){
+      // F5 behavior: extend the keyframe at curFrame by 1 frame
+      // and push all subsequent keyframes forward
+      var kfAt=l4.getKeyframeAt(curFrame);
+      if(kfAt){
+        kfAt.duration+=1;
+        // Push all keyframes after this one forward by 1
+        var idx4=l4.keyframes.indexOf(kfAt);
+        for(var ki4=idx4+1;ki4<l4.keyframes.length;ki4++){
+          l4.keyframes[ki4].index+=1;
+        }
+      }else{
+        // No keyframe at curFrame — extend the last one to reach it
+        l4.extendToFrame(curFrame);
+      }
+      fullRefresh();
+    }
     break;
   case "removeKF":
     pushUndo();
@@ -1923,7 +1949,14 @@ function doAction(a){
     var l6=CL();
     if(l6){
       var kfr=l6.getKeyframeAt(curFrame);
-      if(kfr&&kfr.duration>1)kfr.duration--;
+      if(kfr&&kfr.duration>1){
+        kfr.duration--;
+        // Pull back subsequent keyframes
+        var idx6=l6.keyframes.indexOf(kfr);
+        for(var ki6=idx6+1;ki6<l6.keyframes.length;ki6++){
+          l6.keyframes[ki6].index-=1;
+        }
+      }
       fullRefresh();
     }
     break;
