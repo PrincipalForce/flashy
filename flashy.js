@@ -66,20 +66,55 @@
   // beginFill/endFill group path commands into a single filled path; lineStyle
   // produces a matching stroke. Multiple fill groups can be recorded in sequence.
   class Graphics {
-    constructor() {
+    constructor(maxCommands) {
       this._cmds = [];
       this._bounds = null;
+      this._maxCommands = maxCommands || null;
     }
-    clear() { this._cmds.length = 0; this._bounds = null; return this; }
 
-    moveTo(x, y)              { this._cmds.push([0, x, y]);                this._touch(x, y); return this; }
-    lineTo(x, y)              { this._cmds.push([1, x, y]);                this._touch(x, y); return this; }
-    curveTo(cx, cy, x, y)     { this._cmds.push([2, cx, cy, x, y]);        this._touch(x, y); this._touch(cx, cy); return this; }
+    clear() { 
+      this._cmds.length = 0; 
+      this._bounds = null; 
+      return this; 
+    }
+
+    _cleanup() {
+      this.clear();
+    }
+
+    _enforceLimits() {
+      if (this._maxCommands && this._cmds.length > this._maxCommands) {
+        const excess = this._cmds.length - this._maxCommands;
+        this._cmds.splice(0, excess);
+        this._recalculateBounds();
+      }
+    }
+
+    _recalculateBounds() {
+      this._bounds = null;
+      for (let i = 0; i < this._cmds.length; i++) {
+        const c = this._cmds[i];
+        switch (c[0]) {
+          case 0: case 1: this._touch(c[1], c[2]); break;
+          case 2: this._touch(c[1], c[2]); this._touch(c[3], c[4]); break;
+          case 3: this._touch(c[5], c[6]); break;
+          case 20: this._touch(c[1], c[2]); this._touch(c[1] + c[3], c[2] + c[4]); break;
+          case 21: this._touch(c[1], c[2]); this._touch(c[1] + c[3], c[2] + c[4]); break;
+          case 22: this._touch(c[1] - c[3], c[2] - c[3]); this._touch(c[1] + c[3], c[2] + c[3]); break;
+          case 23: this._touch(c[1], c[2]); this._touch(c[1] + c[3], c[2] + c[4]); break;
+          case 25: this._touch(c[1] - c[4], c[2] - c[4]); this._touch(c[1] + c[4], c[2] + c[4]); break;
+        }
+      }
+    }
+
+    moveTo(x, y)              { this._cmds.push([0, x, y]);                this._touch(x, y); this._enforceLimits(); return this; }
+    lineTo(x, y)              { this._cmds.push([1, x, y]);                this._touch(x, y); this._enforceLimits(); return this; }
+    curveTo(cx, cy, x, y)     { this._cmds.push([2, cx, cy, x, y]);        this._touch(x, y); this._touch(cx, cy); this._enforceLimits(); return this; }
     cubicCurveTo(c1x, c1y, c2x, c2y, x, y) {
       this._cmds.push([3, c1x, c1y, c2x, c2y, x, y]);
-      this._touch(x, y); return this;
+      this._touch(x, y); this._enforceLimits(); return this;
     }
-    closePath() { this._cmds.push([4]); return this; }
+    closePath() { this._cmds.push([4]); this._enforceLimits(); return this; }
 
     lineStyle(thickness, color, alpha, caps, joints, miterLimit) {
       if (thickness == null || thickness === 0) {
@@ -88,32 +123,32 @@
         this._cmds.push([10, thickness, color == null ? 0 : color, alpha == null ? 1 : alpha,
           caps || 'round', joints || 'round', miterLimit || 3]);
       }
-      return this;
+      this._enforceLimits(); return this;
     }
 
     beginFill(color, alpha) {
       this._cmds.push([11, color == null ? 0 : color, alpha == null ? 1 : alpha]);
-      return this;
+      this._enforceLimits(); return this;
     }
     beginGradientFill(type, colors, alphas, ratios, x0, y0, x1, y1) {
       this._cmds.push([12, type, colors, alphas, ratios, x0, y0, x1, y1]);
-      return this;
+      this._enforceLimits(); return this;
     }
-    endFill() { this._cmds.push([13]); return this; }
+    endFill() { this._cmds.push([13]); this._enforceLimits(); return this; }
 
-    drawRect(x, y, w, h)              { this._cmds.push([20, x, y, w, h]);    this._touch(x, y); this._touch(x + w, y + h); return this; }
-    drawRoundRect(x, y, w, h, r)      { this._cmds.push([21, x, y, w, h, r]); this._touch(x, y); this._touch(x + w, y + h); return this; }
-    drawCircle(x, y, r)               { this._cmds.push([22, x, y, r]);       this._touch(x - r, y - r); this._touch(x + r, y + r); return this; }
-    drawEllipse(x, y, w, h)           { this._cmds.push([23, x, y, w, h]);    this._touch(x, y); this._touch(x + w, y + h); return this; }
+    drawRect(x, y, w, h)              { this._cmds.push([20, x, y, w, h]);    this._touch(x, y); this._touch(x + w, y + h); this._enforceLimits(); return this; }
+    drawRoundRect(x, y, w, h, r)      { this._cmds.push([21, x, y, w, h, r]); this._touch(x, y); this._touch(x + w, y + h); this._enforceLimits(); return this; }
+    drawCircle(x, y, r)               { this._cmds.push([22, x, y, r]);       this._touch(x - r, y - r); this._touch(x + r, y + r); this._enforceLimits(); return this; }
+    drawEllipse(x, y, w, h)           { this._cmds.push([23, x, y, w, h]);    this._touch(x, y); this._touch(x + w, y + h); this._enforceLimits(); return this; }
     drawPolygon(points) {
       this._cmds.push([24, points]);
       for (let i = 0; i < points.length; i += 2) this._touch(points[i], points[i + 1]);
-      return this;
+      this._enforceLimits(); return this;
     }
     drawStar(cx, cy, points, outerR, innerR, rotation) {
       this._cmds.push([25, cx, cy, points, outerR, innerR, rotation || 0]);
       this._touch(cx - outerR, cy - outerR); this._touch(cx + outerR, cy + outerR);
-      return this;
+      this._enforceLimits(); return this;
     }
 
     _touch(x, y) {
@@ -293,6 +328,12 @@
       }
     }
 
+    _cleanup() {
+      if (this.graphics && this.graphics._cleanup) {
+        this.graphics._cleanup();
+      }
+    }
+
     _tick(dt) { /* override */ }
     render(ctx) { /* override */ }
 
@@ -346,9 +387,23 @@
     }
     addChild(c)          { if (c.parent) c.parent.removeChild(c); c.parent = this; this.children.push(c); return c; }
     addChildAt(c, i)     { if (c.parent) c.parent.removeChild(c); c.parent = this; this.children.splice(i, 0, c); return c; }
-    removeChild(c)       { const i = this.children.indexOf(c); if (i >= 0) { this.children.splice(i, 1); c.parent = null; } return c; }
-    removeChildAt(i)     { const c = this.children[i]; if (c) { this.children.splice(i, 1); c.parent = null; } return c; }
-    removeAllChildren()  { for (let i = 0; i < this.children.length; i++) this.children[i].parent = null; this.children.length = 0; }
+    removeChild(c)       { 
+      const i = this.children.indexOf(c); 
+      if (i >= 0) { 
+        this.children.splice(i, 1); 
+        c.parent = null; 
+        if (c._cleanup) c._cleanup();
+      } 
+      return c; 
+    }
+    removeChildAt(i)     { const c = this.children[i]; if (c) { this.children.splice(i, 1); c.parent = null; if (c._cleanup) c._cleanup(); } return c; }
+    removeAllChildren()  { 
+      for (let i = 0; i < this.children.length; i++) {
+        this.children[i].parent = null;
+        if (this.children[i]._cleanup) this.children[i]._cleanup();
+      }
+      this.children.length = 0; 
+    }
     getChildByName(name) { for (let i = 0; i < this.children.length; i++) if (this.children[i].name === name) return this.children[i]; return null; }
     getChildAt(i)        { return this.children[i]; }
     contains(c)          { return this.children.indexOf(c) >= 0; }
@@ -458,7 +513,13 @@
       this.timeline.update(f);
       this._primed = true;
       const script = this.timeline.frameScripts[f];
-      if (script) script.call(this);
+      if (script) {
+        try {
+          script.call(this);
+        } catch (e) {
+          console.warn('Frame script error:', e);
+        }
+      }
     }
 
     _tick(dt) {
@@ -476,7 +537,13 @@
       }
       this.dispatchEvent('enterFrame');
       const script = this.timeline.frameScripts[this.currentFrame];
-      if (script) script.call(this);
+      if (script) {
+        try {
+          script.call(this);
+        } catch (e) {
+          console.warn('Frame script error:', e);
+        }
+      }
       super._tick(dt);
     }
 
@@ -514,142 +581,3 @@
       this._last = 0;
       this._acc  = 0;
       this._running = false;
-      this._raf = null;
-      this._bindInput();
-    }
-
-    addEventListener(type, fn) {
-      (this._listeners[type] || (this._listeners[type] = [])).push(fn);
-    }
-    removeEventListener(type, fn) {
-      const arr = this._listeners[type]; if (!arr) return;
-      const i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1);
-    }
-    dispatchEvent(type, e) {
-      const arr = this._listeners[type]; if (!arr || !arr.length) return;
-      e = e || { type };
-      e.type = type; e.target = this; e.currentTarget = this;
-      const copy = arr.slice();
-      for (let i = 0; i < copy.length; i++) copy[i].call(this, e);
-    }
-
-    start() {
-      if (this._running) return;
-      this._running = true;
-      this._last = performance.now();
-      this._acc  = 0;
-      const loop = (t) => {
-        if (!this._running) return;
-        const dt = t - this._last;
-        this._last = t;
-        this._acc += dt;
-        const frameMs = 1000 / this.fps;
-        let ticks = 0;
-        while (this._acc >= frameMs && ticks < 5) {
-          this.root._tick(frameMs);
-          this.dispatchEvent('enterFrame');
-          this._acc -= frameMs;
-          ticks++;
-        }
-        // If no tick yet (just started), prime the root so frame 1 state renders.
-        if (!this.root._primed) {
-          this.root._primed = true;
-          this.root.timeline.update(this.root.currentFrame);
-        }
-        this._render();
-        this._raf = requestAnimationFrame(loop);
-      };
-      this._raf = requestAnimationFrame(loop);
-    }
-    stop() {
-      this._running = false;
-      if (this._raf) cancelAnimationFrame(this._raf);
-      this._raf = null;
-    }
-
-    _render() {
-      const ctx = this.ctx;
-      ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
-      if (this.backgroundColor == null) {
-        ctx.clearRect(0, 0, this.width, this.height);
-      } else {
-        ctx.fillStyle = toRGBA(this.backgroundColor, 1);
-        ctx.fillRect(0, 0, this.width, this.height);
-      }
-      ctx.save();
-      this.root._applyTransform(ctx);
-      this.root.render(ctx);
-      ctx.restore();
-    }
-
-    _bindInput() {
-      const convert = (e) => {
-        const rect = this.canvas.getBoundingClientRect();
-        const src = (e.touches && e.touches[0]) || e;
-        return { x: src.clientX - rect.left, y: src.clientY - rect.top };
-      };
-      const handle = (type) => (e) => {
-        const p = convert(e);
-        this.mouseX = p.x; this.mouseY = p.y;
-        const evt = { type, stageX: p.x, stageY: p.y, nativeEvent: e };
-        this.dispatchEvent(type, evt);
-        const hit = this._hitTest(this.root, p.x, p.y);
-        if (hit) {
-          let node = hit;
-          while (node) {
-            evt.target = hit; evt.currentTarget = node;
-            const listeners = node._listeners && node._listeners[type];
-            if (listeners && listeners.length) {
-              const copy = listeners.slice();
-              for (let i = 0; i < copy.length; i++) copy[i].call(node, evt);
-            }
-            node = node.parent;
-          }
-        }
-      };
-      this.canvas.addEventListener('mousedown', handle('mouseDown'));
-      this.canvas.addEventListener('mouseup',   handle('mouseUp'));
-      this.canvas.addEventListener('mousemove', handle('mouseMove'));
-      this.canvas.addEventListener('click',     handle('click'));
-    }
-
-    _hitTest(node, x, y) {
-      if (!node.visible) return null;
-      if (node.children && node.children.length) {
-        for (let i = node.children.length - 1; i >= 0; i--) {
-          const child = node.children[i];
-          if (!child.visible || !child.mouseEnabled) continue;
-          let px = x - child.x, py = y - child.y;
-          if (child.rotation) {
-            const cos = Math.cos(-child.rotation);
-            const sin = Math.sin(-child.rotation);
-            const nx = px * cos - py * sin;
-            const ny = px * sin + py * cos;
-            px = nx; py = ny;
-          }
-          if (child.scaleX && child.scaleX !== 1) px /= child.scaleX;
-          if (child.scaleY && child.scaleY !== 1) py /= child.scaleY;
-          const found = this._hitTest(child, px, py);
-          if (found) return found;
-        }
-      }
-      const g = node.graphics;
-      if (g && g._bounds) {
-        const b = g._bounds;
-        if (x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY) return node;
-      }
-      return null;
-    }
-  }
-
-  // -------------------- export --------------------
-  const Flashy = {
-    version: '0.1.0',
-    Easing, Graphics,
-    DisplayObject, DisplayObjectContainer,
-    Shape, TextField, MovieClip, Timeline, Tween, Stage,
-    toRGBA
-  };
-  if (typeof module !== 'undefined' && module.exports) module.exports = Flashy;
-  global.Flashy = Flashy;
-})(typeof window !== 'undefined' ? window : this);
