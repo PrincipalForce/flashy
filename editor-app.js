@@ -172,6 +172,17 @@ function buildMenuBar(){
     });
     bar.appendChild(mi);
   });
+  var spacer=document.createElement("div");
+  spacer.style.flex="1";
+  bar.appendChild(spacer);
+  var report=document.createElement("div");
+  report.className="menu-item menu-report";
+  report.title="Report a bug or request a feature";
+  report.textContent="💬 Report";
+  report.addEventListener("click",function(ev){
+    ev.stopPropagation();closeMenus();doAction("reportBug");
+  });
+  bar.appendChild(report);
   document.addEventListener("click",closeMenus);
 }
 function closeMenus(){

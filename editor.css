@@ -55,6 +55,16 @@ html, body {
   position: relative; color: var(--text);
 }
 .menu-item:hover { background: var(--select); color: #fff; border-radius: 2px; }
+.menu-report {
+  margin-right: 4px;
+  padding: 2px 10px;
+  font-size: 11px;
+  background: rgba(68,136,204,0.18);
+  border: 1px solid rgba(68,136,204,0.5);
+  border-radius: 3px;
+  color: #cfe2f5;
+}
+.menu-report:hover { background: var(--select); color: #fff; }
 .menu-dropdown {
   display: none;
   position: absolute; top: 100%; left: 0;
