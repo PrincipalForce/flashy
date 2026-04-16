@@ -540,17 +540,22 @@
       this._acc  = 0;
       const loop = (t) => {
         if (!this._running) return;
-        const dt = t - this._last;
-        this._last = t;
-        this._acc += dt;
         const frameMs = 1000 / this.fps;
+        let dt = t - this._last;
+        this._last = t;
+        // Clamp dt so a tab switch / throttle / GC pause doesn't produce a
+        // backlog that replays as a visible speed-up. Anything longer than
+        // ~2 frames is treated as a discontinuity and we resume fresh.
+        if (dt > frameMs * 2) dt = frameMs;
+        this._acc += dt;
         let ticks = 0;
-        while (this._acc >= frameMs && ticks < 5) {
+        while (this._acc >= frameMs && ticks < 2) {
           this.root._tick(frameMs);
           this.dispatchEvent('enterFrame');
           this._acc -= frameMs;
           ticks++;
         }
+        if (this._acc > frameMs) this._acc = frameMs;
         // If no tick yet (just started), prime the root so frame 1 state renders.
         if (!this.root._primed) {
           this.root._primed = true;

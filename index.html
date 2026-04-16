@@ -17,7 +17,35 @@
     padding: 24px 12px 48px;
   }
   h1 { margin: 0 0 4px; font-weight: 700; letter-spacing: 0.04em; }
-  .sub { opacity: 0.6; margin-bottom: 18px; font-size: 14px; }
+  .sub { opacity: 0.6; margin-bottom: 14px; font-size: 14px; }
+  .nav {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .nav a {
+    text-decoration: none;
+    padding: 9px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .nav a.primary {
+    background: linear-gradient(180deg, #ffdd44, #e5a800);
+    color: #1a1208;
+    box-shadow: 0 4px 14px rgba(255,221,68,0.25);
+  }
+  .nav a.primary:hover { transform: translateY(-1px); }
+  .nav a.secondary {
+    background: rgba(255,255,255,0.06);
+    color: #d8d8e6;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .nav a.secondary:hover { background: rgba(255,255,255,0.12); }
   #stage {
     background: #000;
     border-radius: 8px;
@@ -75,6 +103,12 @@
 <h1>Flashy</h1>
 <div class="sub">HTML5 Canvas vector animation engine · timelines · nested MovieClips · SWF &amp; FLA loader</div>
 
+<div class="nav">
+  <a class="primary" href="editor.html">Open Editor →</a>
+  <a class="secondary" href="examples/">Browse Examples</a>
+  <a class="secondary" href="#" id="feedbackLink">Report Issue / Request</a>
+</div>
+
 <canvas id="stage"></canvas>
 
 <div class="controls">
@@ -108,6 +142,22 @@
 <script src="flashy.js"></script>
 <script src="flashy-swf.js"></script>
 <script src="flashy-fla.js"></script>
+<script src="feedback.js"></script>
+<script>
+  document.getElementById('feedbackLink').addEventListener('click', function (e) {
+    e.preventDefault();
+    Flashy.Feedback.open({
+      context: {
+        source: 'homepage',
+        stage: window.__stage ? {
+          width: window.__stage.width,
+          height: window.__stage.height,
+          fps: window.__stage.fps
+        } : null
+      }
+    });
+  });
+</script>
 <script>
 (function () {
   const canvas = document.getElementById('stage');

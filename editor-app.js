@@ -33,7 +33,7 @@ function currentMaxFrame(){
   var layers=currentLayers();
   var m=1;
   layers.forEach(function(l){var e=l.getFrameEnd();if(e>m)m=e;});
-  return Math.max(m,currentTotalFrames());
+  return m;
 }
 var lastClickTime=0,lastClickTarget=null;
 var fillColor="#000000",fillAlpha=1,strokeColor="#000000",strokeAlpha=1,strokeWidth=1;
@@ -121,6 +121,10 @@ var menus=[
     {type:"sep"},
     {label:"Go to First Frame",action:"gotoFirst",shortcut:"Home"},
     {label:"Go to Last Frame",action:"gotoLast",shortcut:"End"}
+  ]},
+  {label:"Help",items:[
+    {label:"Report a Bug...",action:"reportBug"},
+    {label:"Request a Feature...",action:"reportFeature"}
   ]}
 ];
 
@@ -2038,6 +2042,14 @@ function doAction(a){
   case "test":testMovie();break;
   case "gotoFirst":curFrame=1;fullRefresh();break;
   case "gotoLast":curFrame=currentMaxFrame();fullRefresh();break;
+  case "reportBug":
+  case "reportFeature":
+    if(!window.Flashy||!Flashy.Feedback){alert("Feedback module not loaded.");break;}
+    Flashy.Feedback.open({
+      type:a==="reportBug"?"bug":"feature",
+      context:buildFeedbackContext()
+    });
+    break;
   case "importURL":
     var importUrl=prompt("Enter URL of a running Flashy animation:\n(Must be same origin, e.g. http://localhost:8000/examples/solar-system.html)","http://localhost:8000/examples/solar-system.html");
     if(importUrl){
@@ -2224,6 +2236,22 @@ function dlFile(content,name,mime){
   document.body.appendChild(a);a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+function buildFeedbackContext(){
+  try{
+    var layers=currentLayers();
+    return {
+      source:"editor",
+      doc:{width:doc.width,height:doc.height,fps:doc.fps,totalFrames:doc.totalFrames,
+           backgroundColor:doc.backgroundColor,
+           layerCount:doc.layers.length,librarySymbols:Object.keys(doc.library||{}).length},
+      edit:{nestingDepth:editStack.length,
+            activeLayerCount:layers?layers.length:0,
+            currentLayer:curLayer,currentFrame:curFrame,
+            selectionCount:selection?selection.length:0},
+      tool:typeof curTool!=="undefined"?curTool:null
+    };
+  }catch(e){return {source:"editor",error:e.message};}
 }
 var _cachedEngineSource=null;
 function getEngineSource(callback){
