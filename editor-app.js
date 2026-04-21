@@ -3086,15 +3086,38 @@ function testMovie(){
 function initBottomTabs(){
   var tabs=document.querySelectorAll(".bottom-tab");
   var panels=document.querySelectorAll(".bottom-panel");
+  var bar=document.getElementById("bottom-bar");
+  var collapseBtn=document.getElementById("bottom-collapse");
+  var activeIdx=0;
+  function showActive(){
+    for(var j=0;j<tabs.length;j++){
+      tabs[j].className="bottom-tab"+(j===activeIdx?" active":"");
+      if(panels[j])panels[j].style.display=(j===activeIdx&&!bar.classList.contains("collapsed"))?"block":"none";
+    }
+  }
   for(var i=0;i<tabs.length;i++){
     (function(idx){
       tabs[idx].addEventListener("click",function(){
-        for(var j=0;j<tabs.length;j++){
-          tabs[j].className="bottom-tab"+(j===idx?" active":"");
-          if(panels[j])panels[j].style.display=j===idx?"block":"none";
-        }
+        if(bar.classList.contains("collapsed"))bar.classList.remove("collapsed");
+        activeIdx=idx;
+        if(collapseBtn)collapseBtn.innerHTML="&#9650;";
+        showActive();
       });
     })(i);
+  }
+  if(collapseBtn){
+    collapseBtn.addEventListener("click",function(ev){
+      ev.stopPropagation();
+      bar.classList.toggle("collapsed");
+      collapseBtn.innerHTML=bar.classList.contains("collapsed")?"&#9660;":"&#9650;";
+      showActive();
+    });
+  }
+  // Start collapsed on very small viewports so the timeline is usable.
+  if(window.innerHeight<=700||window.innerWidth<=600){
+    bar.classList.add("collapsed");
+    if(collapseBtn)collapseBtn.innerHTML="&#9660;";
+    showActive();
   }
 }
 function initPanelCollapse(){

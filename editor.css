@@ -343,6 +343,7 @@ input[type="range"].props-input {
 #bottom-bar { border-top: 1px solid #555; }
 #bottom-tabs {
   display: flex; background: linear-gradient(to bottom, #4A4A4A, #3C3C3C);
+  align-items: stretch;
 }
 .btab, .bottom-tab {
   padding: 4px 14px; font-size: 10px; font-weight: bold;
@@ -354,7 +355,17 @@ input[type="range"].props-input {
   background: #353535; color: #fff;
   border-bottom: 2px solid var(--accent);
 }
+#bottom-collapse {
+  margin-left: auto;
+  padding: 4px 12px; font-size: 10px;
+  cursor: pointer; color: #AAA;
+  border-left: 1px solid #333;
+  display: flex; align-items: center;
+  user-select: none;
+}
+#bottom-collapse:hover { color: #fff; }
 .bottom-panel { background: #353535; padding: 6px; }
+#bottom-bar.collapsed .bottom-panel { display: none !important; }
 #bp-actions textarea, #actions-panel textarea {
   width: 100%; min-height: 60px;
   background: var(--chrome-xdk); color: #88CC88;
@@ -618,3 +629,45 @@ input[type="range"].props-input {
   animation: aiBlink 1s infinite;
 }
 @keyframes aiBlink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+/* ─── Mobile / small-viewport layout ─── */
+@media (max-width: 900px), (max-height: 700px) {
+  html, body { overflow: auto; user-select: auto; }
+  #app {
+    height: auto;
+    min-height: 100vh;
+    grid-template-rows: auto auto minmax(260px, 55vh) minmax(140px, 30vh) auto;
+  }
+  #toolbar { flex-wrap: wrap; padding: 4px 6px; gap: 2px; }
+  #toolbox { width: 40px; }
+  #right-col { width: 180px; }
+  #tl-layers { width: 110px; }
+  #aiPanel { height: 180px; }
+  /* Give the bottom panel a sensible height on mobile, allow inner scroll */
+  #bp-props, #bp-actions { max-height: 40vh; overflow: auto; }
+  .bottom-tab { padding: 6px 10px; font-size: 11px; }
+  #bottom-collapse { padding: 6px 12px; font-size: 12px; }
+}
+
+@media (max-width: 600px) {
+  /* On very narrow phones, drop the right column below the stage so
+     the stage has real horizontal room. */
+  #main { flex-direction: column; }
+  #right-col {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #555;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    min-height: 140px;
+  }
+  #right-col .panel {
+    flex: 1 0 200px;
+    border-bottom: none;
+    border-right: 1px solid #333;
+  }
+  #app {
+    grid-template-rows: auto auto auto minmax(140px, 30vh) auto;
+  }
+}
