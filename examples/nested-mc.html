@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flashy - 6-Deep Nested MovieClips</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #08080f; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; color: #c0c0d0; }
+  h1 { margin-bottom: 4px; font-size: 22px; color: #88ddff; letter-spacing: 2px; }
+  p.info { font-size: 12px; margin-bottom: 10px; opacity: 0.6; max-width: 720px; text-align: center; padding: 0 12px; }
+  canvas { border: 1px solid #1a1a2e; border-radius: 6px; }
+  .legend { margin-top: 12px; font-size: 11px; opacity: 0.55; font-family: 'Consolas', monospace; text-align: center; line-height: 1.6; }
+  .legend span { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin: 0 6px 0 12px; }
+</style>
+</head>
+<body>
+<h1>6-Deep Nested MovieClips</h1>
+<p class="info">Six MovieClips nested inside one another, each rotating at its own rate. The deeper rings inherit every parent's transform, so the innermost dot traces a wildly compound path.</p>
+<canvas id="stage"></canvas>
+<div class="legend">
+  <span style="background:#ff5566"></span>L1 root spinner
+  <span style="background:#ffaa44"></span>L2
+  <span style="background:#ffdd44"></span>L3
+  <span style="background:#88ee88"></span>L4
+  <span style="background:#66bbff"></span>L5
+  <span style="background:#cc88ff"></span>L6 innermost
+</div>
+<script src="../flashy.js"></script>
+<script>
+(function () {
+  const { Stage, MovieClip, Shape, TextField } = Flashy;
+  const W = 720, H = 540;
+  const canvas = document.getElementById('stage');
+  const stage = new Stage(canvas, { width: W, height: H, fps: 60, backgroundColor: null });
+  const root = stage.root;
+
+  // Background
+  const bg = new Shape();
+  bg.graphics.beginFill('#0a0a18');
+  bg.graphics.drawRect(0, 0, W, H);
+  bg.graphics.endFill();
+  root.addChild(bg);
+
+  // Faint grid for reference
+  const grid = new Shape();
+  grid.graphics.beginStroke('#15152a', 1);
+  for (let x = 0; x <= W; x += 40) { grid.graphics.moveTo(x, 0); grid.graphics.lineTo(x, H); }
+  for (let y = 0; y <= H; y += 40) { grid.graphics.moveTo(0, y); grid.graphics.lineTo(W, y); }
+  grid.graphics.endStroke();
+  root.addChild(grid);
+
+  // Each level: a colored ring + a small "arm" offset, with its own spin rate.
+  // The next level is added as a child positioned at the end of the arm,
+  // so each layer's rotation cascades into the next.
+  const levels = [
+    { color: '#ff5566', radius: 140, arm: 130, spin:  0.8, label: 'L1' },
+    { color: '#ffaa44', radius:  90, arm:  82, spin: -1.6, label: 'L2' },
+    { color: '#ffdd44', radius:  56, arm:  50, spin:  2.4, label: 'L3' },
+    { color: '#88ee88', radius:  34, arm:  30, spin: -3.4, label: 'L4' },
+    { color: '#66bbff', radius:  20, arm:  18, spin:  4.6, label: 'L5' },
+    { color: '#cc88ff', radius:  11, arm:   0, spin: -6.0, label: 'L6' }
+  ];
+
+  // Build the chain root.addChild(L1) -> L1.addChild(L2) -> ... -> L5.addChild(L6)
+  let parent = root;
+  let parentX = W / 2, parentY = H / 2;
+  const allClips = [];
+  let trailDot = null;
+
+  for (let i = 0; i < levels.length; i++) {
+    const lv = levels[i];
+    const mc = new MovieClip();
+
+    // Ring
+    const ring = new Shape();
+    ring.graphics.beginStroke(lv.color, 2);
+    ring.graphics.drawCircle(0, 0, lv.radius);
+    ring.graphics.endStroke();
+    mc.addChild(ring);
+
+    // Arm (line from center to where the next level is anchored)
+    if (lv.arm > 0) {
+      const arm = new Shape();
+      arm.graphics.beginStroke(lv.color, 1.5);
+      arm.graphics.moveTo(0, 0);
+      arm.graphics.lineTo(lv.arm, 0);
+      arm.graphics.endStroke();
+      mc.addChild(arm);
+    }
+
+    // Center dot
+    const dot = new Shape();
+    dot.graphics.beginFill(lv.color);
+    dot.graphics.drawCircle(0, 0, i === levels.length - 1 ? 6 : 3);
+    dot.graphics.endFill();
+    mc.addChild(dot);
+
+    // Label
+    const label = new TextField();
+    label.text = lv.label;
+    label.color = lv.color;
+    label.size = 10;
+    label.x = -8;
+    label.y = -lv.radius - 14;
+    mc.addChild(label);
+
+    // Position this clip inside its parent
+    if (i === 0) {
+      mc.x = parentX;
+      mc.y = parentY;
+    } else {
+      // Anchor at the end of the parent's arm (in parent local coordinates)
+      mc.x = levels[i - 1].arm;
+      mc.y = 0;
+    }
+
+    // Per-frame spin
+    const speed = lv.spin;
+    mc.addEventListener('enterFrame', function () {
+      mc.rotation += speed;
+    });
+
+    parent.addChild(mc);
+    allClips.push(mc);
+
+    if (i === levels.length - 1) {
+      trailDot = mc; // we'll trace the deepest dot's stage position
+    }
+    parent = mc;
+  }
+
+  // Trail layer: persistently draws the world-space path of the innermost dot.
+  // We sample the deepest clip's localToGlobal to get the compound position.
+  const trail = new Shape();
+  root.addChildAt(trail, 2); // above bg+grid, below L1
+  const points = [];
+  const MAX_POINTS = 600;
+
+  // Helper: walk up the parent chain to compute world position of a clip's origin
+  function worldPosOf(clip) {
+    let x = 0, y = 0, rot = 0;
+    let cur = clip;
+    const chain = [];
+    while (cur && cur !== root) { chain.unshift(cur); cur = cur.parent; }
+    let wx = 0, wy = 0, wrot = 0;
+    for (const c of chain) {
+      const cos = Math.cos(wrot * Math.PI / 180);
+      const sin = Math.sin(wrot * Math.PI / 180);
+      wx = wx + c.x * cos - c.y * sin;
+      wy = wy + c.x * sin + c.y * cos;
+      wrot = wrot + (c.rotation || 0);
+    }
+    return { x: wx, y: wy };
+  }
+
+  stage.addEventListener('enterFrame', function () {
+    const p = worldPosOf(trailDot);
+    points.push(p);
+    if (points.length > MAX_POINTS) points.shift();
+
+    trail.graphics.clear();
+    trail.graphics.beginStroke('#cc88ff', 1);
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i], b = points[i + 1];
+      if (i === 0) trail.graphics.moveTo(a.x, a.y);
+      trail.graphics.lineTo(b.x, b.y);
+    }
+    trail.graphics.endStroke();
+  });
+
+  stage.start();
+})();
+</script>
+</body>
+</html>

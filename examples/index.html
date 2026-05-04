@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flashy - Examples</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a14;
+    color: #d0d0e0;
+    font-family: 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding: 40px 20px 60px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 36px; }
+  h1 {
+    font-size: 32px;
+    background: linear-gradient(90deg, #ffdd44, #ff8844);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+  }
+  .sub { font-size: 14px; opacity: 0.6; }
+  .back {
+    display: inline-block;
+    margin-bottom: 24px;
+    color: #99aacc;
+    text-decoration: none;
+    font-size: 13px;
+  }
+  .back:hover { color: #ffdd44; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 18px;
+  }
+  .card {
+    background: #15151f;
+    border: 1px solid #2a2a3a;
+    border-radius: 8px;
+    padding: 18px 20px;
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.15s, border-color 0.15s, background 0.15s;
+    display: block;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: #ffdd44;
+    background: #1c1c28;
+  }
+  .card h2 {
+    font-size: 16px;
+    color: #ffdd44;
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+  }
+  .card p { font-size: 12px; opacity: 0.7; line-height: 1.5; }
+  .card .tag {
+    display: inline-block;
+    margin-top: 10px;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #2a2a3a;
+    color: #99aacc;
+    letter-spacing: 1px;
+  }
+  .card .tag.game { background: #3a2030; color: #ff99bb; }
+  .card .tag.demo { background: #1f3a30; color: #99ddbb; }
+  section { margin-bottom: 32px; }
+  h3 { font-size: 13px; opacity: 0.5; letter-spacing: 2px; margin-bottom: 14px; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="../">&larr; Back to Flashy</a>
+  <header>
+    <h1>FLASHY EXAMPLES</h1>
+    <p class="sub">Programmatic and editor-built demos of the Flashy engine.</p>
+  </header>
+
+  <section>
+    <h3>Animations</h3>
+    <div class="grid">
+      <a class="card" href="solar-system.html">
+        <h2>Solar System</h2>
+        <p>Nested MovieClip orbits, gradient fills, parallax starfield, and a periodic comet.</p>
+        <span class="tag">Animation</span>
+      </a>
+      <a class="card" href="nested-mc.html">
+        <h2>6-Deep Nested MovieClips</h2>
+        <p>Six levels of MovieClip-in-MovieClip rotation, each spinning at a different rate. Compound transforms visualized.</p>
+        <span class="tag demo">Demo</span>
+      </a>
+      <a class="card" href="clock.html">
+        <h2>Mechanical Clock</h2>
+        <p>Ornate vector clock with real time, visible gears, pendulum, and decorative frame.</p>
+        <span class="tag">Animation</span>
+      </a>
+      <a class="card" href="walk-cycle.html">
+        <h2>Walk Cycle</h2>
+        <p>Articulated stick figure with nested limb MovieClips, scrolling parallax, and day/night cycle.</p>
+        <span class="tag">Animation</span>
+      </a>
+      <a class="card" href="fireworks.html">
+        <h2>Fireworks Show</h2>
+        <p>Rockets launch from the city, explode into colorful particle bursts with gravity and fade.</p>
+        <span class="tag">Animation</span>
+      </a>
+      <a class="card" href="neon-city.html">
+        <h2>Neon City</h2>
+        <p>Cyberpunk cityscape with neon signs, rain, reflections, flying car, billboard, and steam vents.</p>
+        <span class="tag">Animation</span>
+      </a>
+      <a class="card" href="underwater.html">
+        <h2>Underwater Scene</h2>
+        <p>Fish schools, jellyfish, bubbles, seaweed, light rays, and a sea turtle in the deep ocean.</p>
+        <span class="tag">Animation</span>
+      </a>
+    </div>
+  </section>
+
+  <section>
+    <h3>Interactive / Games</h3>
+    <div class="grid">
+      <a class="card" href="ninja-game.html">
+        <h2>Shadow Blade</h2>
+        <p>WASD/Arrows to move &amp; jump, Space to attack, wall-jump off walls.</p>
+        <span class="tag game">Game</span>
+      </a>
+      <a class="card" href="retro-game.html">
+        <h2>Space Blaster</h2>
+        <p>Move mouse to steer, click to shoot, destroy all aliens.</p>
+        <span class="tag game">Game</span>
+      </a>
+    </div>
+  </section>
+
+  <section>
+    <h3>Editor Documents (.flashy)</h3>
+    <div class="grid">
+      <a class="card" href="../editor.html">
+        <h2>demo-animation.flashy</h2>
+        <p>Open in the editor with File &rarr; Open and pick this file.</p>
+        <span class="tag demo">Open in Editor</span>
+      </a>
+      <a class="card" href="../editor.html">
+        <h2>demo-scene.flashy</h2>
+        <p>Open in the editor with File &rarr; Open and pick this file.</p>
+        <span class="tag demo">Open in Editor</span>
+      </a>
+      <a class="card" href="../editor.html">
+        <h2>demo-shapes.flashy</h2>
+        <p>Open in the editor with File &rarr; Open and pick this file.</p>
+        <span class="tag demo">Open in Editor</span>
+      </a>
+      <a class="card" href="../editor.html">
+        <h2>demo-solar-system.flashy</h2>
+        <p>Open in the editor with File &rarr; Open and pick this file.</p>
+        <span class="tag demo">Open in Editor</span>
+      </a>
+    </div>
+  </section>
+</div>
+</body>
+</html>
