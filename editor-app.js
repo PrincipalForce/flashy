@@ -39,7 +39,8 @@ var lastClickTime=0,lastClickTarget=null;
 var fillColor="#000000",fillAlpha=1,strokeColor="#000000",strokeAlpha=1,strokeWidth=1;
 var undoStack=[],redoStack=[];
 function snap(){return JSON.stringify({d:serializeDoc(),f:curFrame,l:curLayer});}
-function pushUndo(){undoStack.push(snap());if(undoStack.length>50)undoStack.shift();redoStack.length=0;}
+function pushUndo(){pushUndoSnap(snap());}
+function pushUndoSnap(s){undoStack.push(s);if(undoStack.length>50)undoStack.shift();redoStack.length=0;}
 function doUndo(){if(!undoStack.length)return;redoStack.push(snap());var s=JSON.parse(undoStack.pop());deserializeDoc(s.d);curFrame=s.f;curLayer=s.l;selection=[];fullRefresh();}
 function doRedo(){if(!redoStack.length)return;undoStack.push(snap());var s=JSON.parse(redoStack.pop());deserializeDoc(s.d);curFrame=s.f;curLayer=s.l;selection=[];fullRefresh();}
 function CL(){return currentLayers()[curLayer];}
@@ -444,9 +445,10 @@ function renderObj(o){
     ctx.globalAlpha=o.alpha*(o.strokeAlpha!=null?o.strokeAlpha:1);applyStroke();ctx.stroke();
   }else if(o.type==="pencil"||o.type==="brush"){
     if(o.points&&o.points.length>1){
-      ctx.beginPath();ctx.moveTo(o.points[0]-o.x,o.points[1]-o.y);
+      // points are object-local (relative to top-left); ctx is at center
+      ctx.beginPath();ctx.moveTo(o.points[0]-hw,o.points[1]-hh);
       for(var pi=2;pi<o.points.length;pi+=2){
-        ctx.lineTo(o.points[pi]-o.x,o.points[pi+1]-o.y);
+        ctx.lineTo(o.points[pi]-hw,o.points[pi+1]-hh);
       }
       if(o.type==="brush"){ctx.strokeStyle=o.fillColor;ctx.lineWidth=o.strokeWidth*3;ctx.lineCap="round";ctx.lineJoin="round";}
       else{ctx.strokeStyle=o.strokeColor;ctx.lineWidth=o.strokeWidth;applyStroke();}
@@ -629,11 +631,14 @@ function hitTest(x,y){
   var kf=CKF();if(!kf)return null;
   for(var i=kf.objects.length-1;i>=0;i--){
     var o=kf.objects[i];
-    if(x>=o.x&&x<=o.x+o.width&&y>=o.y&&y<=o.y+o.height)return o;
+    // width/height can be negative (e.g. a line dragged up/left)
+    var x0=Math.min(o.x,o.x+o.width),x1=Math.max(o.x,o.x+o.width);
+    var y0=Math.min(o.y,o.y+o.height),y1=Math.max(o.y,o.y+o.height);
+    if(x>=x0&&x<=x1&&y>=y0&&y<=y1)return o;
   }
   return null;
 }
-var moveStartX=0,moveStartY=0,moveObjStarts=[];
+var moveStartX=0,moveStartY=0,moveObjStarts=[],movePreSnap=null;
 function onDblClick(e){
   if(curTool!=="select")return;
   var p=getStagePos(e);
@@ -657,6 +662,7 @@ function onMouseDown(e){
       }
       moveStartX=p.x;moveStartY=p.y;
       moveObjStarts=selection.map(function(o){return{x:o.x,y:o.y};});
+      movePreSnap=snap(); // capture BEFORE the drag so undo restores the pre-move state
       dragPreview=null;
     }else{
       selection=[];
@@ -736,11 +742,19 @@ function onMouseUp(e){
         var x1=Math.min(dragPreview.x1,dragPreview.x2),y1=Math.min(dragPreview.y1,dragPreview.y2);
         var x2=Math.max(dragPreview.x1,dragPreview.x2),y2=Math.max(dragPreview.y1,dragPreview.y2);
         selection=kf.objects.filter(function(o){
-          return o.x+o.width>x1&&o.x<x2&&o.y+o.height>y1&&o.y<y2;
+          var ox0=Math.min(o.x,o.x+o.width),ox1=Math.max(o.x,o.x+o.width);
+          var oy0=Math.min(o.y,o.y+o.height),oy1=Math.max(o.y,o.y+o.height);
+          return ox1>x1&&ox0<x2&&oy1>y1&&oy0<y2;
         });
       }
       dragPreview=null;
-    }else if(selection.length>0){pushUndo();}
+    }else if(selection.length>0&&moveObjStarts.length>0){
+      var movedAny=selection.some(function(o,i){
+        return moveObjStarts[i]&&(o.x!==moveObjStarts[i].x||o.y!==moveObjStarts[i].y);
+      });
+      if(movedAny&&movePreSnap)pushUndoSnap(movePreSnap);
+      moveObjStarts=[];movePreSnap=null;
+    }
     updateProps();
   }else if(curTool==="rect"||curTool==="oval"||curTool==="line"){
     if(dragPreview){
@@ -778,7 +792,8 @@ function onMouseUp(e){
         }
         var obj2=new EditorObject(curTool);
         obj2.x=minX;obj2.y=minY;obj2.width=maxX-minX||1;obj2.height=maxY-minY||1;
-        obj2.points=pts.slice();
+        // store points relative to top-left so the object can be moved/exported
+        obj2.points=pts.map(function(v,i){return i%2===0?v-minX:v-minY;});
         obj2.fillColor=fillColor;obj2.strokeColor=strokeColor;obj2.strokeWidth=strokeWidth;
         kf3.objects.push(obj2);selection=[obj2];
       }
@@ -2215,11 +2230,34 @@ function serializeDoc(){
     library:doc.library
   };
 }
+// Legacy docs stored pencil/brush points as absolute stage coords; the
+// current format is relative to the object's top-left (min point = 0,0).
+// Shifting by the min is a no-op on current-format data, so this is
+// safe to run on every deserialize (including undo/redo).
+function normalizeObjPoints(o){
+  if((o.type!=="pencil"&&o.type!=="brush")||!o.points||o.points.length<2)return;
+  var mx=Infinity,my=Infinity;
+  for(var i=0;i<o.points.length;i+=2){
+    if(o.points[i]<mx)mx=o.points[i];
+    if(o.points[i+1]<my)my=o.points[i+1];
+  }
+  if(mx===0&&my===0)return;
+  for(var j=0;j<o.points.length;j+=2){o.points[j]-=mx;o.points[j+1]-=my;}
+}
 function deserializeDoc(d){
   doc.width=d.width||550;doc.height=d.height||400;
   doc.fps=d.fps||24;doc.backgroundColor=d.backgroundColor||"#FFFFFF";
   doc.totalFrames=d.totalFrames||60;
   doc.library=d.library||{};
+  Object.keys(doc.library).forEach(function(sn){
+    var sym=doc.library[sn];if(!sym)return;
+    if(sym.objects)sym.objects.forEach(normalizeObjPoints);
+    if(sym.layers)sym.layers.forEach(function(sl){
+      (sl.keyframes||[]).forEach(function(skf){
+        (skf.objects||[]).forEach(normalizeObjPoints);
+      });
+    });
+  });
   doc.layers=d.layers.map(function(ld){
     var l=new Layer(ld.name);
     l.visible=ld.visible!==false;l.locked=!!ld.locked;
@@ -2232,6 +2270,7 @@ function deserializeDoc(d){
         Object.keys(od).forEach(function(k){
           var v=od[k];o[k]=Array.isArray(v)?v.slice():v;
         });
+        normalizeObjPoints(o);
         return o;
       });
       return kf;
@@ -2312,9 +2351,10 @@ function genHTML(callback){
     s+="    if(ss!=='none'&&o.strokeWidth>0)g.lineStyle(o.strokeWidth,sc2,o.strokeAlpha!=null?o.strokeAlpha:1);\n";
     s+="    if(o.type==='rect')g.drawRect(0,0,o.width,o.height);\n";
     s+="    else if(o.type==='oval')g.drawEllipse(0,0,o.width,o.height);\n";
-    s+="    else if(o.type==='line'&&o.points&&o.points.length>=4){\n";
-    s+="      g.moveTo(o.points[0],o.points[1]);\n";
-    s+="      for(var i=2;i<o.points.length;i+=2)g.lineTo(o.points[i],o.points[i+1]);\n";
+    s+="    else if(o.type==='line'){\n";
+    s+="      var lp=(o.points&&o.points.length>=4)?o.points:[0,0,o.width||0,o.height||0];\n";
+    s+="      g.moveTo(lp[0],lp[1]);\n";
+    s+="      for(var i=2;i<lp.length;i+=2)g.lineTo(lp[i],lp[i+1]);\n";
     s+="    }else if((o.type==='pencil'||o.type==='brush')&&o.points&&o.points.length>=4){\n";
     s+="      g.moveTo(o.points[0],o.points[1]);\n";
     s+="      for(var i=2;i<o.points.length;i+=2)g.lineTo(o.points[i],o.points[i+1]);\n";
@@ -2472,9 +2512,11 @@ function _renderObjExport(ctx, o) {
       if (o.strokeWidth > 0 && o.strokeStyle !== "none") { ctx.strokeStyle = o.strokeColor||"#000"; ctx.lineWidth = o.strokeWidth; ctx.stroke(); }
       break;
     case "line": case "pencil": case "brush":
-      if (o.points && o.points.length >= 4) {
-        ctx.beginPath(); ctx.moveTo(o.points[0], o.points[1]);
-        for (var i = 2; i < o.points.length; i += 2) ctx.lineTo(o.points[i], o.points[i+1]);
+      var lp = o.points;
+      if ((!lp || lp.length < 4) && o.type === "line") lp = [0, 0, o.width||0, o.height||0];
+      if (lp && lp.length >= 4) {
+        ctx.beginPath(); ctx.moveTo(lp[0], lp[1]);
+        for (var i = 2; i < lp.length; i += 2) ctx.lineTo(lp[i], lp[i+1]);
         ctx.strokeStyle = o.type==="brush" ? (o.fillColor||"#000") : (o.strokeColor||"#000");
         ctx.lineWidth = o.type==="brush" ? (o.strokeWidth||1)*4 : (o.strokeWidth||1);
         ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke();
@@ -2586,9 +2628,11 @@ function _objToSVG(o) {
     case "rect": return '<rect'+a+' width="'+o.width+'" height="'+o.height+'" fill="'+fl+'" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
     case "oval": return '<ellipse'+a+' cx="'+o.width/2+'" cy="'+o.height/2+'" rx="'+Math.abs(o.width/2)+'" ry="'+Math.abs(o.height/2)+'" fill="'+fl+'" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
     case "line": case "pencil": case "brush":
-      if (!o.points||o.points.length<4) return '';
-      var d = 'M'+o.points[0]+','+o.points[1];
-      for (var i=2;i<o.points.length;i+=2) d+=' L'+o.points[i]+','+o.points[i+1];
+      var pp = o.points;
+      if ((!pp||pp.length<4) && o.type === "line") pp = [0, 0, o.width||0, o.height||0];
+      if (!pp||pp.length<4) return '';
+      var d = 'M'+pp[0]+','+pp[1];
+      for (var i=2;i<pp.length;i+=2) d+=' L'+pp[i]+','+pp[i+1];
       return '<path'+a+' d="'+d+'" fill="none" stroke="'+(o.type==="brush"?fl:st)+'" stroke-width="'+(o.type==="brush"?sw*4:sw)+'" stroke-linecap="round"/>\n';
     case "text":
       var txt = (o.text||"Text").replace(/&/g,"&amp;").replace(/</g,"&lt;");
@@ -2645,7 +2689,8 @@ function exportAsModule() {
   s += "      if(o.strokeWidth>0&&o.strokeStyle!=='none')g.lineStyle(o.strokeWidth,parseInt((o.strokeColor||'#000').replace('#',''),16));\n";
   s += "      if(o.type==='rect')g.drawRect(0,0,o.width,o.height);\n";
   s += "      else if(o.type==='oval')g.drawEllipse(0,0,o.width,o.height);\n";
-  s += "      else if(o.points&&o.points.length>=4){g.moveTo(o.points[0],o.points[1]);for(var i=2;i<o.points.length;i+=2)g.lineTo(o.points[i],o.points[i+1]);}\n";
+  s += "      else { var lp=(o.points&&o.points.length>=4)?o.points:(o.type==='line'?[0,0,o.width||0,o.height||0]:null);\n";
+  s += "        if(lp){g.moveTo(lp[0],lp[1]);for(var i=2;i<lp.length;i+=2)g.lineTo(lp[i],lp[i+1]);} }\n";
   s += "      if(o.fillType!=='none')g.endFill();\n";
   s += "    }\n";
   s += "    node.x=o.x||0;node.y=o.y||0;node.rotation=(o.rotation||0)*Math.PI/180;\n";
@@ -2769,7 +2814,8 @@ function classifyGraphicsCmds(cmds){
     result.type="line";
   }else if((hasMoveTo||hasLineTo||hasCurve)&&pathPoints.length>2){
     result.type="pencil";
-    result.points=pathPoints;
+    // make points relative to the shape's top-left (result.x/y)
+    result.points=pathPoints.map(function(v,i){return i%2===0?v-minX:v-minY;});
   }else if(hasStar||hasPolygon){
     result.type="rect"; // approximate as rect bounding box
   }
@@ -3394,7 +3440,7 @@ function aiCallAPI(userText, callback) {
     "- EditorObject types: 'rect', 'oval', 'line', 'pencil', 'text'\n" +
     "- Object properties: x, y, width, height, fillColor (hex string), fillAlpha (0-1), strokeColor, strokeWidth, strokeAlpha, rotation (degrees), alpha (0-1), scaleX, scaleY\n" +
     "- For text: set .text, .font, .fontSize, .fillColor\n" +
-    "- For lines: set .points = [x1,y1,x2,y2,...]\n" +
+    "- For lines: set .points = [x1,y1,x2,y2,...] — coordinates are LOCAL to the object (relative to its x,y, so the first point is usually 0,0)\n" +
     "- Layer has keyframes[]. First keyframe is keyframes[0] at index 1\n" +
     "- For tweens: kf.tweenType='motion', kf.easing='bounceOut'|'elasticOut'|'sineInOut'|'cubicOut'|'linear'|etc\n" +
     "- EACH keyframe MUST have the SAME number of objects for tweening to work\n" +
