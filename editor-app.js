@@ -3466,8 +3466,9 @@ function aiCallAPI(userText, callback) {
       "anthropic-dangerous-direct-browser-access": "true"
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
+      model: "claude-opus-4-8",
+      max_tokens: 16000,
+      thinking: {type: "adaptive"},
       system: systemPrompt,
       messages: messages
     })
