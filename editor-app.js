@@ -3253,6 +3253,8 @@ if(document.readyState==="loading"){
 // === AI Assistant Panel ===
 var aiMessages = [];
 var aiApiKey = "";
+// Reference image attached to the next message: {media_type, data (base64), name} or null
+var aiPendingImage = null;
 // Try to load API key from multiple sources:
 // 1. Window global (set by server-side template or config script)
 // 2. Meta tag <meta name="anthropic-api-key" content="sk-...">
@@ -3283,6 +3285,56 @@ function initAIPanel() {
   chat.id = "ai-chat";
   panel.appendChild(chat);
 
+  // Drag-and-drop zone for an optional reference image
+  var drop = document.createElement("div");
+  drop.id = "ai-drop";
+  drop.className = "ai-drop";
+  var dropLabel = document.createElement("span");
+  dropLabel.className = "ai-drop-label";
+  dropLabel.textContent = "🖼 Drop a reference image here, or click to browse";
+  drop.appendChild(dropLabel);
+  var fileInput = document.createElement("input");
+  fileInput.id = "ai-file";
+  fileInput.type = "file";
+  fileInput.accept = "image/png,image/jpeg,image/gif,image/webp";
+  fileInput.style.display = "none";
+  drop.appendChild(fileInput);
+  // Preview (thumbnail + name + remove), hidden until an image is attached
+  var preview = document.createElement("div");
+  preview.id = "ai-img-preview";
+  preview.className = "ai-img-preview";
+  preview.style.display = "none";
+  drop.appendChild(preview);
+
+  drop.addEventListener("click", function(e) {
+    if (e.target === fileInput) return;
+    // clicking the remove button is handled separately; ignore clicks on it
+    if (e.target.classList && e.target.classList.contains("ai-img-remove")) return;
+    fileInput.click();
+  });
+  fileInput.addEventListener("change", function() {
+    if (fileInput.files && fileInput.files[0]) aiHandleImageFile(fileInput.files[0]);
+    fileInput.value = "";
+  });
+  drop.addEventListener("dragover", function(e) {
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    drop.classList.add("dragover");
+  });
+  drop.addEventListener("dragleave", function(e) {
+    e.preventDefault(); e.stopPropagation();
+    drop.classList.remove("dragover");
+  });
+  drop.addEventListener("drop", function(e) {
+    e.preventDefault(); e.stopPropagation();
+    drop.classList.remove("dragover");
+    var dt = e.dataTransfer;
+    if (dt && dt.files && dt.files.length) {
+      aiHandleImageFile(dt.files[0]);
+    }
+  });
+  panel.appendChild(drop);
+
   var inputRow = document.createElement("div");
   inputRow.id = "ai-input-row";
   var input = document.createElement("input");
@@ -3301,6 +3353,85 @@ function initAIPanel() {
   panel.appendChild(inputRow);
 
   aiAddMsg("assistant", "I'm your Flash design assistant. I can create scenes, characters, animations, and interactive elements directly in your project.\n\nTry:\n\u2022 \"Create a sunset landscape with mountains and clouds\"\n\u2022 \"Add a bouncing red ball with motion tween\"\n\u2022 \"Build a button that glows on hover\"\n\u2022 \"Make a 30-frame walk cycle for a stick figure\"\n\u2022 \"Create a starfield background with parallax\"");
+}
+
+// Read a dropped/selected image file, downscale if oversized, and stage it.
+function aiHandleImageFile(file) {
+  var okTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  if (!file || okTypes.indexOf(file.type) < 0) {
+    aiAddMsg("system", "Unsupported image type. Use PNG, JPEG, GIF, or WebP.");
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function() {
+    var dataUrl = reader.result;
+    var img = new Image();
+    img.onload = function() {
+      var MAX = 1568; // long-edge cap keeps token cost reasonable
+      var w = img.naturalWidth, h = img.naturalHeight;
+      var longEdge = Math.max(w, h);
+      var mediaType = file.type, outUrl = dataUrl;
+      // Downscale large images (GIF is kept as-is to preserve animation frames the API reads)
+      if (longEdge > MAX && file.type !== "image/gif") {
+        var scale = MAX / longEdge;
+        var cw = Math.round(w * scale), ch = Math.round(h * scale);
+        var cvs = document.createElement("canvas");
+        cvs.width = cw; cvs.height = ch;
+        cvs.getContext("2d").drawImage(img, 0, 0, cw, ch);
+        // JPEG for opaque photos, PNG when transparency may matter
+        if (file.type === "image/jpeg") {
+          outUrl = cvs.toDataURL("image/jpeg", 0.85); mediaType = "image/jpeg";
+        } else {
+          outUrl = cvs.toDataURL("image/png"); mediaType = "image/png";
+        }
+      }
+      var comma = outUrl.indexOf(",");
+      aiPendingImage = {
+        media_type: mediaType,
+        data: outUrl.slice(comma + 1),
+        name: file.name || "image"
+      };
+      aiRenderImagePreview(outUrl);
+    };
+    img.onerror = function() { aiAddMsg("system", "Could not read that image."); };
+    img.src = dataUrl;
+  };
+  reader.onerror = function() { aiAddMsg("system", "Could not read that file."); };
+  reader.readAsDataURL(file);
+}
+
+function aiRenderImagePreview(url) {
+  var preview = document.getElementById("ai-img-preview");
+  var label = document.querySelector("#ai-drop .ai-drop-label");
+  if (!preview) return;
+  preview.textContent = "";
+  var thumb = document.createElement("img");
+  thumb.className = "ai-img-thumb";
+  thumb.src = url;
+  preview.appendChild(thumb);
+  var name = document.createElement("span");
+  name.className = "ai-img-name";
+  name.textContent = aiPendingImage ? aiPendingImage.name : "";
+  preview.appendChild(name);
+  var remove = document.createElement("span");
+  remove.className = "ai-img-remove";
+  remove.textContent = "×";
+  remove.title = "Remove image";
+  remove.addEventListener("click", function(e) {
+    e.stopPropagation();
+    aiClearPendingImage();
+  });
+  preview.appendChild(remove);
+  preview.style.display = "flex";
+  if (label) label.style.display = "none";
+}
+
+function aiClearPendingImage() {
+  aiPendingImage = null;
+  var preview = document.getElementById("ai-img-preview");
+  var label = document.querySelector("#ai-drop .ai-drop-label");
+  if (preview) { preview.textContent = ""; preview.style.display = "none"; }
+  if (label) label.style.display = "";
 }
 
 function aiAddMsg(role, text, applyCode) {
@@ -3336,7 +3467,8 @@ function aiAddMsg(role, text, applyCode) {
 function aiSend() {
   var input = document.getElementById("ai-input");
   var text = input.value.trim();
-  if (!text) return;
+  var image = aiPendingImage;
+  if (!text && !image) return;
   input.value = "";
 
   if (!aiApiKey) {
@@ -3345,7 +3477,9 @@ function aiSend() {
     localStorage.setItem("flashy_ai_key", aiApiKey);
   }
 
-  aiAddMsg("user", text);
+  var displayText = (image ? "🖼 " + image.name + "\n" : "") + (text || "(use the attached reference image)");
+  aiAddMsg("user", displayText);
+  aiClearPendingImage();
 
   var chat = document.getElementById("ai-chat");
   var typing = document.createElement("div");
@@ -3355,7 +3489,7 @@ function aiSend() {
   chat.scrollTop = chat.scrollHeight;
   document.getElementById("ai-send").disabled = true;
 
-  aiCallAPI(text, function(response, code) {
+  aiCallAPI(text, image, function(response, code) {
     if (typing.parentNode) typing.parentNode.removeChild(typing);
     document.getElementById("ai-send").disabled = false;
     if (response) {
@@ -3364,7 +3498,7 @@ function aiSend() {
   });
 }
 
-function aiCallAPI(userText, callback) {
+function aiCallAPI(userText, image, callback) {
   var docState = JSON.stringify({
     width: doc.width, height: doc.height, fps: doc.fps,
     bg: doc.backgroundColor,
@@ -3449,12 +3583,23 @@ function aiCallAPI(userText, callback) {
     "- Set F.doc.totalFrames if your animation needs more frames\n" +
     "- Be visually rich — use multiple layers, colors, gradients aren't available but use multiple colored shapes\n" +
     "- Wrap code in ```flashy-code ... ``` block\n" +
-    "- Brief description first (1-2 sentences), then the code block. Nothing else.";
+    "- Brief description first (1-2 sentences), then the code block. Nothing else.\n" +
+    (image ? "- The user attached a REFERENCE IMAGE. Recreate its composition, colors, shapes, and layout as closely as the editor's primitives allow.\n" : "");
 
   var messages = [];
   var recent = aiMessages.slice(-6);
   for (var i = 0; i < recent.length; i++) {
     messages.push({role: recent[i].role, content: recent[i].content});
+  }
+  // Attach the reference image to the current (last user) message as an image block
+  if (image && messages.length) {
+    var last = messages[messages.length - 1];
+    if (last.role === "user") {
+      last.content = [
+        {type: "image", source: {type: "base64", media_type: image.media_type, data: image.data}},
+        {type: "text", text: typeof last.content === "string" ? last.content : (userText || "")}
+      ];
+    }
   }
 
   fetch("https://api.anthropic.com/v1/messages", {

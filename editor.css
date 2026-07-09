@@ -629,6 +629,40 @@ input[type="range"].props-input {
   animation: aiBlink 1s infinite;
 }
 @keyframes aiBlink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+.ai-drop {
+  border-top: 1px solid #333;
+  border-bottom: 1px dashed #3a3a55;
+  background: #16162a;
+  padding: 5px 10px; min-height: 26px;
+  display: flex; align-items: center;
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.ai-drop.dragover {
+  background: #22224a; border-bottom-color: #5577cc;
+}
+.ai-drop-label {
+  color: #667; font-size: 10px; font-style: italic;
+  pointer-events: none;
+}
+.ai-drop.dragover .ai-drop-label { color: #99b0e0; }
+.ai-img-preview {
+  align-items: center; gap: 8px; width: 100%;
+}
+.ai-img-thumb {
+  width: 32px; height: 32px; object-fit: cover;
+  border-radius: 3px; border: 1px solid #3a3a55;
+  flex-shrink: 0;
+}
+.ai-img-name {
+  color: #aab; font-size: 10px;
+  flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-img-remove {
+  color: #c88; font-size: 15px; line-height: 1;
+  padding: 0 4px; cursor: pointer; flex-shrink: 0;
+}
+.ai-img-remove:hover { color: #f66; }
 
 /* ─── Mobile / small-viewport layout ─── */
 @media (max-width: 900px), (max-height: 700px) {
