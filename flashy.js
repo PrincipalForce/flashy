@@ -588,10 +588,24 @@
     }
 
     _bindInput() {
+      // Pointer Events cover mouse, pen and touch in one path. This used to
+      // bind mouse events only — the touch branch in convert() below was
+      // unreachable — so an exported game or animation was completely
+      // unresponsive on phones and tablets.
+      //
+      // The canvas is also opted out of browser touch gestures, or the first
+      // drag inside an interactive movie scrolls the page instead.
+      const style = this.canvas.style;
+      if (!style.touchAction) style.touchAction = 'none';
+
       const convert = (e) => {
         const rect = this.canvas.getBoundingClientRect();
         const src = (e.touches && e.touches[0]) || e;
-        return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+        // The canvas may be displayed at a different size than its coordinate
+        // space (CSS sizing, fullscreen), so scale into stage coordinates.
+        const sx = rect.width  ? this.width  / rect.width  : 1;
+        const sy = rect.height ? this.height / rect.height : 1;
+        return { x: (src.clientX - rect.left) * sx, y: (src.clientY - rect.top) * sy };
       };
       const handle = (type) => (e) => {
         const p = convert(e);
@@ -612,10 +626,20 @@
           }
         }
       };
-      this.canvas.addEventListener('mousedown', handle('mouseDown'));
-      this.canvas.addEventListener('mouseup',   handle('mouseUp'));
-      this.canvas.addEventListener('mousemove', handle('mouseMove'));
-      this.canvas.addEventListener('click',     handle('click'));
+      if (typeof window !== 'undefined' && window.PointerEvent) {
+        this.canvas.addEventListener('pointerdown',   handle('mouseDown'));
+        this.canvas.addEventListener('pointerup',     handle('mouseUp'));
+        this.canvas.addEventListener('pointermove',   handle('mouseMove'));
+        // A pointer lifted outside the canvas never produces a 'click', so on
+        // touch the up event has to stand in for it.
+        this.canvas.addEventListener('pointercancel', handle('mouseUp'));
+        this.canvas.addEventListener('click',         handle('click'));
+      } else {
+        this.canvas.addEventListener('mousedown', handle('mouseDown'));
+        this.canvas.addEventListener('mouseup',   handle('mouseUp'));
+        this.canvas.addEventListener('mousemove', handle('mouseMove'));
+        this.canvas.addEventListener('click',     handle('click'));
+      }
     }
 
     _hitTest(node, x, y) {
@@ -647,12 +671,410 @@
     }
   }
 
+  // -------------------- Sound --------------------
+  //
+  // Audio assets and playback, on WebAudio. Two things make this more than a
+  // thin wrapper around <audio>:
+  //
+  //   * Playback position is readable against the audio clock, which is what
+  //     lets the animation follow the sound (Flash's "Stream" sync) instead of
+  //     the other way round. A timer-driven playhead drifts against audio
+  //     within seconds; an audio-driven playhead cannot.
+  //   * Decoded buffers are cached per asset, so scrubbing — which starts and
+  //     stops a short slice many times a second — costs nothing after the
+  //     first decode.
+  //
+  // Browsers refuse to start audio before a user gesture. `unlock()` is wired
+  // to the first pointer/key event and resumes the context; until then,
+  // `play()` is a no-op that reports it did nothing rather than throwing.
+  const Sound = {
+    _ctx: null,
+    _master: null,
+    _buffers: Object.create(null),
+    _loading: Object.create(null),
+    _peaks: Object.create(null),
+    _muted: false,
+
+    /** The shared AudioContext, created on first use (never before). */
+    context() {
+      if (this._ctx) return this._ctx;
+      const AC = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+      if (!AC) return null;
+      this._ctx = new AC();
+      this._master = this._ctx.createGain();
+      this._master.gain.value = this._muted ? 0 : 1;
+      this._master.connect(this._ctx.destination);
+      return this._ctx;
+    },
+
+    /** Resume after the autoplay policy suspended us. Safe to call often. */
+    unlock() {
+      const ctx = this.context();
+      if (ctx && ctx.state === 'suspended') return ctx.resume();
+      return Promise.resolve();
+    },
+
+    /** True once audio can actually be heard. */
+    ready() {
+      const ctx = this._ctx;
+      return !!ctx && ctx.state === 'running';
+    },
+
+    /**
+     * Decode an asset and cache it. `src` is a data: URL or any fetchable URL.
+     * Repeated calls for the same name share one in-flight decode.
+     */
+    load(name, src) {
+      if (this._buffers[name]) return Promise.resolve(this._buffers[name]);
+      if (this._loading[name]) return this._loading[name];
+      const ctx = this.context();
+      if (!ctx) return Promise.reject(new Error('WebAudio unavailable'));
+
+      const p = fetch(src)
+        .then((r) => r.arrayBuffer())
+        .then((buf) => ctx.decodeAudioData(buf))
+        .then((audio) => {
+          this._buffers[name] = audio;
+          delete this._loading[name];
+          return audio;
+        })
+        .catch((err) => {
+          delete this._loading[name];
+          throw err;
+        });
+      this._loading[name] = p;
+      return p;
+    },
+
+    buffer(name) { return this._buffers[name] || null; },
+    duration(name) {
+      const b = this._buffers[name];
+      return b ? b.duration : 0;
+    },
+    has(name) { return !!this._buffers[name]; },
+
+    /**
+     * Amplitude envelope for drawing a waveform: `buckets` values in 0..1.
+     * Cached per (name, buckets) because the timeline redraws constantly.
+     */
+    peaks(name, buckets) {
+      const b = this._buffers[name];
+      if (!b) return null;
+      buckets = Math.max(1, buckets | 0);
+      const key = name + '@' + buckets;
+      if (this._peaks[key]) return this._peaks[key];
+
+      const chan = b.getChannelData(0);
+      const per = chan.length / buckets;
+      const out = new Float32Array(buckets);
+      for (let i = 0; i < buckets; i++) {
+        const from = Math.floor(i * per);
+        const to = Math.min(chan.length, Math.floor((i + 1) * per));
+        let peak = 0;
+        // Stride large windows: a 3-minute track at 48kHz is 8.6M samples and
+        // the drawn result is identical.
+        const step = Math.max(1, Math.floor((to - from) / 400));
+        for (let j = from; j < to; j += step) {
+          const v = chan[j] < 0 ? -chan[j] : chan[j];
+          if (v > peak) peak = v;
+        }
+        out[i] = peak;
+      }
+      this._peaks[key] = out;
+      return out;
+    },
+
+    /**
+     * Start a sound. Returns a handle, or null if audio is not running yet.
+     * `offset` seconds into the asset; `volume` 0..1; `loop` repeats.
+     */
+    play(name, opts) {
+      opts = opts || {};
+      const ctx = this.context();
+      const buf = this._buffers[name];
+      if (!ctx || !buf || ctx.state !== 'running') return null;
+
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = !!opts.loop;
+      const gain = ctx.createGain();
+      gain.gain.value = opts.volume != null ? opts.volume : 1;
+      src.connect(gain);
+      gain.connect(this._master);
+
+      const offset = Math.max(0, Math.min(opts.offset || 0, buf.duration));
+      const when = ctx.currentTime;
+      if (opts.duration != null) src.start(when, offset, Math.max(0, opts.duration));
+      else src.start(when, offset);
+
+      return { name: name, src: src, gain: gain, startedAt: when, offset: offset, loop: !!opts.loop };
+    },
+
+    /** Where a handle is in its asset, in seconds. */
+    positionOf(handle) {
+      const ctx = this._ctx;
+      if (!ctx || !handle) return 0;
+      const elapsed = ctx.currentTime - handle.startedAt + handle.offset;
+      const dur = this.duration(handle.name);
+      if (handle.loop && dur > 0) return elapsed % dur;
+      return elapsed;
+    },
+
+    stop(handle) {
+      if (!handle || !handle.src) return;
+      try { handle.src.stop(); } catch (e) { /* already ended */ }
+      try { handle.src.disconnect(); handle.gain.disconnect(); } catch (e) { /* ditto */ }
+    },
+
+    setVolume(handle, v) {
+      if (handle && handle.gain) handle.gain.gain.value = v;
+    },
+
+    setMuted(m) {
+      this._muted = !!m;
+      if (this._master) this._master.gain.value = this._muted ? 0 : 1;
+    },
+    muted() { return this._muted; }
+  };
+
+  // -------------------- Speech analysis --------------------
+  //
+  // Per-frame features used for lip sync. This runs entirely locally on the
+  // decoded buffer — no API key, no upload, works offline. That matters: lip
+  // sync is the single most tedious job in 2D animation, and gating it behind
+  // a paid key would put it out of reach of exactly the people this tool is
+  // for.
+  //
+  // What comes out is deliberately low-level (energy, zero crossings, three
+  // formant-ish bands). Turning that into mouth shapes is the editor's job,
+  // because which shapes exist depends on the artist's mouth sheet.
+
+  /** In-place iterative radix-2 FFT. `re`/`im` are Float32Array of length n. */
+  function fft(re, im) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = -2 * Math.PI / len;
+      const wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < len / 2; k++) {
+          const ar = re[i + k], ai = im[i + k];
+          const br = re[i + k + len / 2], bi = im[i + k + len / 2];
+          const tr = br * cr - bi * ci, ti = br * ci + bi * cr;
+          re[i + k] = ar + tr; im[i + k] = ai + ti;
+          re[i + k + len / 2] = ar - tr; im[i + k + len / 2] = ai - ti;
+          const ncr = cr * wr - ci * wi;
+          ci = cr * wi + ci * wr; cr = ncr;
+        }
+      }
+    }
+  }
+
+  /**
+   * Analyse a decoded sound frame by frame.
+   *
+   * Returns `{fps, frames, rms[], peak, zcr[], low[], mid[], high[], centroid[]}`
+   * where each array has one entry per animation frame. Bands are chosen for
+   * speech rather than music: `low` covers the first formant region for close
+   * vowels, `mid` the first formant of open vowels, `high` the second formant
+   * that separates "ee" from "oo".
+   */
+  Sound.analyze = function (name, opts) {
+    opts = opts || {};
+    const buf = this._buffers[name];
+    if (!buf) return null;
+    const fps = opts.fps || 24;
+    const offset = Math.max(0, opts.offset || 0);
+    const rate = buf.sampleRate;
+    const data = buf.getChannelData(0);
+    const hop = Math.max(1, Math.round(rate / fps));
+    const start = Math.round(offset * rate);
+    const total = Math.max(0, Math.floor((data.length - start) / hop));
+    const frames = opts.frames ? Math.min(opts.frames, total) : total;
+
+    // Window at least 1024 samples so the spectrum has usable resolution even
+    // at high frame rates, rounded up to a power of two for the FFT.
+    let win = 1024;
+    while (win < hop) win <<= 1;
+    const half = win / 2;
+    const hann = new Float32Array(win);
+    for (let i = 0; i < win; i++) hann[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (win - 1));
+
+    const out = {
+      fps: fps, frames: frames, peak: 0,
+      rms: new Float32Array(frames), zcr: new Float32Array(frames),
+      low: new Float32Array(frames), mid: new Float32Array(frames),
+      high: new Float32Array(frames), centroid: new Float32Array(frames)
+    };
+
+    const re = new Float32Array(win), im = new Float32Array(win);
+    const binHz = rate / win;
+    const bin = (hz) => Math.min(half - 1, Math.max(1, Math.round(hz / binHz)));
+    const L0 = bin(150), L1 = bin(550);     // close-vowel F1 ("oo", "ee")
+    const M0 = bin(550), M1 = bin(1300);    // open-vowel F1 ("ah")
+    const H0 = bin(1800), H1 = bin(3400);   // F2 — separates "ee" from "oo"
+
+    for (let f = 0; f < frames; f++) {
+      const s = start + f * hop;
+      let sum = 0, crossings = 0, prev = 0;
+      for (let i = 0; i < win; i++) {
+        const v = (s + i < data.length) ? data[s + i] : 0;
+        sum += v * v;
+        if (i > 0 && ((v >= 0) !== (prev >= 0))) crossings++;
+        prev = v;
+        re[i] = v * hann[i];
+        im[i] = 0;
+      }
+      const rms = Math.sqrt(sum / win);
+      out.rms[f] = rms;
+      if (rms > out.peak) out.peak = rms;
+      out.zcr[f] = crossings / win;
+
+      fft(re, im);
+      let lo = 0, md = 0, hi = 0, wsum = 0, msum = 0;
+      for (let k = 1; k < half; k++) {
+        const mag = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+        if (k >= L0 && k < L1) lo += mag;
+        if (k >= M0 && k < M1) md += mag;
+        if (k >= H0 && k < H1) hi += mag;
+        wsum += mag * k * binHz;
+        msum += mag;
+      }
+      out.low[f] = lo; out.mid[f] = md; out.high[f] = hi;
+      out.centroid[f] = msum > 0 ? wsum / msum : 0;
+    }
+    return out;
+  };
+
+  // -------------------- SoundTrack --------------------
+  //
+  // Keeps a set of timeline sounds in agreement with a frame number.
+  //
+  // `stream` items behave like Flash's Stream sync: one continuous playback
+  // whose position is derived from the frame, re-seeked whenever the playhead
+  // jumps or drifts past tolerance. `event` items fire once on entering their
+  // start frame and run to their own end, unaffected by the playhead.
+  class SoundTrack {
+    constructor(opts) {
+      opts = opts || {};
+      this.fps = opts.fps || 24;
+      this.items = [];
+      this._active = Object.create(null); // item id -> handle
+      this._lastFrame = -1;
+      // How far playback may drift from the frame before being re-seeked.
+      // Tight enough that lip sync stays believable, loose enough that we are
+      // not restarting the source every frame.
+      this.tolerance = opts.tolerance != null ? opts.tolerance : 0.12;
+    }
+
+    /** items: [{id, asset, startFrame, endFrame, sync, volume, loop, offset}] */
+    setItems(items) {
+      this.stopAll();
+      this.items = (items || []).slice();
+      return this;
+    }
+
+    stopAll() {
+      for (const id in this._active) Sound.stop(this._active[id]);
+      this._active = Object.create(null);
+      this._lastFrame = -1;
+    }
+
+    /** Where in its asset should `item` be at `frame`? */
+    _positionFor(item, frame) {
+      return (frame - item.startFrame) / this.fps + (item.offset || 0);
+    }
+
+    _covers(item, frame) {
+      return frame >= item.startFrame && frame <= item.endFrame;
+    }
+
+    /**
+     * Reconcile playback with `frame`.
+     *
+     * `seeked` tells us the playhead jumped rather than advanced, so stream
+     * sounds re-seek immediately instead of waiting for drift to accumulate.
+     */
+    update(frame, seeked) {
+      if (!Sound.ready()) return;
+      const jumped = seeked || this._lastFrame < 0 || Math.abs(frame - this._lastFrame) > 1;
+
+      for (let i = 0; i < this.items.length; i++) {
+        const item = this.items[i];
+        const id = item.id != null ? item.id : i;
+        const handle = this._active[id];
+        const inside = this._covers(item, frame);
+
+        if (!inside) {
+          // Stream sounds are bounded by their span; event sounds are not —
+          // once fired they play out on their own.
+          if (handle && item.sync !== 'event') { Sound.stop(handle); delete this._active[id]; }
+          else if (handle && item.sync === 'event' && frame < item.startFrame) {
+            // Scrubbed back before it started: cancel it.
+            Sound.stop(handle); delete this._active[id];
+          }
+          continue;
+        }
+
+        if (item.sync === 'event') {
+          // Fire once, on entry.
+          if (!handle && (jumped ? frame === item.startFrame : this._lastFrame < item.startFrame)) {
+            const h = Sound.play(item.asset, { volume: item.volume, loop: item.loop, offset: item.offset || 0 });
+            if (h) this._active[id] = h;
+          }
+          continue;
+        }
+
+        // Stream.
+        const want = this._positionFor(item, frame);
+        if (!handle) {
+          const h = Sound.play(item.asset, { offset: want, volume: item.volume, loop: item.loop });
+          if (h) this._active[id] = h;
+        } else if (jumped || Math.abs(Sound.positionOf(handle) - want) > this.tolerance) {
+          Sound.stop(handle);
+          const h = Sound.play(item.asset, { offset: want, volume: item.volume, loop: item.loop });
+          if (h) this._active[id] = h; else delete this._active[id];
+        }
+      }
+      this._lastFrame = frame;
+    }
+
+    /**
+     * The audio clock for the stream sound covering `frame`, as a frame
+     * number — what the playhead should follow so the animation tracks the
+     * sound rather than a timer. Returns null when nothing is streaming.
+     */
+    frameFromAudio(frame) {
+      for (let i = 0; i < this.items.length; i++) {
+        const item = this.items[i];
+        if (item.sync === 'event' || !this._covers(item, frame)) continue;
+        const handle = this._active[item.id != null ? item.id : i];
+        if (!handle) continue;
+        const pos = Sound.positionOf(handle) - (item.offset || 0);
+        return item.startFrame + pos * this.fps;
+      }
+      return null;
+    }
+  }
+
   // -------------------- export --------------------
   const Flashy = {
-    version: '0.1.0',
+    // Keep in step with package.json's "version" and the splash card in
+    // editor.html; they had drifted to three different numbers.
+    version: '0.6.0',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
     Shape, TextField, MovieClip, Timeline, Tween, Stage,
+    Sound, SoundTrack,
     toRGBA
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Flashy;

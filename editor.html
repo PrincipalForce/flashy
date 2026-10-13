@@ -4,57 +4,94 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Flashy Studio</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
 <link rel="stylesheet" href="editor.css">
 </head>
 <body>
+<!-- Loading card. Static markup rather than JS-built, so it paints on the very
+     first frame instead of after editor-app.js parses. splash.js fills in the
+     tip and fades it out. -->
+<div id="splash">
+  <div class="splash-frame">
+    <div class="splash-mark">
+      <div class="splash-mark-inner"><span class="fy-f">F</span><span class="fy-y">y</span></div>
+    </div>
+    <div class="splash-name">Flashy.</div>
+    <div class="splash-sub">vector animation studio</div>
+    <div class="splash-progress"><div class="splash-progress-bar"></div></div>
+    <div class="splash-tip" id="splash-tip"></div>
+    <div class="splash-credits">v0.6 · 2026 · Flash-inspired</div>
+  </div>
+</div>
 <div id="app">
   <div id="menubar"></div>
   <div id="toolbar"></div>
   <div id="main">
     <div id="toolbox"></div>
     <div id="stage-wrap"><canvas id="stageCanvas"></canvas></div>
-    <div id="right-col">
-      <div class="panel">
-        <div class="panel-header"><span class="title">Properties</span></div>
-        <div class="panel-body" id="propsPanel"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-header"><span class="title">Color Mixer</span></div>
-        <div class="panel-body" id="colorPanel"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-header"><span class="title">Library</span></div>
-        <div class="panel-body" id="libPanel"></div>
-      </div>
-    </div>
+    <!-- Dock zones are filled by workspace.js from #panel-store below. The
+         splitters are drag handles; see .dock-splitter in workspace.js. -->
+    <div class="dock-splitter vertical" data-resize="right" title="Drag to resize"></div>
+    <div class="dock-zone" id="dock-right" data-zone="right"></div>
   </div>
+  <div class="dock-splitter horizontal" data-resize="timeline" title="Drag to resize the timeline"></div>
   <div id="tl-section">
     <div id="tl-head">
       <span class="title">Timeline</span>
+      <span class="tl-spacer-flex"></span>
+      <!-- Zooming the timeline is what makes a long soundtrack workable:
+           out to see the whole track, in to find a syllable. -->
+      <span class="tl-zoom">
+        <button type="button" id="tlZoomOut" class="tl-zoom-btn" title="Zoom timeline out (Ctrl+wheel)">&#8722;</button>
+        <span id="tlZoomLabel" class="tl-zoom-label">12px</span>
+        <button type="button" id="tlZoomIn" class="tl-zoom-btn" title="Zoom timeline in (Ctrl+wheel)">+</button>
+        <button type="button" id="tlZoomFit" class="tl-zoom-btn wide" title="Zoom out to show the whole movie">Fit</button>
+      </span>
     </div>
     <div id="tl-body">
       <div id="tl-layers"><div id="tl-layers-inner"><div id="layerList"></div></div></div>
-      <div id="tl-frames"><canvas id="tlCanvas"></canvas></div>
+      <!-- The spacer carries the full timeline extent so native scrollbars
+           work; the canvas stays viewport-sized and draws only what is in
+           view (see renderTLFrames). -->
+      <div id="tl-frames"><div id="tl-spacer"><canvas id="tlCanvas"></canvas></div></div>
     </div>
   </div>
-  <div id="bottom-bar">
-    <div id="bottom-tabs">
-      <span class="bottom-tab active" data-tab="props">Properties</span>
-      <span class="bottom-tab" data-tab="actions">Actions</span>
-      <span class="bottom-tab" data-tab="ai">AI Assistant</span>
-      <span id="bottom-collapse" title="Collapse / expand panel">&#9650;</span>
-    </div>
-    <div class="bottom-panel" id="bp-props" style="display:block"></div>
-    <div class="bottom-panel" id="bp-actions" style="display:none">
+  <div class="dock-splitter horizontal" data-resize="bottom" title="Drag to resize"></div>
+  <div class="dock-zone" id="dock-bottom" data-zone="bottom"></div>
+</div>
+
+<!--
+  Panel contents live here and are moved into whichever dock the user has
+  arranged. The inner ids (propsPanel, colorPanel, libPanel, aiPanel,
+  frame-script) are the ones editor-app.js looks up, so they must not change:
+  docking relocates these nodes, it never rebuilds them. A panel that is not
+  currently visible is parked back here with its DOM — and therefore its state
+  (AI conversation, unsent frame script) — intact.
+-->
+<div id="panel-store" hidden>
+  <div class="panel-content" data-panel="props"><div class="panel-body" id="propsPanel"></div></div>
+  <div class="panel-content" data-panel="color"><div class="panel-body" id="colorPanel"></div></div>
+  <div class="panel-content" data-panel="library"><div class="panel-body" id="libPanel"></div></div>
+  <div class="panel-content" data-panel="actions">
+    <div class="panel-body actions-body">
       <textarea id="frame-script" placeholder="// Frame script (JavaScript)"></textarea>
     </div>
-    <div class="bottom-panel" id="bp-ai" style="display:none">
-      <div id="aiPanel"></div>
-    </div>
+  </div>
+  <div class="panel-content" data-panel="ai">
+    <div class="panel-body ai-body"><div id="aiPanel"></div></div>
   </div>
 </div>
+
+<script src="splash.js"></script>
 <script src="flashy.js"></script>
 <script src="feedback.js"></script>
+<!-- Dockable panel layout. Loaded before editor-app.js so its DOMContentLoaded
+     handler runs first and the docks exist before the editor fills them. -->
+<script src="workspace.js"></script>
 <script src="editor-app.js"></script>
+<!-- Electron desktop integration. A no-op in a browser: it does nothing unless
+     window.flashyDesktop exists, which only the Electron preload creates. -->
+<script src="desktop.js"></script>
 </body>
 </html>

@@ -2,4 +2,18 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
-.claude/
+
+# Local Claude Code state, but NOT the project skills — those document how to
+# run and verify the app and are worth sharing with contributors.
+.claude/*
+!.claude/skills/
+.claude/settings.local.json
+
+# Electron packaging output
+release/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright/
