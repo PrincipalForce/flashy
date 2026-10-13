@@ -29,18 +29,142 @@ html, body {
   user-select: none;
 }
 
-/* ─── APP GRID ─── */
+/* ─── APP GRID ───
+   Row heights for the timeline and the bottom dock are custom properties that
+   workspace.js writes while you drag a splitter, so the grid and the drag
+   handles never disagree. Same for the right dock's width. */
 #app {
   display: grid;
-  grid-template-rows: 22px 28px 1fr 200px auto;
+  grid-template-rows: 22px 28px minmax(0, 1fr) 5px var(--tl-h, 200px) 5px var(--dock-bottom, 150px);
   grid-template-columns: 1fr;
   height: 100vh;
+  --dock-right: 240px;
+  --dock-bottom: 150px;
+  --tl-h: 200px;
 }
 #menubar    { grid-row: 1; }
 #toolbar    { grid-row: 2; }
-#main       { grid-row: 3; display: flex; overflow: hidden; }
-#tl-section { grid-row: 4; display: flex; flex-direction: column; border-top: 1px solid var(--bevel-hi); overflow: hidden; }
-#bottom-bar { grid-row: 5; }
+#main       { grid-row: 3; display: flex; overflow: hidden; min-height: 0; }
+#tl-section { grid-row: 5; display: flex; flex-direction: column; border-top: 1px solid var(--bevel-hi); overflow: hidden; }
+#dock-bottom { grid-row: 7; }
+#panel-store { display: none; }
+
+/* ─── DOCKS ───
+   A dock holds one or more groups; a group is a tab strip plus the body of
+   whichever tab is active. Panel content is moved in from #panel-store, so a
+   panel keeps its DOM — and its state — wherever it is docked. */
+.dock-zone {
+  background: var(--chrome);
+  display: flex;
+  overflow: hidden;
+  min-height: 0; min-width: 0;
+}
+#dock-right {
+  flex-direction: column;
+  width: var(--dock-right, 240px);
+  flex: 0 0 auto;
+  border-left: 1px solid #555;
+}
+#dock-bottom {
+  flex-direction: row;
+  border-top: 1px solid #555;
+}
+.dock-zone.empty { align-items: center; justify-content: center; }
+.dock-empty-hint {
+  color: #777; font-size: 10px; font-style: italic;
+  padding: 4px 10px; border: 1px dashed #555; border-radius: 3px;
+  pointer-events: none;
+}
+.dock-group {
+  display: flex; flex-direction: column;
+  overflow: hidden; min-height: 0; min-width: 0;
+  border-right: 1px solid #333;
+}
+#dock-right .dock-group { border-right: none; }
+.dock-group:last-child { border-right: none; }
+
+.dock-tabs {
+  display: flex; align-items: stretch;
+  min-height: 22px; height: 22px;
+  background: linear-gradient(to bottom, #4A4A4A, #3C3C3C);
+  border-bottom: 1px solid #333;
+  border-top: 1px solid #666;
+  flex: 0 0 auto;
+}
+.dock-tabs-spacer { flex: 1; min-width: 6px; }
+.dock-tab {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 6px 0 10px;
+  font-size: 10px; font-weight: bold; color: #AAA;
+  border-right: 1px solid #333;
+  cursor: grab;
+  white-space: nowrap;
+}
+.dock-tab:hover { color: #FFF; background: rgba(255, 255, 255, 0.06); }
+.dock-tab.active {
+  color: #FFF;
+  background: #353535;
+  box-shadow: inset 0 2px 0 var(--accent, #4488CC);
+}
+.dock-tab-close {
+  font-size: 12px; line-height: 1; color: #777;
+  padding: 0 2px; border-radius: 2px;
+  cursor: pointer; opacity: 0;
+}
+.dock-tab:hover .dock-tab-close, .dock-tab.active .dock-tab-close { opacity: 1; }
+.dock-tab-close:hover { color: #FFF; background: #a33; }
+.dock-collapse {
+  display: flex; align-items: center; padding: 0 7px;
+  color: #999; font-size: 9px; cursor: pointer;
+  border-left: 1px solid #333;
+}
+.dock-collapse:hover { color: #FFF; background: rgba(255, 255, 255, 0.08); }
+.dock-body {
+  flex: 1; min-height: 0; min-width: 0;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  background: #353535;
+}
+.dock-zone.collapsed .dock-body { display: none; }
+.panel-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ─── SPLITTERS ─── */
+.dock-splitter {
+  background: #3a3a3a;
+  flex: 0 0 auto;
+}
+.dock-splitter.vertical {
+  width: 5px; cursor: col-resize;
+  border-left: 1px solid var(--bevel-lo);
+  border-right: 1px solid var(--bevel-hi);
+}
+.dock-splitter.horizontal {
+  height: 5px; cursor: row-resize;
+  border-top: 1px solid var(--bevel-hi);
+  border-bottom: 1px solid var(--bevel-lo);
+}
+.dock-splitter[data-resize="timeline"] { grid-row: 4; }
+.dock-splitter[data-resize="bottom"]   { grid-row: 6; }
+.dock-splitter:hover, .dock-splitter:active { background: var(--accent, #4488CC); }
+.dock-splitter.hidden { visibility: hidden; }
+/* Between stacked groups in the right-hand dock. */
+.dock-gsplit {
+  height: 5px; flex: 0 0 auto; cursor: row-resize;
+  background: #3a3a3a;
+  border-top: 1px solid var(--bevel-hi);
+  border-bottom: 1px solid var(--bevel-lo);
+}
+.dock-gsplit:hover { background: var(--accent, #4488CC); }
+/* While dragging a splitter, nothing else should take the pointer or show a
+   text cursor — a resize that "sticks" to a text selection feels broken. */
+body.dock-resizing { cursor: inherit; }
+body.dock-resizing * { pointer-events: none !important; user-select: none !important; }
+body.dock-resizing .dock-splitter, body.dock-resizing .dock-gsplit { pointer-events: auto !important; }
+
+/* ─── DROP FEEDBACK ─── */
+body.dock-dragging .dock-zone { outline: 1px dashed #5a5a5a; outline-offset: -2px; }
+.dock-tabs.drop-into { background: linear-gradient(to bottom, #4f6d86, #3d566b); }
+.dock-zone.drop-into { outline: 2px solid var(--accent, #4488CC); outline-offset: -2px; }
 
 /* ─── MENU BAR ─── */
 #menubar {
@@ -162,41 +286,19 @@ html, body {
   cursor: crosshair;
 }
 
-/* ─── RIGHT PANELS ─── */
-#right-col {
-  width: 240px; flex-shrink: 0;
-  display: flex; flex-direction: column;
-  border-left: 1px solid #555;
-  background: var(--chrome);
-  overflow: hidden;
-}
-.panel {
-  display: flex; flex-direction: column;
-  border-bottom: 1px solid #333;
-  overflow: hidden;
-  flex: 1; min-height: 0;
-  transition: flex 0.15s ease;
-}
-.panel-head, .panel-header {
-  background: linear-gradient(to bottom, #585858, #454545);
-  padding: 3px 8px;
-  display: flex; align-items: center;
-  min-height: 22px;
-  border-bottom: 1px solid #333;
-  border-top: 1px solid #666;
-  cursor: pointer;
-}
-.panel-head .title, .panel-header .title { font-weight: bold; color: #DDD; font-size: 11px; flex: 1; }
-.panel-arrow {
-  font-size: 8px; color: #999; margin-right: 4px;
-  display: inline-block; transition: transform 0.15s;
-  flex-shrink: 0; width: 10px; text-align: center;
-}
-.panel-header:hover .panel-arrow { color: #fff; }
+/* ─── PANEL BODIES ───
+   The per-panel chrome (header, collapse arrow, fixed column) moved into the
+   dock system above; what remains is the scrolling body each panel's content
+   is rendered into. Two panels want no padding because their content fills
+   the whole area. */
 .panel-body {
-  flex: 1; overflow: auto; padding: 8px;
+  flex: 1; min-height: 0;
+  overflow: auto; padding: 8px;
   background: #353535;
 }
+.panel-body.actions-body, .panel-body.ai-body { padding: 0; overflow: hidden; display: flex; }
+.panel-body.actions-body > textarea { flex: 1; min-height: 0; }
+.panel-body.ai-body > #aiPanel { flex: 1; min-height: 0; }
 
 /* ─── Properties rows ─── */
 .props-title {
@@ -331,7 +433,23 @@ input[type="range"].props-input {
   flex: 1; overflow: auto; position: relative;
   background: #2A2A2A;
 }
-#tlCanvas { display: block; cursor: pointer; min-height: 100%; }
+.tl-spacer-flex { flex: 1; }
+.tl-zoom { display: flex; align-items: center; gap: 3px; margin-right: 6px; }
+.tl-zoom-btn {
+  min-width: 20px; height: 17px; padding: 0 4px;
+  background: linear-gradient(to bottom, #555, #444);
+  border: 1px solid #666; border-bottom-color: #333;
+  color: #DDD; cursor: pointer; font-size: 11px; line-height: 1;
+  border-radius: 2px;
+}
+.tl-zoom-btn.wide { font-size: 10px; padding: 0 6px; }
+.tl-zoom-btn:hover { background: linear-gradient(to bottom, #666, #555); color: #fff; }
+.tl-zoom-label { color: var(--text-dim); font-size: 10px; min-width: 30px; text-align: center; }
+
+#tl-spacer { position: relative; }
+/* Sticky keeps the viewport-sized canvas parked over the visible area while
+   the spacer scrolls underneath it. */
+#tlCanvas { display: block; cursor: pointer; position: sticky; left: 0; top: 0; }
 
 /* selected keyframe highlight */
 .kf-selected {
@@ -339,40 +457,97 @@ input[type="range"].props-input {
   outline-offset: -1px;
 }
 
-/* ─── BOTTOM BAR ─── */
-#bottom-bar { border-top: 1px solid #555; }
-#bottom-tabs {
-  display: flex; background: linear-gradient(to bottom, #4A4A4A, #3C3C3C);
-  align-items: stretch;
+/* ─── MODAL DIALOGS ───
+   Replaces window.prompt(), which throws in Electron and therefore made
+   every feature that used it dead in the desktop build. */
+.fy-dialog-backdrop {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
 }
-.btab, .bottom-tab {
-  padding: 4px 14px; font-size: 10px; font-weight: bold;
-  cursor: pointer; color: #AAA;
-  border-right: 1px solid #333;
+.fy-dialog {
+  width: min(460px, 92vw);
+  background: var(--chrome);
+  border: 1px solid var(--bevel-lo);
+  border-top-color: var(--bevel-hi); border-left-color: var(--bevel-hi);
+  border-radius: 5px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  display: flex; flex-direction: column;
+  max-height: 86vh;
 }
-.btab:hover, .bottom-tab:hover { color: #fff; }
-.btab.active, .bottom-tab.active {
-  background: #353535; color: #fff;
-  border-bottom: 2px solid var(--accent);
+.fy-dialog-title {
+  background: linear-gradient(to bottom, #585858, #454545);
+  border-bottom: 1px solid #333;
+  padding: 7px 12px; font-weight: bold; color: #EEE; font-size: 12px;
+  border-radius: 4px 4px 0 0;
 }
-#bottom-collapse {
-  margin-left: auto;
-  padding: 4px 12px; font-size: 10px;
-  cursor: pointer; color: #AAA;
-  border-left: 1px solid #333;
-  display: flex; align-items: center;
-  user-select: none;
+.fy-dialog-body { padding: 12px; overflow: auto; }
+/* pre-wrap so a message can use a blank line between paragraphs; textContent
+   otherwise collapses them into one run of text. */
+.fy-dialog-msg { color: var(--text); margin-bottom: 10px; line-height: 1.45; white-space: pre-wrap; }
+.fy-dialog-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.fy-dialog-label { width: 92px; flex: 0 0 auto; color: var(--text-dim); text-align: right; }
+.fy-dialog-input {
+  flex: 1; min-width: 0;
+  background: var(--input-bg); color: var(--text-bright);
+  border: 1px solid var(--input-bd); border-radius: 3px;
+  padding: 5px 7px; font: inherit;
 }
-#bottom-collapse:hover { color: #fff; }
-.bottom-panel { background: #353535; padding: 6px; }
-#bottom-bar.collapsed .bottom-panel { display: none !important; }
-#bp-actions textarea, #actions-panel textarea {
+.fy-dialog-input:focus { outline: none; border-color: var(--accent); }
+.fy-dialog-hint { color: var(--text-dim); font-size: 10px; line-height: 1.45; margin: -2px 0 10px 100px; }
+.fy-dialog-error { color: #ff8e7a; margin-top: 6px; }
+.fy-dialog-foot {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 12px; border-top: 1px solid #2a2a2a;
+  background: #3a3a3a; border-radius: 0 0 4px 4px;
+}
+.fy-dialog-btn {
+  background: linear-gradient(to bottom, #4f4f4f, #424242);
+  color: var(--text); border: 1px solid var(--bevel-lo);
+  border-radius: 3px; padding: 5px 14px; font: inherit; cursor: pointer;
+}
+.fy-dialog-btn:hover { background: linear-gradient(to bottom, #5a5a5a, #4a4a4a); color: #fff; }
+.fy-dialog-btn.primary {
+  background: linear-gradient(to bottom, #5599DD, #4488CC);
+  border-color: var(--accent-dk); color: #fff; font-weight: bold;
+}
+.fy-dialog-btn.primary:hover { background: linear-gradient(to bottom, #66AAEE, #5599DD); }
+
+/* "No API key yet" banner inside the AI panel. */
+.ai-key-notice {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 6px; padding: 8px 10px;
+  background: rgba(68, 136, 204, 0.14);
+  border: 1px solid rgba(68, 136, 204, 0.45);
+  border-radius: 4px; color: #cfe2f5;
+}
+.ai-key-btn {
+  background: linear-gradient(to bottom, #5599DD, #4488CC);
+  color: #fff; border: 1px solid var(--accent-dk);
+  border-radius: 3px; padding: 4px 10px; font: inherit; font-weight: bold; cursor: pointer;
+}
+.ai-key-btn:hover { background: linear-gradient(to bottom, #66AAEE, #5599DD); }
+
+.props-note {
+  color: #8a8a8a; font-size: 10px; line-height: 1.35;
+  padding: 2px 4px 6px 4px; font-style: italic;
+}
+
+/* Audio file dragged over the timeline. */
+#tlCanvas.drop-audio { outline: 2px dashed #6ac98a; outline-offset: -3px; }
+
+/* ─── ACTIONS PANEL ───
+   The frame-script editor. It fills its dock body rather than being a fixed
+   60px box, so docking it to the right column gives you a full-height code
+   pane — which is the point of the workspace being rearrangeable. */
+#frame-script, #actions-panel textarea {
   width: 100%; min-height: 60px;
   background: var(--chrome-xdk); color: #88CC88;
   border: none; font: 11px Consolas, Monaco, monospace;
-  padding: 6px; resize: vertical;
+  padding: 6px; resize: none;
 }
-#actions-panel textarea:focus { outline: 1px solid var(--accent); }
+#frame-script:focus, #actions-panel textarea:focus { outline: 1px solid var(--accent); }
+#frame-script:disabled { color: #666; font-style: italic; }
 
 /* ─── Context Menu ─── */
 .ctx-menu {
@@ -624,6 +799,9 @@ input[type="range"].props-input {
 }
 #ai-send:hover { background: linear-gradient(to bottom, #5588bb, #4477aa); }
 #ai-send:disabled { opacity: 0.4; cursor: default; }
+/* While a request is streaming the button stops it instead of sending. */
+#ai-send.busy { background: linear-gradient(to bottom, #aa5544, #993322); }
+#ai-send.busy:hover { background: linear-gradient(to bottom, #bb6655, #aa4433); }
 .ai-typing {
   color: #5577cc; font-size: 10px; padding: 4px 10px;
   animation: aiBlink 1s infinite;
@@ -670,24 +848,28 @@ input[type="range"].props-input {
   #app {
     height: auto;
     min-height: 100vh;
-    grid-template-rows: auto auto minmax(260px, 55vh) minmax(140px, 30vh) auto;
+    grid-template-rows: auto auto minmax(260px, 55vh) 5px var(--tl-h, 200px) 5px auto;
   }
   #toolbar { flex-wrap: wrap; padding: 4px 6px; gap: 2px; }
   #toolbox { width: 40px; }
-  #right-col { width: 180px; }
+  #dock-right { width: min(var(--dock-right, 240px), 42vw); }
   #tl-layers { width: 110px; }
   #aiPanel { height: 180px; }
-  /* Give the bottom panel a sensible height on mobile, allow inner scroll */
-  #bp-props, #bp-actions { max-height: 40vh; overflow: auto; }
-  .bottom-tab { padding: 6px 10px; font-size: 11px; }
-  #bottom-collapse { padding: 6px 12px; font-size: 12px; }
+  #dock-bottom { max-height: 40vh; }
+  /* Touch targets: a 22px tab strip is a mouse size, not a finger size. */
+  .dock-tabs { height: auto; min-height: 30px; }
+  .dock-tab { padding: 6px 8px 6px 12px; font-size: 11px; }
+  .dock-tab-close { opacity: 1; }
+  .dock-splitter.horizontal { height: 10px; }
+  .dock-splitter.vertical { width: 10px; }
+  .dock-gsplit { height: 10px; }
 }
 
 @media (max-width: 600px) {
-  /* On very narrow phones, drop the right column below the stage so
-     the stage has real horizontal room. */
+  /* On a narrow phone the right dock goes under the stage and scrolls
+     sideways, so the stage keeps real horizontal room. */
   #main { flex-direction: column; }
-  #right-col {
+  #dock-right {
     width: 100%;
     border-left: none;
     border-top: 1px solid #555;
@@ -696,12 +878,118 @@ input[type="range"].props-input {
     overflow-y: hidden;
     min-height: 140px;
   }
-  #right-col .panel {
-    flex: 1 0 200px;
-    border-bottom: none;
-    border-right: 1px solid #333;
-  }
+  #dock-right .dock-group { flex: 1 0 200px; border-right: 1px solid #333; }
+  /* A vertical splitter makes no sense once the dock is stacked below. */
+  .dock-splitter.vertical { display: none; }
   #app {
-    grid-template-rows: auto auto auto minmax(140px, 30vh) auto;
+    grid-template-rows: auto auto auto 5px var(--tl-h, 200px) 5px auto;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LOADING CARD
+   Brand palette (#0a0a14 ground, #ffdd44 accent) rather than the MX2004
+   chrome above — this is the cover, not the workspace. Markup lives in
+   editor.html; splash.js picks the tip and takes it away.
+   ═══════════════════════════════════════════════════════════════════ */
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: radial-gradient(circle at 30% 20%, #1b1b30 0%, #0d0d18 60%, #05050c 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Segoe UI", Tahoma, Verdana, sans-serif;
+  transition: opacity 0.35s ease;
+}
+#splash.is-fading { opacity: 0; pointer-events: none; }
+.splash-frame {
+  width: min(440px, 86vw);
+  padding: 36px 28px 22px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0));
+  border: 1px solid #2c2c40;
+  border-radius: 14px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,221,68,0.06) inset;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+.splash-frame::before {
+  content: "";
+  position: absolute;
+  inset: -40% -40% auto auto;
+  width: 320px; height: 320px;
+  background: radial-gradient(circle, rgba(255,221,68,0.22), transparent 60%);
+  filter: blur(20px);
+  pointer-events: none;
+}
+.splash-mark {
+  width: 72px; height: 72px;
+  margin: 0 auto 18px;
+  border-radius: 14px;
+  background: conic-gradient(from 200deg, #ffe77a, #e5a800, #ffdd44, #ffe77a);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 14px 32px rgba(229,168,0,0.35);
+}
+.splash-mark-inner {
+  width: 56px; height: 56px;
+  border-radius: 10px;
+  background: #0a0a14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.5px;
+}
+/* Mirrors icon.svg: white F, gradient-gold y. */
+.splash-mark-inner .fy-f { color: #f8fafc; }
+.splash-mark-inner .fy-y { color: #ffdd44; }
+.splash-name {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  color: #fff;
+}
+.splash-sub {
+  color: #6e6e85;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-top: 4px;
+  margin-bottom: 22px;
+}
+.splash-progress {
+  height: 3px;
+  background: #1b1b2a;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0 auto 14px;
+  max-width: 240px;
+}
+.splash-progress-bar {
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(90deg, #ffdd44, #e5a800);
+  border-radius: 3px;
+  animation: splashSlide 1.6s ease-in-out infinite;
+}
+@keyframes splashSlide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(380%); }
+}
+.splash-tip {
+  color: #9a9ab0;
+  font-size: 12px;
+  min-height: 32px;
+  line-height: 1.5;
+}
+.splash-credits {
+  color: #6e6e85;
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  margin-top: 14px;
 }

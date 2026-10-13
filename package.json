@@ -1,8 +1,18 @@
 {
   "name": "flashy",
-  "version": "0.1.0",
-  "description": "HTML5 Canvas vector animation engine — a modern Flash alternative with timeline, nested MovieClips, tweening, and a full authoring IDE",
-  "main": "flashy.js",
+  "version": "0.6.0",
+  "description": "HTML5 Canvas vector animation engine \u2014 a modern Flash alternative with timeline, nested MovieClips, tweening, and a full authoring IDE. Runs in the browser and as an installed desktop app.",
+  "// main": "Electron reads `main` to find its entry point, so it points at the desktop shell. Library consumers resolve through `exports` below, which takes precedence in Node and keeps `require(\"flashy\")` on the engine.",
+  "main": "electron/main.cjs",
+  "exports": {
+    ".": "./flashy.js",
+    "./swf": "./flashy-swf.js",
+    "./fla": "./flashy-fla.js",
+    "./*": "./*"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "keywords": [
     "flash",
     "animation",
@@ -15,9 +25,14 @@
     "fla",
     "html5",
     "2d",
-    "game-engine"
+    "game-engine",
+    "electron",
+    "desktop"
   ],
-  "author": "",
+  "author": {
+    "name": "Terry",
+    "email": "terry@principalforce.com"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -29,7 +44,107 @@
     "flashy-fla.js"
   ],
   "scripts": {
-    "start": "python -m http.server 8000",
-    "dev": "python -m http.server 8000"
+    "// serve": "Node rather than `python -m http.server`, so a checkout needs nothing but Node \u2014 same reason the CI job can skip Python entirely.",
+    "start": "node scripts/serve.cjs 8000",
+    "dev": "node scripts/serve.cjs 8000",
+    "test": "playwright test",
+    "test:web": "playwright test --project=chromium",
+    "test:desktop": "playwright test --project=electron",
+    "test:headed": "playwright test --project=chromium --headed",
+    "test:ui": "playwright test --ui",
+    "electron:dev": "electron . --dev",
+    "electron:preview": "electron .",
+    "icons": "node scripts/make-icon.cjs",
+    "// version": "`npm run version:sync` rewrites flashy.js and editor.html from package.json's version, so a release is one edit plus this.",
+    "version:check": "node scripts/check-version.cjs",
+    "version:sync": "node scripts/check-version.cjs --fix",
+    "clean:release": "node scripts/clean-release.cjs",
+    "dist": "npm run clean:release && electron-builder",
+    "dist:win": "npm run clean:release && electron-builder --win",
+    "dist:mac": "npm run clean:release && electron-builder --mac",
+    "dist:linux": "npm run clean:release && electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.principalforce.flashy",
+    "productName": "Flashy",
+    "artifactName": "Flashy-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "electron/**",
+      "editor.html",
+      "editor.css",
+      "editor-app.js",
+      "desktop.js",
+      "splash.js",
+      "workspace.js",
+      "icon.svg",
+      "flashy.js",
+      "flashy-swf.js",
+      "flashy-fla.js",
+      "feedback.js",
+      "index.html",
+      "examples/**",
+      "package.json",
+      "!node_modules/**",
+      "!release/**",
+      "!scripts/**",
+      "!build-resources/**"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "flashy"
+        ],
+        "name": "Flashy Document",
+        "description": "Flashy animation document",
+        "role": "Editor"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build-resources/icon.png"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build-resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Graphics",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build-resources/icon.png"
+    },
+    "npmRebuild": false
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
   }
 }
