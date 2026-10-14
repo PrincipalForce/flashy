@@ -32,7 +32,7 @@ test("every panel starts docked, and there is exactly one of each", async ({ pag
   await page.waitForFunction(() => !!window._flashyWorkspace);
 
   const d = await docks(page);
-  expect(d.right).toEqual([["props"], ["color"], ["library"]]);
+  expect(d.right).toEqual([["props"], ["color"], ["library", "character"]]);
   expect(d.bottom).toEqual([["actions", "ai"]]);
   expect(d.closed).toEqual([]);
 
@@ -138,7 +138,7 @@ test("a corrupt or stale saved layout cannot brick the editor", async ({ page })
   all.push(...l.closed);
 
   // Every registered panel appears exactly once; ghosts and duplicates gone.
-  expect(all.slice().sort()).toEqual(["actions", "ai", "color", "library", "props"]);
+  expect(all.slice().sort()).toEqual(["actions", "ai", "character", "color", "library", "props"]);
   expect(all).not.toContain("ghost-panel");
   expect(all).not.toContain("another-ghost");
   // The explicit close is honoured; the unknown zone is ignored.
@@ -241,7 +241,7 @@ test("workspace presets and reset", async ({ page }) => {
 
   await ws(page, () => window._flashyEditor.doAction("wsReset"));
   d = await docks(page);
-  expect(d.right).toEqual([["props"], ["color"], ["library"]]);
+  expect(d.right).toEqual([["props"], ["color"], ["library", "character"]]);
   expect(d.bottom).toEqual([["actions", "ai"]]);
   expect(d.closed).toEqual([]);
 });

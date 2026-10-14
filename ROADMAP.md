@@ -30,8 +30,9 @@ holding it back was not missing features. It was two things:
 
 Those are fixed. Since then the editor gained a **dockable workspace** (0.3),
 **audio** (0.4), **puppet mechanics** (0.5), a **zoomable timeline** (0.5.1) and
-**auto lip sync** (0.6) — see [VISION.md](VISION.md), which plans the product
-from an animator's point of view rather than a maintainer's. What remains here is
+**auto lip sync** and **character rigging** (0.6) — see
+[VISION.md](VISION.md), which plans the product from an animator's point of
+view rather than a maintainer's. What remains here is
 mostly genuine feature work, plus one large piece of housekeeping (splitting
 `editor-app.js`).
 
@@ -389,7 +390,7 @@ Fixed step list only. Standard in every comparable tool.
 ### ✅ 25. Tests and CI
 
 **What.** `npm test` runs Playwright against the real editor over
-`scripts/serve.cjs`. **69 specs** in `tests/` — 66 in Chromium, 3 driving the
+`scripts/serve.cjs`. **80 specs** in `tests/` — 77 in Chromium, 3 driving the
 real Electron app:
 
 | Spec | n | Covers |
@@ -403,6 +404,7 @@ real Electron app:
 | `audio` | 9 | Import, waveform, scrub, Stream vs Event, the HTML export's audio gate |
 | `puppet` | 8 | Graphic / Movie Clip / Button behaviour on the stage and in exports, Swap Symbol |
 | `dialogs` | 5 | `prompt()` banned, Document Settings validation, the API key dialog, a 7,200-frame timeline, timeline zoom |
+| `character` | 12 | Parenting not moving a part, a parent swinging its child, compounded rotation, a refused cycle, rig draw order, **stage/export parity on a posed limb**, poses saved/applied/round-tripped, mirroring, Animate Poses, the panel tree, drag-to-pose with one undo, and building a character through the menus |
 | `lipsync` | 18 | Silence vs speech, each sound mapping to its own shape, min hold, editable output keyframes, the mouth chart, re-running, the no-sound message, shapes drawn on multi-frame keyframes, a symbol with no `layers`, a collapsed chart being reported, placement inherited onto a new layer, a sound surviving a pass on its own layer, and Set Up Mouth Shapes (creating, charting, tightening, legacy symbols, end-to-end, the menu) |
 | `desktop.espec` | 3 | The shell boots and installs its bridge; dirty state reaches the title and the main process; the in-app dialogs work where `prompt()` throws |
 

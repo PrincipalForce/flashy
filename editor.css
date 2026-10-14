@@ -993,3 +993,73 @@ input[type="range"].props-input {
   letter-spacing: 0.5px;
   margin-top: 14px;
 }
+
+/* ------------------------------------------------------------------ *
+ * Character panel
+ *
+ * A part tree, the selected joint, and the pose library. Indentation is set
+ * inline per row from the hierarchy depth, so the CSS stays flat.
+ * ------------------------------------------------------------------ */
+#charPanel { padding: 6px; font-size: 11px; }
+
+.ch-head { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
+.ch-select {
+  flex: 1; min-width: 0; background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--bevel-lo); border-radius: 3px; padding: 2px 4px;
+  font-size: 11px;
+}
+
+.ch-btn {
+  background: var(--chrome-lt); color: var(--text);
+  border: 1px solid var(--bevel-hi); border-radius: 3px;
+  padding: 2px 7px; font-size: 11px; cursor: pointer; white-space: nowrap;
+}
+.ch-btn:hover { background: var(--chrome-xlt); }
+.ch-primary { background: var(--accent-dk); border-color: var(--accent); }
+.ch-primary:hover { background: var(--accent); }
+.ch-mini {
+  background: transparent; color: var(--text-dim);
+  border: 0; padding: 0 3px; font-size: 10px; cursor: pointer; line-height: 1;
+}
+.ch-mini:hover { color: var(--text); }
+
+.ch-sec { margin-bottom: 10px; }
+.ch-sec-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+  font-size: 9px; color: var(--text-dim);
+  border-bottom: 1px solid var(--bevel-lo);
+  padding-bottom: 3px; margin-bottom: 4px;
+}
+
+.ch-tree { max-height: 180px; overflow-y: auto; }
+.ch-part {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 2px 4px; border-radius: 2px; cursor: default;
+}
+.ch-part:hover { background: rgba(255, 255, 255, 0.06); }
+.ch-part.sel { background: var(--accent-dk); }
+.ch-part-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ch-part-tools { display: flex; gap: 1px; flex: 0 0 auto; }
+
+.ch-detail {
+  margin-top: 6px; padding: 5px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--bevel-lo);
+}
+.ch-detail-title { font-weight: 600; margin-bottom: 4px; }
+.ch-grid { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin-bottom: 5px; }
+.ch-k { color: var(--text-dim); }
+.ch-v { text-align: right; font-variant-numeric: tabular-nums; }
+
+.ch-poses { max-height: 140px; overflow-y: auto; }
+.ch-pose {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 2px 4px; border-radius: 2px;
+}
+.ch-pose:hover { background: rgba(255, 255, 255, 0.06); }
+.ch-pose-name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ch-row { display: flex; gap: 4px; margin-top: 5px; }
+.ch-empty { padding: 4px; }
+.ch-empty p { margin: 0 0 6px; line-height: 1.45; }
+.ch-dim { color: var(--text-dim); }

@@ -42,6 +42,9 @@
     { id: "props", title: "Properties", home: "right" },
     { id: "color", title: "Color Mixer", home: "right" },
     { id: "library", title: "Library", home: "right" },
+    // Shares Library's tab group: both answer "what is this document made of",
+    // and a fourth stacked group would leave every one of them too short.
+    { id: "character", title: "Character", home: "right", with: "library" },
     { id: "actions", title: "Actions", home: "bottom" },
     { id: "ai", title: "AI Assistant", home: "bottom" }
   ];
@@ -81,6 +84,16 @@
     // bottom — the arrangement the editor shipped with, now rearrangeable.
     PANELS.forEach(function (p) {
       var zone = zones[p.home];
+      if (p.with) {
+        // Join the group holding the named panel, wherever that ended up.
+        var host = null;
+        ZONES.forEach(function (z) {
+          zones[z].groups.forEach(function (g) {
+            if (g.panels.indexOf(p.with) >= 0) host = g;
+          });
+        });
+        if (host) { host.panels.push(p.id); return; }
+      }
       if (p.home === "bottom" && zone.groups.length) {
         zone.groups[0].panels.push(p.id);
       } else {
@@ -102,7 +115,7 @@
       var l = defaultLayout();
       l.zones.right.groups = [
         { panels: ["color", "props"], active: "color", weight: 1 },
-        { panels: ["library"], active: "library", weight: 1 }
+        { panels: ["library", "character"], active: "library", weight: 1 }
       ];
       l.zones.bottom.groups = [{ panels: ["actions", "ai"], active: "actions", weight: 1 }];
       l.collapsed.bottom = true;
@@ -116,7 +129,7 @@
       l.zones.right.groups = [{ panels: ["actions", "ai"], active: "actions", weight: 1 }];
       l.zones.bottom.groups = [
         { panels: ["props"], active: "props", weight: 1 },
-        { panels: ["library", "color"], active: "library", weight: 1 }
+        { panels: ["library", "color", "character"], active: "library", weight: 1 }
       ];
       l.sizes.right = 420;
       l.sizes.bottom = 170;

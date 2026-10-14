@@ -21,7 +21,7 @@
     <div class="splash-sub">vector animation studio</div>
     <div class="splash-progress"><div class="splash-progress-bar"></div></div>
     <div class="splash-tip" id="splash-tip"></div>
-    <div class="splash-credits">v0.6 · 2026 · Flash-inspired</div>
+    <div class="splash-credits">v0.7 · 2026 · Flash-inspired</div>
   </div>
 </div>
 <div id="app">
@@ -73,6 +73,7 @@
   <div class="panel-content" data-panel="props"><div class="panel-body" id="propsPanel"></div></div>
   <div class="panel-content" data-panel="color"><div class="panel-body" id="colorPanel"></div></div>
   <div class="panel-content" data-panel="library"><div class="panel-body" id="libPanel"></div></div>
+  <div class="panel-content" data-panel="character"><div class="panel-body" id="charPanel"></div></div>
   <div class="panel-content" data-panel="actions">
     <div class="panel-body actions-body">
       <textarea id="frame-script" placeholder="// Frame script (JavaScript)"></textarea>
@@ -89,6 +90,7 @@
 <!-- Dockable panel layout. Loaded before editor-app.js so its DOMContentLoaded
      handler runs first and the docks exist before the editor fills them. -->
 <script src="workspace.js"></script>
+<script src="character.js"></script>
 <script src="editor-app.js"></script>
 <!-- Electron desktop integration. A no-op in a browser: it does nothing unless
      window.flashyDesktop exists, which only the Electron preload creates. -->
