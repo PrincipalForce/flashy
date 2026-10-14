@@ -129,6 +129,21 @@ Drive the app through its published seams, not its internals:
   **Set Up Mouth Shapes**; it returns `{created, tightened, frames, chart,
   distinct}`. It never discards artwork — new frames are clones of an existing
   drawing, and `tighten` renumbers rather than deletes.
+- **Timeline cell selection** is `tlSelRange` — a *rectangle*
+  `{layerIdx, endLayerIdx, startFrame, endFrame}`, either corner may be the
+  larger. Always read it through `tlRange()`, which normalises and clamps to
+  the layers that exist; `_flashyAI.tlSelect(l0,f0,l1,f1)`/`tlRange()` are the
+  spec entry points.
+- `createSymbolFromFrames()` must leave the artwork visually where it was: the
+  instance is placed at `spanBounds()` and the symbol's objects are shifted by
+  that origin, because symbol space starts at the instance's top-left. When
+  clearing the span, add the placeholder `KeyFrame(1)` **after** inserting the
+  instance — doing it during the clear put a blank keyframe on top of the
+  instance at the same index, which is the bug the position spec caught.
+- A rig nested inside a symbol composes on the stage via `rigDrawPlan` in
+  `paintObj`'s symbol branch, matching `addPlanned` in the export. These two
+  must stay in step; they were not, and only converting a rigged character
+  into a symbol exposed it.
 - **Character rigs** live behind `window._flashyRig`. The rig *is* the keyframe
   objects (`rigChar`, `rigPart`, `rigParent`, `pivotX/Y`, `rigZ`);
   `doc.characters[name]` holds only the template and the pose library. There is

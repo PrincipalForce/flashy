@@ -150,10 +150,16 @@
     wrap.appendChild(el("p", "ch-dim",
       "Draw the body parts first and convert each to a symbol (F8). Then build " +
       "the character from them."));
-    var b = button("New character…", "Create a character rig", function () {
+    var row = el("div", "ch-row");
+    // Biped first: a complete rig in one step is almost always what someone
+    // opening this panel for the first time wants.
+    row.appendChild(button("New biped…", "Build a complete two-legged rig", function () {
+      window._flashyEditor.doAction("newBiped");
+    }, "ch-btn ch-primary"));
+    row.appendChild(button("Empty…", "Create a character and add parts yourself", function () {
       window._flashyEditor.doAction("newCharacter");
-    }, "ch-btn ch-primary");
-    wrap.appendChild(b);
+    }));
+    wrap.appendChild(row);
     return wrap;
   }
 
@@ -188,8 +194,8 @@
     sel.addEventListener("change", function () { current = sel.value; render(); });
     row.appendChild(sel);
 
-    row.appendChild(button("+", "New character", function () {
-      window._flashyEditor.doAction("newCharacter");
+    row.appendChild(button("+", "New biped", function () {
+      window._flashyEditor.doAction("newBiped");
     }));
     row.appendChild(button("✕", "Delete this character", function () {
       window._flashyEditor.doAction("deleteCharacter");

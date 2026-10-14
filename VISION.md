@@ -194,7 +194,12 @@ the anatomically wrong answer, because it has no idea which way a knee goes.
 Out of reach, the limb straightens toward the target and stops, which is what
 it should do.
 
-Still to come: a biped template, so a first rig is one click rather than six.
+**The biped template shipped in 0.7.2.** A complete 13-part rig in one step,
+with the things a first-time rigger gets wrong already right: joints at the top
+of each limb, the far arm and leg behind the body, elbow and knee limits so IK
+stays anatomically honest, and a saved "Rest" pose so Animate Poses is usable
+immediately. The parts are ordinary symbols, so it is a starting point rather
+than a fixed skeleton.
 
 ### ✅ 5. Puppet mechanics — shipped in 0.5
 
