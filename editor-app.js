@@ -20,7 +20,7 @@ Layer.prototype.removeKeyframe=function(f){var i=-1;for(var j=0;j<this.keyframes
 // duration}. Keyframes reference assets by name, the same way symbol instances
 // reference `library`. Audio travels inside the .flashy document so a project
 // is still one self-contained file.
-var doc={width:550,height:400,fps:24,backgroundColor:"#FFFFFF",layers:[new Layer("Layer 1")],library:{},sounds:{},totalFrames:60};
+var doc={width:550,height:400,fps:24,backgroundColor:"#FFFFFF",layers:[new Layer("Layer 1")],library:{},sounds:{},characters:{},totalFrames:60};
 Object.defineProperty(doc,"maxFrame",{get:function(){var m=1;this.layers.forEach(function(l){var e=l.getFrameEnd();if(e>m)m=e;});return Math.max(m,this.totalFrames);}});
 var curLayer=0,curFrame=1,selection=[],clipboard=[],playing=false,playTimer=null;
 var selectedKF=null; // {layerIdx, frameIdx} — which keyframe cell is selected in the timeline
@@ -384,6 +384,17 @@ var menus=[
     {label:"Remove Keyframe",action:"removeKF",shortcut:"Shift+F6"},
     {label:"Remove Frames",action:"removeFrames",shortcut:"Shift+F5"}
   ]},
+  {label:"Character",items:[
+    {label:"New Character...",action:"newCharacter"},
+    {label:"Add Part...",action:"addCharacterPart"},
+    {label:"Edit Part...",action:"editCharacterPart"},
+    {type:"sep"},
+    {label:"Save Pose...",action:"saveCharacterPose"},
+    {label:"Animate Poses...",action:"animateCharacter"},
+    {type:"sep"},
+    {label:"Place In Frame",action:"placeCharacter"},
+    {label:"Delete Character...",action:"deleteCharacter"}
+  ]},
   {label:"Control",items:[
     {label:"Play",action:"play",shortcut:"Enter"},
     {label:"Stop",action:"stop"},
@@ -546,6 +557,7 @@ function buildToolbar(){
 var curTool="select";
 var TOOLS=[
   {id:"select",label:"Selection Tool (V)",key:"v",svg:'<path d="M3,1 L3,12 L6,9 L9,13 L11,12 L8,8 L12,7 Z" fill="currentColor"/>'},
+  {id:"pose",label:"Pose Tool (A) \u2014 drag a limb to swing it",key:"a",svg:'<circle cx="4" cy="3" r="2" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><line x1="4" y1="3" x2="8" y2="8" stroke="currentColor" stroke-width="1.4"/><line x1="8" y1="8" x2="12" y2="12" stroke="currentColor" stroke-width="1.4"/>'},
   {id:"transform",label:"Free Transform (Q)",key:"q",svg:'<rect x="2" y="2" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="2" cy="2" r="1.5" fill="currentColor"/><circle cx="12" cy="2" r="1.5" fill="currentColor"/><circle cx="2" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/>'},
   {id:"text",label:"Text Tool (T)",key:"t",svg:'<text x="3" y="12" font-size="12" font-weight="bold" fill="currentColor">T</text>'},
   {id:"line",label:"Line Tool (N)",key:"n",svg:'<line x1="2" y1="12" x2="12" y2="2" stroke="currentColor" stroke-width="1.5"/>'},
@@ -602,6 +614,8 @@ function initCursors(){
   toolCursors.eyedrop=buildCursor('<path d="M17,1 L21,5 L19,7 L11,15 L8,16 L7,13 L15,5 L17,3 Z" fill="#DDD" stroke="#000" stroke-width="0.8"/><path d="M8,16 L7,13 L5,19 Z" fill="#000"/>',5,19);
   // Hand — open hand
   toolCursors.hand='grab';
+  // Pose — a joint with a rotation arrow, so the mode is obvious.
+  toolCursors.pose=buildCursor('<path d="M3,12 A9,9 0 0 1 12,3" fill="none" stroke="#000" stroke-width="1.6"/><path d="M12,3 L9,1 L9,5 Z" fill="#000"/><circle cx="4" cy="13" r="3" fill="#FFD24A" stroke="#000" stroke-width="1"/>',4,13);
   // Zoom — magnifying glass
   toolCursors.zoom='zoom-in';
 }
@@ -677,8 +691,13 @@ function render(){
     ctx.strokeRect(0,0,doc.width,doc.height);
     ctx.setLineDash([]);
   }
-  // render layers bottom to top
-  frameObjects(currentLayers(),curFrame).forEach(renderObj);
+  // render layers bottom to top, rigs composed through their hierarchy
+  rigDrawPlan(frameObjects(currentLayers(),curFrame)).forEach(function(e){
+    paintPlanned(ctx,e,{chrome:true});
+  });
+  // Rig overlay sits above the artwork but inside the stage transform, so the
+  // handles track the drawing at any zoom.
+  if(curTool==="pose"||(selection.length===1&&isRigPart(selection[0])))drawRigOverlay(ctx);
   ctx.restore();
   // grid
   if(showGrid){
@@ -833,6 +852,1053 @@ function symbolFrameObjects(sym,frame){
   return out;
 }
 
+/* ---- Character commands ------------------------------------------- *
+ * The dialogs behind the Character panel and the Character menu. Each one is
+ * thin: validate, push undo, call the model, refresh.
+ * -------------------------------------------------------------------- */
+
+function showNewCharacterDialog(){
+  askFor("New Character","Name","Character",function(v){
+    var name=String(v||"").trim();
+    if(!name)return;
+    pushUndo();
+    if(!createCharacter(name)){
+      showMessage("New Character","There is already a character called \u201c"+name+"\u201d.");
+      return;
+    }
+    if(window._flashyCharacterPanel)window._flashyCharacterPanel.select(name);
+    fullRefresh();
+    if(!Object.keys(doc.library).length){
+      showMessage("New Character",
+        "Created \u201c"+name+"\u201d.\n\nIt has no parts yet, and there are no symbols to "+
+        "build it from. Draw each body part, select it and press F8 to make it a "+
+        "symbol \u2014 then use Character \u25b8 Add Part.");
+    }else{
+      showAddCharacterPartDialog(name);
+    }
+  },{okLabel:"Create",hint:"A character is a hierarchy of symbols you can pose."});
+}
+
+function currentCharacterName(){
+  if(window._flashyCharacterPanel&&doc.characters){
+    // Whatever the panel is showing, if it is still a real character.
+    var shown=null;
+    Object.keys(doc.characters).forEach(function(n){
+      if(charPartsOnStage(n).length&&!shown)shown=n;
+    });
+    if(shown)return shown;
+  }
+  var all=Object.keys(doc.characters||{});
+  return all.length?all[0]:null;
+}
+
+function showDeleteCharacterDialog(){
+  var all=Object.keys(characters());
+  if(!all.length){showMessage("Characters","There are no characters to delete.");return;}
+  showDialog({
+    title:"Delete Character",
+    message:"Removes the character, its poses, and its parts from every frame. "+
+            "The symbols it was built from stay in the Library.",
+    fields:[{name:"name",label:"Character",type:"select",value:all[0],
+             options:all.map(function(n){return [n,n];})}],
+    okLabel:"Delete",
+    onOk:function(v){
+      pushUndo();
+      deleteCharacter(v.name);
+      fullRefresh();
+    }
+  });
+}
+
+function showAddCharacterPartDialog(name){
+  name=name||currentCharacterName();
+  var c=name&&characters()[name];
+  if(!c){showMessage("Add Part","Create a character first \u2014 Character \u25b8 New Character.");return;}
+  var syms=Object.keys(doc.library);
+  if(!syms.length){
+    showMessage("Add Part",
+      "There are no symbols to use as a body part. Draw the part, select it and "+
+      "press F8 to convert it to a symbol, then add it here.");
+    return;
+  }
+  var parts=charPartsOnStage(name);
+  var parentOpts=[["","(root \u2014 no parent)"]].concat(parts.map(function(o){
+    return [o.rigPart,o.name||o.rigPart];
+  }));
+  // Parent defaults to the selected part, which is what makes building a limb
+  // chain quick: add upper arm, keep it selected, add forearm.
+  var sel=selection.length===1&&isRigPart(selection[0])&&selection[0].rigChar===name
+    ?selection[0].rigPart:"";
+
+  showDialog({
+    title:"Add Part \u2014 "+name,
+    message:"Each part is an instance of a library symbol. Its joint starts at the "+
+            "top-centre, where a shoulder, hip or neck usually sits.",
+    fields:[
+      {name:"symbol",label:"Symbol",type:"select",value:syms[0],
+       options:syms.map(function(n){return [n,n];})},
+      {name:"partName",label:"Part name",value:"",
+       placeholder:"Left Forearm",
+       hint:"Naming parts \u201cLeft \u2026\u201d and \u201cRight \u2026\u201d lets poses be mirrored."},
+      {name:"parent",label:"Attached to",type:"select",value:sel,options:parentOpts,
+       hint:"Rotating the parent swings this part with it."}
+    ],
+    okLabel:"Add",
+    validate:function(v){
+      if(!v.symbol)return "Pick a symbol.";
+      return null;
+    },
+    onOk:function(v){
+      pushUndo();
+      var sym=doc.library[v.symbol];
+      var size=symbolBounds(sym);
+      var o=addCharacterPart({
+        character:name,
+        symbolName:v.symbol,
+        partName:String(v.partName||"").trim()||v.symbol,
+        parent:v.parent||"",
+        width:size.width,height:size.height
+      });
+      if(o){
+        selection=[o];
+        setTool("pose");
+      }
+      fullRefresh();
+    }
+  });
+}
+
+/**
+ * A symbol's drawn size, so a new part arrives at the size of its artwork
+ * rather than an arbitrary square the user has to fix every time.
+ */
+function symbolBounds(sym){
+  var def={width:80,height:80};
+  if(!sym)return def;
+  var objs=[];
+  if(sym.layers&&sym.layers.length){
+    sym.layers.forEach(function(l){
+      var kf=(l.keyframes||[])[0];
+      if(kf)objs=objs.concat(kf.objects||[]);
+    });
+  }else objs=sym.objects||[];
+  if(!objs.length)return def;
+  var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  objs.forEach(function(o){
+    var x0=Math.min(o.x||0,(o.x||0)+(o.width||0)),x1=Math.max(o.x||0,(o.x||0)+(o.width||0));
+    var y0=Math.min(o.y||0,(o.y||0)+(o.height||0)),y1=Math.max(o.y||0,(o.y||0)+(o.height||0));
+    if(x0<minX)minX=x0;if(y0<minY)minY=y0;
+    if(x1>maxX)maxX=x1;if(y1>maxY)maxY=y1;
+  });
+  if(!isFinite(minX))return def;
+  return {width:Math.max(4,Math.round(maxX-minX)),height:Math.max(4,Math.round(maxY-minY))};
+}
+
+function showEditCharacterPartDialog(){
+  var o=selection.length===1&&isRigPart(selection[0])?selection[0]:null;
+  if(!o){showMessage("Edit Part","Select a character part first.");return;}
+  var name=o.rigChar;
+  var others=charPartsOnStage(name).filter(function(q){return q!==o;});
+  var parentOpts=[["","(root \u2014 no parent)"]].concat(others.map(function(q){
+    return [q.rigPart,q.name||q.rigPart];
+  }));
+
+  showDialog({
+    title:"Part \u2014 "+(o.name||o.rigPart),
+    message:"The joint is in the part's own coordinates. You can also drag it on "+
+            "stage with Ctrl held and the Pose tool.",
+    fields:[
+      {name:"partName",label:"Name",value:o.name||o.rigPart},
+      {name:"parent",label:"Attached to",type:"select",value:o.rigParent||"",options:parentOpts},
+      {name:"pivotX",label:"Joint X",type:"number",
+       value:o.pivotX!=null?o.pivotX:(o.width||0)/2},
+      {name:"pivotY",label:"Joint Y",type:"number",
+       value:o.pivotY!=null?o.pivotY:(o.height||0)/2},
+      {name:"rotation",label:"Rotation",type:"number",value:o.rotation||0}
+    ],
+    okLabel:"Apply",
+    extraButtons:[{
+      label:"Remove part",
+      onClick:function(){
+        pushUndo();
+        removeCharacterPart(name,o.rigPart);
+        selection=[];
+        fullRefresh();
+      }
+    }],
+    onOk:function(v){
+      pushUndo();
+      var problem=reparentCharacterPart(name,o.rigPart,v.parent||"");
+      if(problem){
+        showMessage("Part",problem);
+        return;
+      }
+      o.name=String(v.partName||"").trim()||o.rigPart;
+      o.pivotX=parseFloat(v.pivotX)||0;
+      o.pivotY=parseFloat(v.pivotY)||0;
+      o.rotation=parseFloat(v.rotation)||0;
+      syncCharacterFromStage(name);
+      fullRefresh();
+    }
+  });
+}
+
+function showSavePoseDialog(){
+  var name=currentCharacterName();
+  if(!name||!charPartsOnStage(name).length){
+    showMessage("Save Pose","Put a character in this frame first.");
+    return;
+  }
+  askFor("Save Pose","Name","Pose",function(v){
+    var pn=String(v||"").trim();
+    if(!pn)return;
+    pushUndo();
+    if(!saveCharacterPose(name,pn)){
+      showMessage("Save Pose","Could not read the character's parts.");
+      return;
+    }
+    fullRefresh();
+  },{okLabel:"Save",
+     hint:"Poses store rotation, position and scale per part \u2014 never artwork."});
+}
+
+/**
+ * Pose-to-pose animation.
+ *
+ * Fixed at six steps because the dialog cannot grow rows, and six is more than
+ * a walk cycle needs — a cycle is usually four key poses. Leaving a step on
+ * "(none)" ends the sequence.
+ */
+var RIG_ANIM_STEPS=6;
+
+function showAnimateCharacterDialog(){
+  var name=currentCharacterName();
+  var c=name&&characters()[name];
+  if(!c){showMessage("Animate Poses","Create a character first.");return;}
+  var poses=Object.keys(c.poses||{}).sort();
+  if(poses.length<1){
+    showMessage("Animate Poses",
+      "Save at least one pose first. Pose the character, then Character \u25b8 Save Pose.");
+    return;
+  }
+
+  var poseOpts=[["","(none)"]].concat(poses.map(function(n){return [n,n];}));
+  var fields=[];
+  for(var i=0;i<RIG_ANIM_STEPS;i++){
+    fields.push({name:"p"+i,label:(i===0?"Pose 1":"Pose "+(i+1)),type:"select",
+                 value:i<poses.length?poses[i]:"",options:poseOpts});
+    fields.push({name:"f"+i,label:"\u2193 hold",type:"number",value:4,min:1,max:240});
+  }
+  fields.push({name:"loop",label:"Loop",type:"select",value:"1",options:[
+    ["1","Return to the first pose at the end"],
+    ["0","Stop on the last pose"]
+  ],hint:"A cycle has to come back round, or it jumps on repeat."});
+  fields.push({name:"tween",label:"Between poses",type:"select",value:"motion",options:[
+    ["motion","Tween (smooth)"],
+    ["none","Hold (stepped)"]
+  ]});
+  fields.push({name:"start",label:"Start frame",type:"number",value:curFrame||1,min:1,max:9999});
+
+  showDialog({
+    title:"Animate Poses \u2014 "+name,
+    message:"Writes the poses onto this layer as keyframes and tweens between them. "+
+            "Frames in the range are replaced.",
+    fields:fields,
+    okLabel:"Animate",
+    validate:function(v){
+      for(var i=0;i<RIG_ANIM_STEPS;i++)if(v["p"+i])return null;
+      return "Pick at least one pose.";
+    },
+    onOk:function(v){
+      var steps=[];
+      for(var i=0;i<RIG_ANIM_STEPS;i++){
+        if(!v["p"+i])continue;
+        steps.push({pose:v["p"+i],frames:Math.max(1,parseInt(v["f"+i],10)||4)});
+      }
+      pushUndo();
+      var res=animateCharacterPoses({
+        character:name,
+        steps:steps,
+        startFrame:Math.max(1,parseInt(v.start,10)||1),
+        loop:v.loop==="1",
+        tween:v.tween!=="none"
+      });
+      if(!res){
+        showMessage("Animate Poses","Could not write the sequence.");
+        return;
+      }
+      curLayer=res.layerIndex>=0?res.layerIndex:curLayer;
+      fullRefresh();
+      showMessage("Animate Poses",
+        res.steps.length+" keyframes written across frames "+res.startFrame+
+        "\u2013"+res.endFrame+". Press Enter to play it.\n\n"+
+        "To adjust, drag a limb on any of those keyframes \u2014 they are ordinary "+
+        "keyframes, so the tween follows.",
+        {okLabel:"Done"});
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Characters — the stored side of a rig
+ *
+ * The objects in a keyframe ARE the rig: they hold the hierarchy, the pivots
+ * and the current pose. That is deliberate — one source of truth means posing,
+ * keyframing and tweening all work through machinery that already exists, and
+ * a pose cannot drift out of step with what is on screen.
+ *
+ * `doc.characters[name]` holds the two things the stage cannot:
+ *   parts  — a template, so the character can be placed on another frame or
+ *            in another scene, and so the panel has something to show when the
+ *            character is not in the current keyframe.
+ *   poses  — named sets of per-part transforms. This is what makes re-use
+ *            possible, and what pose-to-pose animation is built from.
+ * -------------------------------------------------------------------- */
+
+/** Fields that make up a part's structure, as opposed to its pose. */
+var RIG_STRUCT=["rigPart","rigParent","name","symbolName","pivotX","pivotY","rigZ",
+                "width","height","type","fillColor","strokeColor","strokeWidth"];
+/** Fields a pose captures. A pose is a transform, never artwork. */
+var RIG_POSE_FIELDS=["x","y","rotation","scaleX","scaleY"];
+
+function characters(){
+  if(!doc.characters)doc.characters={};
+  return doc.characters;
+}
+
+/** Every rig part of `name` in the current keyframe, in document order. */
+function charPartsOnStage(name){
+  var kf=CKF();
+  if(!kf)return [];
+  return kf.objects.filter(function(o){return isRigPart(o)&&o.rigChar===name;});
+}
+
+function charPartById(name,partId){
+  var all=charPartsOnStage(name);
+  for(var i=0;i<all.length;i++)if(all[i].rigPart===partId)return all[i];
+  return null;
+}
+
+/** A short, stable, unique part id. */
+function uniquePartId(name,base){
+  var used={};
+  charPartsOnStage(name).forEach(function(o){used[o.rigPart]=1;});
+  var c=characters()[name];
+  if(c)(c.parts||[]).forEach(function(pt){used[pt.rigPart]=1;});
+  base=String(base||"part").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"part";
+  if(!used[base])return base;
+  var n=2;
+  while(used[base+"-"+n])n++;
+  return base+"-"+n;
+}
+
+/**
+ * Refresh a character's stored template from what is on stage.
+ *
+ * Called after every structural edit, so the template cannot fall behind the
+ * rig the user is actually looking at — the failure mode would be placing the
+ * character again and getting last week's hierarchy.
+ */
+function syncCharacterFromStage(name){
+  var c=characters()[name];
+  if(!c)return null;
+  var parts=charPartsOnStage(name);
+  if(!parts.length)return c;
+  c.parts=parts.map(function(o){
+    var t=plainObj(o);
+    delete t.id;
+    delete t._startFrame;
+    delete t._parentFrame;
+    return t;
+  });
+  return c;
+}
+
+/** Create an empty character. */
+function createCharacter(name){
+  if(!name)return null;
+  var cs=characters();
+  if(cs[name])return null;
+  cs[name]={name:name,parts:[],poses:{}};
+  return cs[name];
+}
+
+function deleteCharacter(name){
+  var cs=characters();
+  if(!cs[name])return false;
+  // Remove its parts from every keyframe, or the document keeps objects that
+  // claim to belong to a rig that no longer exists.
+  eachKeyframe(function(kf){
+    kf.objects=kf.objects.filter(function(o){return !(isRigPart(o)&&o.rigChar===name);});
+  });
+  delete cs[name];
+  return true;
+}
+
+/** Walk every keyframe in the document, including inside library symbols. */
+function eachKeyframe(fn){
+  doc.layers.forEach(function(l){(l.keyframes||[]).forEach(fn);});
+  Object.keys(doc.library).forEach(function(n){
+    var sym=doc.library[n];
+    (sym.layers||[]).forEach(function(l){(l.keyframes||[]).forEach(fn);});
+  });
+}
+
+/**
+ * Add a part to a character, as an instance of a library symbol.
+ *
+ * The part lands at its symbol's natural size in the middle of the stage
+ * unless told otherwise, with its pivot at the top-centre — where a limb's
+ * joint usually is, which is a better default than the centre for a rig.
+ */
+function addCharacterPart(opts){
+  opts=opts||{};
+  var name=opts.character;
+  var c=characters()[name];
+  if(!c)return null;
+  var kf=CKF();
+  if(!kf)return null;
+
+  var o=new EditorObject("symbol");
+  o.type="symbol";
+  o.symbolName=opts.symbolName||"";
+  o.symbolBehavior="graphic";
+  o.loopMode="single";
+  o.firstFrame=1;
+  o.width=opts.width||80;
+  o.height=opts.height||80;
+  o.x=opts.x!=null?opts.x:Math.round((doc.width-o.width)/2);
+  o.y=opts.y!=null?opts.y:Math.round((doc.height-o.height)/2);
+  o.rigChar=name;
+  o.rigPart=uniquePartId(name,opts.partName||opts.symbolName||"part");
+  o.rigParent=opts.parent||"";
+  o.name=opts.partName||opts.symbolName||o.rigPart;
+  // Top-centre: a shoulder, hip or neck sits at the top of the limb it drives.
+  o.pivotX=opts.pivotX!=null?opts.pivotX:o.width/2;
+  o.pivotY=opts.pivotY!=null?opts.pivotY:0;
+  o.rigZ=opts.rigZ!=null?opts.rigZ:charPartsOnStage(name).length;
+
+  kf.objects.push(o);
+  syncCharacterFromStage(name);
+  return o;
+}
+
+/** Remove a part, re-parenting its children to its own parent. */
+function removeCharacterPart(name,partId){
+  var kf=CKF();
+  if(!kf)return false;
+  var part=charPartById(name,partId);
+  if(!part)return false;
+  charPartsOnStage(name).forEach(function(o){
+    if(o.rigParent===partId)o.rigParent=part.rigParent||"";
+  });
+  kf.objects=kf.objects.filter(function(o){return o!==part;});
+  syncCharacterFromStage(name);
+  return true;
+}
+
+/**
+ * Re-parent a part. Refuses to create a cycle, which would otherwise make the
+ * rig undrawable — the draw walk is guarded, but a rig that silently stops
+ * composing is worse than a refused edit.
+ */
+function reparentCharacterPart(name,partId,newParent){
+  var part=charPartById(name,partId);
+  if(!part)return "No such part.";
+  newParent=newParent||"";
+  if(newParent===partId)return "A part cannot be its own parent.";
+  if(newParent){
+    var byId=rigIndex(charPartsOnStage(name));
+    var cur=byId[name+"/"+newParent],guard=0;
+    while(cur&&guard++<RIG_MAX_DEPTH){
+      if(cur.rigPart===partId)return "That would make a loop in the hierarchy.";
+      cur=cur.rigParent?byId[name+"/"+cur.rigParent]:null;
+    }
+  }
+  part.rigParent=newParent;
+  syncCharacterFromStage(name);
+  return null;
+}
+
+/** Move a part in the draw order. `dir` is -1 (back) or +1 (front). */
+function nudgeCharacterPartZ(name,partId,dir){
+  var parts=charPartsOnStage(name).slice().sort(function(a,b){
+    return (a.rigZ||0)-(b.rigZ||0);
+  });
+  var i=-1;
+  parts.forEach(function(o,qi){if(o.rigPart===partId)i=qi;});
+  if(i<0)return false;
+  var j=i+(dir<0?-1:1);
+  if(j<0||j>=parts.length)return false;
+  var a=parts[i],b=parts[j];
+  var az=a.rigZ!=null?a.rigZ:i,bz=b.rigZ!=null?b.rigZ:j;
+  a.rigZ=bz;b.rigZ=az;
+  // Renumber so the order is dense and stable for the next nudge.
+  parts.slice().sort(function(x,y){return (x.rigZ||0)-(y.rigZ||0);})
+    .forEach(function(o,qi){o.rigZ=qi;});
+  syncCharacterFromStage(name);
+  return true;
+}
+
+/** Place a character's stored template into the current keyframe. */
+function instanceCharacter(name,opts){
+  opts=opts||{};
+  var c=characters()[name];
+  var kf=CKF();
+  if(!c||!kf||!(c.parts||[]).length)return null;
+  // Replacing rather than stacking: two copies of one rig in a keyframe share
+  // part ids, so the hierarchy would resolve to whichever came first.
+  kf.objects=kf.objects.filter(function(o){return !(isRigPart(o)&&o.rigChar===name);});
+  var dx=opts.dx||0,dy=opts.dy||0;
+  var made=[];
+  c.parts.forEach(function(t){
+    var o=reviveObject(t);
+    o.id=uid();
+    o.x=(t.x||0)+dx;
+    o.y=(t.y||0)+dy;
+    o.rigChar=name;
+    kf.objects.push(o);
+    made.push(o);
+  });
+  return made;
+}
+
+/* ---- Poses ------------------------------------------------------- *
+ * A pose is per-part transform only. It never carries artwork, so applying a
+ * pose to a character you have since redrawn still works, and a pose saved
+ * from one character can be applied to another with the same part ids.
+ * ------------------------------------------------------------------- */
+
+function saveCharacterPose(name,poseName){
+  var c=characters()[name];
+  if(!c||!poseName)return null;
+  var parts=charPartsOnStage(name);
+  if(!parts.length)return null;
+  var pose={};
+  parts.forEach(function(o){
+    var t={};
+    RIG_POSE_FIELDS.forEach(function(k){
+      t[k]=o[k]!=null?o[k]:(k==="scaleX"||k==="scaleY"?1:0);
+    });
+    pose[o.rigPart]=t;
+  });
+  c.poses=c.poses||{};
+  c.poses[poseName]=pose;
+  return pose;
+}
+
+function applyCharacterPose(name,poseName,opts){
+  opts=opts||{};
+  var c=characters()[name];
+  if(!c||!c.poses||!c.poses[poseName])return 0;
+  var pose=c.poses[poseName];
+  var n=0;
+  charPartsOnStage(name).forEach(function(o){
+    var t=pose[o.rigPart];
+    if(!t)return;
+    RIG_POSE_FIELDS.forEach(function(k){
+      // Position is part of a pose, but holding it lets you re-use a pose on a
+      // character that has walked somewhere else.
+      if(opts.rotationOnly&&k!=="rotation"&&k!=="scaleX"&&k!=="scaleY")return;
+      if(t[k]!=null)o[k]=t[k];
+    });
+    n++;
+  });
+  return n;
+}
+
+function deleteCharacterPose(name,poseName){
+  var c=characters()[name];
+  if(!c||!c.poses||!c.poses[poseName])return false;
+  delete c.poses[poseName];
+  return true;
+}
+
+/**
+ * The matching left/right part for mirroring.
+ *
+ * Inferred from the part's name, because a rig built by a person names things
+ * "Left Arm" and "Right Arm" and asking them to declare pairs as well would be
+ * busywork. Returns null when there is no partner, which simply means that
+ * part mirrors onto itself.
+ */
+function mirrorPartnerId(name,partId){
+  var parts=charPartsOnStage(name);
+  if(!parts.length)parts=(characters()[name]||{}).parts||[];
+  var me=null;
+  parts.forEach(function(o){if(o.rigPart===partId)me=o;});
+  if(!me)return null;
+  var label=String(me.name||me.rigPart);
+  var flipped=label
+    .replace(/\bLeft\b/g,"\u0000").replace(/\bRight\b/g,"Left").replace(/\u0000/g,"Right")
+    .replace(/\bleft\b/g,"\u0000").replace(/\bright\b/g,"left").replace(/\u0000/g,"right")
+    .replace(/^L[\s_-]/,"R ").replace(/^R[\s_-]/,"L ");
+  if(flipped===label)return null;
+  var hit=null;
+  parts.forEach(function(o){
+    if(o.rigPart===partId)return;
+    if(String(o.name||o.rigPart).toLowerCase()===flipped.toLowerCase())hit=o;
+  });
+  return hit?hit.rigPart:null;
+}
+
+/**
+ * Mirror a pose left-to-right.
+ *
+ * Indispensable for a walk: the second half of the cycle is the first half
+ * mirrored, and doing it by hand is both tedious and where mistakes creep in.
+ */
+function mirrorCharacterPose(name,poseName,intoName){
+  var c=characters()[name];
+  if(!c||!c.poses||!c.poses[poseName])return null;
+  var src=c.poses[poseName];
+  var out={};
+  Object.keys(src).forEach(function(pid){
+    var partner=mirrorPartnerId(name,pid);
+    var target=partner||pid;
+    var t=src[pid];
+    out[target]={
+      x:t.x,y:t.y,
+      // A mirrored limb swings the other way, and mirroring flips handedness.
+      rotation:-(t.rotation||0),
+      scaleX:t.scaleX!=null?t.scaleX:1,
+      scaleY:t.scaleY!=null?t.scaleY:1
+    };
+  });
+  c.poses[intoName||(poseName+" (mirrored)")]=out;
+  return out;
+}
+
+/**
+ * Write a sequence of poses onto the timeline as keyframes with tweens
+ * between them — pose-to-pose animation, which is how a cycle is actually
+ * built.
+ *
+ * opts: {character, steps:[{pose, frames}], startFrame, loop, tween}
+ */
+function animateCharacterPoses(opts){
+  opts=opts||{};
+  var name=opts.character;
+  var c=characters()[name];
+  var steps=(opts.steps||[]).filter(function(st){
+    return st&&st.pose&&c&&c.poses&&c.poses[st.pose];
+  });
+  if(!c||!steps.length)return null;
+
+  var layer=CL();
+  if(!layer)return null;
+  var start=Math.max(1,opts.startFrame||curFrame||1);
+  var tween=opts.tween===false?"none":"motion";
+
+  // A looping cycle returns to its first pose, so the last step tweens home
+  // instead of snapping.
+  var seq=steps.slice();
+  if(opts.loop)seq.push({pose:steps[0].pose,frames:1});
+
+  var total=seq.reduce(function(a,st){return a+Math.max(1,st.frames||1);},0);
+  var end=start+total-1;
+
+  // Replace the span this cycle covers; leave the rest of the layer alone.
+  var rescued=[];
+  layer.keyframes.forEach(function(kf){
+    var covered=!(kf.index+kf.duration-1<start||kf.index>end);
+    if(covered&&kf.sound)rescued.push({index:kf.index,sound:kf.sound});
+  });
+  layer.keyframes=layer.keyframes.filter(function(kf){
+    return kf.index+kf.duration-1<start||kf.index>end;
+  });
+
+  // Each step needs the character present so a pose has something to pose.
+  var frame=start,written=[];
+  seq.forEach(function(st,si){
+    var kf=new KeyFrame(frame);
+    kf.duration=Math.max(1,st.frames||1);
+    kf.tweenType=(si<seq.length-1)?tween:"none";
+    kf.easing=opts.easing||"linear";
+    kf.objects=(c.parts||[]).map(function(t){
+      var o=reviveObject(t);
+      o.id=uid();
+      o.rigChar=name;
+      return o;
+    });
+    layer.keyframes.push(kf);
+    // Pose it by writing the transforms straight onto this keyframe's parts.
+    var pose=c.poses[st.pose];
+    kf.objects.forEach(function(o){
+      var t=pose[o.rigPart];
+      if(!t)return;
+      RIG_POSE_FIELDS.forEach(function(k){if(t[k]!=null)o[k]=t[k];});
+    });
+    written.push({frame:frame,pose:st.pose,duration:kf.duration});
+    frame+=kf.duration;
+  });
+
+  layer.keyframes.sort(function(a,b){return a.index-b.index;});
+  rescued.forEach(function(r){
+    var host=null;
+    layer.keyframes.forEach(function(kf){
+      if(r.index>=kf.index&&r.index<kf.index+kf.duration)host=kf;
+    });
+    if(host&&!host.sound)host.sound=r.sound;
+  });
+  if(doc.totalFrames<end)doc.totalFrames=end;
+
+  return {character:name,startFrame:start,endFrame:end,steps:written,
+          layerIndex:currentLayers().indexOf(layer)};
+}
+
+/* ------------------------------------------------------------------ *
+ * Character rigs
+ *
+ * A rig is a flat list of parts that live together in one keyframe, each
+ * carrying who its parent is and where its pivot is. Transforms compose as
+ *
+ *     translate(pivot) · rotate · scale · translate(-pivot)
+ *
+ * applied for every ancestor and then for the part itself, all in ONE shared
+ * coordinate space. Two consequences make this the right model for a Flash
+ * tool:
+ *
+ *  - Parts keep the coordinates you drew them at. Parenting an arm to a torso
+ *    does not move it, so building a rig never disturbs the artwork.
+ *  - Rotating the shoulder swings the whole arm, because the child inherits
+ *    the ancestor transforms rather than being nested inside the parent's
+ *    symbol. You pose the whole character on one stage instead of diving into
+ *    a nested symbol per limb, which is the thing Flash animators hated.
+ *
+ * Draw order is `rigZ`, independent of the hierarchy — the far arm has to sit
+ * behind the torso it is parented to, which nesting cannot express.
+ *
+ * The same formula maps onto two nested engine containers per part (an outer
+ * one holding translate+rotate+scale, an inner one holding -pivot), so the
+ * HTML export composes identically instead of approximating.
+ * -------------------------------------------------------------------- */
+
+/** Is this object part of a character rig? */
+function isRigPart(o){return !!(o&&o.rigChar&&o.rigPart);}
+
+/**
+ * A part's pivot, in the rig's shared space.
+ *
+ * pivotX/pivotY are stored relative to the object's top-left so they survive
+ * resizing, and default to the centre — which is what every non-rigged object
+ * already rotates about, so adopting a rig changes nothing until you move a
+ * pivot.
+ */
+function rigPivot(o){
+  var hw=(o.width||0)/2,hh=(o.height||0)/2;
+  return {
+    x:(o.x||0)+(o.pivotX!=null?o.pivotX:hw),
+    y:(o.y||0)+(o.pivotY!=null?o.pivotY:hh)
+  };
+}
+
+/** Apply one part's pivot transform, without drawing it. */
+function applyPivotTransform(cx,o){
+  var pv=rigPivot(o);
+  cx.translate(pv.x,pv.y);
+  if(o.rotation)cx.rotate(o.rotation*Math.PI/180);
+  if((o.scaleX!=null&&o.scaleX!==1)||(o.scaleY!=null&&o.scaleY!==1)){
+    cx.scale(o.scaleX!=null?o.scaleX:1,o.scaleY!=null?o.scaleY:1);
+  }
+  cx.translate(-pv.x,-pv.y);
+}
+
+/** Index a list of objects by rig part id, per character. */
+function rigIndex(objects){
+  var byId={};
+  (objects||[]).forEach(function(o){
+    if(isRigPart(o))byId[o.rigChar+"/"+o.rigPart]=o;
+  });
+  return byId;
+}
+
+/**
+ * A part's ancestors, outermost first.
+ *
+ * Guarded against a cycle: a rig edited by hand (or by the assistant) could
+ * name itself its own ancestor, and an unguarded walk would hang the editor
+ * rather than draw something wrong.
+ */
+function rigAncestors(o,byId){
+  var out=[],seen={},cur=o,guard=0;
+  while(cur&&cur.rigParent&&guard++<RIG_MAX_DEPTH){
+    var key=cur.rigChar+"/"+cur.rigParent;
+    if(seen[key])break;
+    seen[key]=1;
+    var par=byId[key];
+    if(!par)break;
+    out.unshift(par);
+    cur=par;
+  }
+  return out;
+}
+var RIG_MAX_DEPTH=24;
+
+/**
+ * Turn a flat frame into a draw plan: `{obj, chain}` in paint order.
+ *
+ * Non-rig objects keep their existing order exactly, so nothing about an
+ * unrigged document changes. A character's parts are drawn as one block at the
+ * position of its first part, ordered by `rigZ`, so a rig cannot silently jump
+ * in front of or behind the rest of the layer.
+ */
+function rigDrawPlan(objects){
+  objects=objects||[];
+  var byId=rigIndex(objects);
+  var firstOf={},plan=[];
+  objects.forEach(function(o,i){
+    if(isRigPart(o)&&firstOf[o.rigChar]==null)firstOf[o.rigChar]=i;
+  });
+  var emitted={};
+  objects.forEach(function(o,i){
+    if(!isRigPart(o)){plan.push({obj:o,chain:[],key:i});return;}
+    if(emitted[o.rigChar])return;
+    emitted[o.rigChar]=1;
+    // Every part of this character, in draw order.
+    var parts=objects.filter(function(q){return isRigPart(q)&&q.rigChar===o.rigChar;});
+    parts.map(function(q,qi){return {q:q,qi:objects.indexOf(q)};})
+      .sort(function(a,b){
+        var az=a.q.rigZ!=null?a.q.rigZ:a.qi,bz=b.q.rigZ!=null?b.q.rigZ:b.qi;
+        if(az!==bz)return az-bz;
+        return a.qi-b.qi;
+      })
+      .forEach(function(e){
+        plan.push({obj:e.q,chain:rigAncestors(e.q,byId),key:firstOf[o.rigChar]});
+      });
+  });
+  return plan;
+}
+
+/** Paint one entry of a draw plan, ancestors applied first. */
+function paintPlanned(cx,entry,opts){
+  if(!entry.chain.length){paintObj(cx,entry.obj,opts);return;}
+  cx.save();
+  for(var i=0;i<entry.chain.length;i++)applyPivotTransform(cx,entry.chain[i]);
+  paintObj(cx,entry.obj,opts);
+  cx.restore();
+}
+
+/**
+ * Map a point outwards through a chain of parts (outermost first).
+ *
+ * Everything positional goes through this one function — the joint overlay,
+ * hit-testing a rotated limb, and turning a mouse drag into a rotation — so
+ * they cannot disagree with what the painter draws.
+ */
+function rigApplyChain(chain,lx,ly){
+  var x=lx,y=ly;
+  // Innermost first: each part maps its own space outwards into its parent's.
+  for(var i=chain.length-1;i>=0;i--){
+    var p=chain[i],pv=rigPivot(p);
+    var dx=x-pv.x,dy=y-pv.y;
+    dx*=(p.scaleX!=null?p.scaleX:1);
+    dy*=(p.scaleY!=null?p.scaleY:1);
+    if(p.rotation){
+      var a=p.rotation*Math.PI/180,c=Math.cos(a),si=Math.sin(a);
+      var nx=dx*c-dy*si,ny=dx*si+dy*c;
+      dx=nx;dy=ny;
+    }
+    x=pv.x+dx;y=pv.y+dy;
+  }
+  return {x:x,y:y};
+}
+
+/** Invert `rigApplyChain`. */
+function rigUnapplyChain(chain,wx,wy){
+  var x=wx,y=wy;
+  for(var i=0;i<chain.length;i++){
+    var p=chain[i],pv=rigPivot(p);
+    var dx=x-pv.x,dy=y-pv.y;
+    if(p.rotation){
+      var a=-p.rotation*Math.PI/180,c=Math.cos(a),si=Math.sin(a);
+      var nx=dx*c-dy*si,ny=dx*si+dy*c;
+      dx=nx;dy=ny;
+    }
+    var sx=p.scaleX!=null?p.scaleX:1,sy=p.scaleY!=null?p.scaleY:1;
+    if(sx)dx/=sx;
+    if(sy)dy/=sy;
+    x=pv.x+dx;y=pv.y+dy;
+  }
+  return {x:x,y:y};
+}
+
+/** Where a point in a part's own space lands on the stage. */
+function rigWorldPoint(o,byId,lx,ly){
+  return rigApplyChain(rigAncestors(o,byId).concat([o]),lx,ly);
+}
+
+/** A stage point expressed in a part's own (untransformed) space. */
+function rigLocalPoint(o,byId,wx,wy){
+  return rigUnapplyChain(rigAncestors(o,byId).concat([o]),wx,wy);
+}
+
+/**
+ * A part's pivot on the stage.
+ *
+ * Only the ancestors move it: a part rotates *about* its own pivot, so its own
+ * rotation leaves that point exactly where it is. Getting this wrong makes a
+ * limb crawl away from its joint as you drag it.
+ */
+function rigPivotWorld(o,byId){
+  var pv=rigPivot(o);
+  return rigApplyChain(rigAncestors(o,byId),pv.x,pv.y);
+}
+
+/**
+ * The rig part under a stage point, topmost first.
+ *
+ * Unlike hitTest(), this undoes the hierarchy before testing, so a rotated
+ * forearm is clickable where it is drawn rather than where its untransformed
+ * box would be.
+ */
+function rigHitTest(x,y){
+  var kf=CKF();
+  if(!kf)return null;
+  var plan=rigDrawPlan(kf.objects);
+  var byId=rigIndex(kf.objects);
+  for(var i=plan.length-1;i>=0;i--){
+    var o=plan[i].obj;
+    if(!isRigPart(o))continue;
+    var lp=rigLocalPoint(o,byId,x,y);
+    var x0=Math.min(o.x,o.x+o.width),x1=Math.max(o.x,o.x+o.width);
+    var y0=Math.min(o.y,o.y+o.height),y1=Math.max(o.y,o.y+o.height);
+    if(lp.x>=x0&&lp.x<=x1&&lp.y>=y0&&lp.y<=y1)return o;
+  }
+  return null;
+}
+
+/**
+ * Draw the rig over the artwork: a line from each part's pivot to its
+ * children's, and a handle on each pivot.
+ *
+ * Without this you are guessing where a joint is, and a pivot in the wrong
+ * place is the single most common reason a rig animates badly.
+ */
+function drawRigOverlay(cx){
+  var kf=CKF();
+  if(!kf)return;
+  var parts=kf.objects.filter(isRigPart);
+  if(!parts.length)return;
+  var byId=rigIndex(kf.objects);
+  var sel=selection.length===1&&isRigPart(selection[0])?selection[0]:null;
+  var k=1/(zoom||1);
+
+  // Bones first, so handles sit on top of them.
+  cx.save();
+  cx.lineWidth=2*k;
+  parts.forEach(function(o){
+    if(!o.rigParent)return;
+    var par=byId[o.rigChar+"/"+o.rigParent];
+    if(!par)return;
+    var a=rigPivotWorld(par,byId),b=rigPivotWorld(o,byId);
+    cx.strokeStyle=(sel&&(o===sel||par===sel))?"rgba(90,170,255,0.95)":"rgba(90,170,255,0.45)";
+    cx.beginPath();cx.moveTo(a.x,a.y);cx.lineTo(b.x,b.y);cx.stroke();
+  });
+
+  parts.forEach(function(o){
+    var pv=rigPivotWorld(o,byId);
+    var on=o===sel;
+    var r=(on?5:3.5)*k;
+    cx.beginPath();cx.arc(pv.x,pv.y,r,0,Math.PI*2);
+    cx.fillStyle=on?"#FFD24A":"#5AAAFF";
+    cx.globalAlpha=on?1:0.8;
+    cx.fill();
+    cx.globalAlpha=1;
+    cx.lineWidth=1.2*k;
+    cx.strokeStyle="rgba(0,0,0,0.6)";
+    cx.stroke();
+    if(on){
+      // A ring shows which joint a drag will turn.
+      cx.beginPath();cx.arc(pv.x,pv.y,10*k,0,Math.PI*2);
+      cx.strokeStyle="rgba(255,210,74,0.7)";
+      cx.setLineDash([3*k,3*k]);
+      cx.lineWidth=1.2*k;
+      cx.stroke();
+      cx.setLineDash([]);
+    }
+  });
+  cx.restore();
+}
+
+/* ---- Posing ------------------------------------------------------- *
+ * Drag a limb to swing it about its joint; children follow because they
+ * inherit the transform rather than being copied. Ctrl drags the joint
+ * itself, Alt moves the part, Shift snaps the angle.
+ * -------------------------------------------------------------------- */
+var poseDrag=null;
+
+function poseMouseDown(e,p){
+  var hit=rigHitTest(p.x,p.y);
+  if(!hit){selection=[];poseDrag=null;updateProps();render();return;}
+  selection=[hit];
+  var kf=CKF();
+  var byId=rigIndex(kf?kf.objects:[]);
+  var pv=rigPivotWorld(hit,byId);
+  poseDrag={
+    part:hit,
+    mode:(e.ctrlKey||e.metaKey)?"pivot":(e.altKey?"move":"rotate"),
+    pivot:pv,
+    startAngle:Math.atan2(p.y-pv.y,p.x-pv.x),
+    startRot:hit.rotation||0,
+    startX:hit.x||0,startY:hit.y||0,
+    startPivotX:hit.pivotX!=null?hit.pivotX:(hit.width||0)/2,
+    startPivotY:hit.pivotY!=null?hit.pivotY:(hit.height||0)/2,
+    from:p,
+    // Captured before anything moves, so one drag is one undo step.
+    pre:snap()
+  };
+  updateProps();render();
+}
+
+function poseMouseMove(e,p){
+  if(!poseDrag)return;
+  var o=poseDrag.part;
+  if(poseDrag.mode==="rotate"){
+    var a=Math.atan2(p.y-poseDrag.pivot.y,p.x-poseDrag.pivot.x);
+    var deg=poseDrag.startRot+(a-poseDrag.startAngle)*180/Math.PI;
+    if(e.shiftKey)deg=Math.round(deg/15)*15;
+    o.rotation=Math.round(deg*100)/100;
+  }else if(poseDrag.mode==="move"){
+    o.x=poseDrag.startX+(p.x-poseDrag.from.x);
+    o.y=poseDrag.startY+(p.y-poseDrag.from.y);
+  }else{
+    // Dragging the joint: express the mouse in the part's own space so the
+    // pivot lands under the cursor whatever the hierarchy is doing.
+    var kf=CKF();
+    var byId=rigIndex(kf?kf.objects:[]);
+    var lp=rigUnapplyChain(rigAncestors(o,byId),p.x,p.y);
+    o.pivotX=Math.round((lp.x-(o.x||0))*100)/100;
+    o.pivotY=Math.round((lp.y-(o.y||0))*100)/100;
+  }
+  render();
+}
+
+function poseMouseUp(){
+  if(!poseDrag)return;
+  var o=poseDrag.part;
+  // Only commit an undo step if something actually changed.
+  var moved=(o.rotation||0)!==poseDrag.startRot||
+            (o.x||0)!==poseDrag.startX||(o.y||0)!==poseDrag.startY||
+            (o.pivotX!=null?o.pivotX:0)!==poseDrag.startPivotX||
+            (o.pivotY!=null?o.pivotY:0)!==poseDrag.startPivotY;
+  if(moved){
+    pushUndoSnap(poseDrag.pre);
+    if(poseDrag.mode==="pivot")syncCharacterFromStage(o.rigChar);
+    emitRigChange();
+  }
+  poseDrag=null;
+  updateProps();
+  render();
+}
+
+/** Let the Character panel know the rig changed under it. */
+function emitRigChange(){
+  try{window.dispatchEvent(new CustomEvent("flashy:rigchange"));}catch(err){}
+}
+
+
+
 function paintObj(cx,o,opts){
   opts=opts||{};
   var chrome=!!opts.chrome;
@@ -845,9 +1911,16 @@ function paintObj(cx,o,opts){
   var strokeA=alpha*(o.strokeAlpha!=null?o.strokeAlpha:1);
 
   cx.save();
-  cx.translate((o.x||0)+hw,(o.y||0)+hh);
-  if(o.rotation)cx.rotate(o.rotation*Math.PI/180);
-  cx.scale(o.scaleX||1,o.scaleY||1);
+  if(isRigPart(o)){
+    // Rotate about the pivot, in the rig's shared space, then step into the
+    // object's own frame so the shape code below is unchanged.
+    applyPivotTransform(cx,o);
+    cx.translate((o.x||0)+hw,(o.y||0)+hh);
+  }else{
+    cx.translate((o.x||0)+hw,(o.y||0)+hh);
+    if(o.rotation)cx.rotate(o.rotation*Math.PI/180);
+    cx.scale(o.scaleX||1,o.scaleY||1);
+  }
   if(o.blendMode&&o.blendMode!=="source-over")cx.globalCompositeOperation=o.blendMode;
   cx.globalAlpha=alpha;
 
@@ -1129,7 +2202,7 @@ function initMouse(){
   // A cancelled pointer (OS gesture, palm rejection) must not leave `dragging`
   // stuck true — that would make the next click continue the abandoned drag.
   canvas.addEventListener("pointercancel",function(e){
-    dragging=false;dragPreview=null;moveObjStarts=[];movePreSnap=null;
+    dragging=false;dragPreview=null;moveObjStarts=[];movePreSnap=null;poseDrag=null;
     render();
   });
   canvas.addEventListener("dblclick",onDblClick);
@@ -1164,7 +2237,9 @@ function onMouseDown(e){
   if(e.button===2)return;
   var p=getStagePos(e);
   dragging=true;dragStart={x:p.x,y:p.y};dragCur={x:p.x,y:p.y};
-  if(curTool==="select"){
+  if(curTool==="pose"){
+    poseMouseDown(e,p);
+  }else if(curTool==="select"){
     var hit=hitTest(p.x,p.y);
     if(hit){
       if(e.shiftKey){
@@ -1219,7 +2294,9 @@ function onMouseMove(e){
   if(!dragging)return;
   var p=getStagePos(e);
   dragCur={x:p.x,y:p.y};
-  if(curTool==="select"){
+  if(curTool==="pose"){
+    poseMouseMove(e,p);
+  }else if(curTool==="select"){
     if(dragPreview&&dragPreview.type==="select"){
       dragPreview.x2=p.x;dragPreview.y2=p.y;
     }else if(selection.length>0&&moveObjStarts.length>0){
@@ -1244,6 +2321,11 @@ function onMouseMove(e){
   render();
 }
 function onMouseUp(e){
+  if(curTool==="pose"){
+    poseMouseUp();
+    dragging=false;dragPreview=null;
+    return;
+  }
   if(!dragging)return;
   dragging=false;
   var p=getStagePos(e);
@@ -3014,6 +4096,35 @@ function doAction(a){
       context:buildFeedbackContext()
     });
     break;
+  case "newCharacter":
+    showNewCharacterDialog();
+    break;
+  case "addCharacterPart":
+    showAddCharacterPartDialog();
+    break;
+  case "editCharacterPart":
+    showEditCharacterPartDialog();
+    break;
+  case "saveCharacterPose":
+    showSavePoseDialog();
+    break;
+  case "animateCharacter":
+    showAnimateCharacterDialog();
+    break;
+  case "deleteCharacter":
+    showDeleteCharacterDialog();
+    break;
+  case "placeCharacter": {
+    var pcName=currentCharacterName();
+    if(!pcName){showMessage("Characters","There are no characters yet.");break;}
+    pushUndo();
+    if(!instanceCharacter(pcName,{})){
+      showMessage("Place In Frame",
+        "\u201c"+pcName+"\u201d has no parts to place yet. Add a part first.");
+    }
+    fullRefresh();
+    break;
+  }
   case "mouthSetup":
     showMouthSetupDialog();
     break;
@@ -4129,8 +5240,35 @@ function serializeDoc(){
     layers:serializeLayers(doc.layers),
     library:serializeLibrary(doc.library),
     // Audio travels inside the document, so a .flashy stays one file.
-    sounds:serializeSounds(doc.sounds)
+    sounds:serializeSounds(doc.sounds),
+    // Character rigs: the templates and pose libraries. The hierarchy and
+    // current pose ride along on the keyframe objects themselves.
+    characters:serializeCharacters(doc.characters)
   };
+}
+function serializeCharacters(cs){
+  var out={};
+  Object.keys(cs||{}).forEach(function(n){
+    var c=cs[n];
+    out[n]={
+      name:c.name||n,
+      parts:(c.parts||[]).map(plainObj),
+      poses:JSON.parse(JSON.stringify(c.poses||{}))
+    };
+  });
+  return out;
+}
+function reviveCharacters(cd){
+  var out={};
+  Object.keys(cd||{}).forEach(function(n){
+    var c=cd[n]||{};
+    out[n]={
+      name:c.name||n,
+      parts:(c.parts||[]).map(function(t){return plainObj(t||{});}),
+      poses:c.poses&&typeof c.poses==="object"?c.poses:{}
+    };
+  });
+  return out;
 }
 function reviveObject(od){
   var o=new EditorObject(od.type);
@@ -4200,6 +5338,7 @@ function deserializeDoc(d){
   doc.totalFrames=d.totalFrames||60;
   doc.library=reviveLibrary(d.library);
   doc.sounds=reviveSounds(d.sounds);
+  doc.characters=reviveCharacters(d.characters);
   doc.layers=reviveLayers(d.layers);
   // Decoding is async; the timeline draws flat bars until the peaks land and
   // redraws itself when they do.
@@ -4294,6 +5433,114 @@ function exportRuntime(data, canvas, options) {
 
   function hex(c, dflt) { return parseInt(String(c || dflt).replace("#", ""), 16); }
 
+  /* ---- Character rigs -------------------------------------------- *
+   * The same composition the editor uses:
+   *   translate(pivot) · rotate · scale · translate(-pivot)
+   * per ancestor and then per part, in one shared space. Expressed here as
+   * two nested containers per part — an outer one carrying translate+rotate+
+   * scale and an inner one carrying -pivot — so the export composes exactly
+   * rather than approximating a baked matrix.
+   * ----------------------------------------------------------------- */
+  var RIG_MAX_DEPTH = 24;
+
+  function isRigPart(o) { return !!(o && o.rigChar && o.rigPart); }
+
+  function rigPivot(o) {
+    var hw = (o.width || 0) / 2, hh = (o.height || 0) / 2;
+    return {
+      x: (o.x || 0) + (o.pivotX != null ? o.pivotX : hw),
+      y: (o.y || 0) + (o.pivotY != null ? o.pivotY : hh)
+    };
+  }
+
+  function rigIndexOf(objects) {
+    var byId = {};
+    for (var i = 0; i < objects.length; i++) {
+      var o = objects[i];
+      if (isRigPart(o)) byId[o.rigChar + "/" + o.rigPart] = o;
+    }
+    return byId;
+  }
+
+  function rigAncestorsOf(o, byId) {
+    var out = [], seen = {}, cur = o, guard = 0;
+    while (cur && cur.rigParent && guard++ < RIG_MAX_DEPTH) {
+      var key = cur.rigChar + "/" + cur.rigParent;
+      if (seen[key]) break;
+      seen[key] = 1;
+      var par = byId[key];
+      if (!par) break;
+      out.unshift(par);
+      cur = par;
+    }
+    return out;
+  }
+
+  /** `{obj, chain, i}` in paint order; non-rig objects keep their order. */
+  function rigPlan(objects) {
+    var byId = rigIndexOf(objects), firstOf = {}, plan = [], emitted = {}, i;
+    for (i = 0; i < objects.length; i++) {
+      if (isRigPart(objects[i]) && firstOf[objects[i].rigChar] == null) firstOf[objects[i].rigChar] = i;
+    }
+    for (i = 0; i < objects.length; i++) {
+      var o = objects[i];
+      if (!isRigPart(o)) { plan.push({ obj: o, chain: [], i: i }); continue; }
+      if (emitted[o.rigChar]) continue;
+      emitted[o.rigChar] = 1;
+      var parts = [];
+      for (var j = 0; j < objects.length; j++) {
+        if (isRigPart(objects[j]) && objects[j].rigChar === o.rigChar) parts.push({ q: objects[j], qi: j });
+      }
+      parts.sort(function (a, b) {
+        var az = a.q.rigZ != null ? a.q.rigZ : a.qi, bz = b.q.rigZ != null ? b.q.rigZ : b.qi;
+        return az !== bz ? az - bz : a.qi - b.qi;
+      });
+      for (var k = 0; k < parts.length; k++) {
+        plan.push({ obj: parts[k].q, chain: rigAncestorsOf(parts[k].q, byId), i: parts[k].qi });
+      }
+    }
+    return plan;
+  }
+
+  /** One part's pivot transform as a container pair. */
+  function pivotPair(o) {
+    var pv = rigPivot(o);
+    var outer = new Flashy.MovieClip();
+    outer.x = pv.x; outer.y = pv.y;
+    outer.rotation = (o.rotation || 0) * Math.PI / 180;
+    outer.scaleX = o.scaleX != null ? o.scaleX : 1;
+    outer.scaleY = o.scaleY != null ? o.scaleY : 1;
+    var inner = new Flashy.MovieClip();
+    inner.x = -pv.x; inner.y = -pv.y;
+    outer.addChild(inner);
+    return { top: outer, tip: inner };
+  }
+
+  /**
+   * Add a frame's objects to `container`, composing any rig hierarchy.
+   * Every place objects become children goes through this, so a rig works on
+   * the root timeline and inside a symbol alike.
+   */
+  function addPlanned(container, objects, depth, parentFrame, startFrame, keyPrefix) {
+    var plan = rigPlan(objects || []);
+    for (var n = 0; n < plan.length; n++) {
+      var e = plan[n];
+      var key = keyPrefix != null ? keyPrefix + ":" + e.i : null;
+      var node = buildObj(e.obj, depth, parentFrame, startFrame, key);
+      if (!e.chain.length && !isRigPart(e.obj)) { container.addChild(node); continue; }
+      // Ancestors outermost first, then the part's own pivot transform.
+      var chain = e.chain.concat([e.obj]);
+      var top = null, tip = null;
+      for (var c = 0; c < chain.length; c++) {
+        var pair = pivotPair(chain[c]);
+        if (tip) tip.addChild(pair.top); else top = pair.top;
+        tip = pair.tip;
+      }
+      tip.addChild(node);
+      container.addChild(top);
+    }
+  }
+
   /** What a library symbol shows on its own `frame`, bottom layer first. */
   function symbolObjects(sym, frame) {
     if (!sym) return [];
@@ -4363,7 +5610,7 @@ function exportRuntime(data, canvas, options) {
         mc.timeline.addFrameScript(fr, function () {
           this.removeAllChildren();
           var kids = symbolObjects(sym, fr);
-          for (var i = 0; i < kids.length; i++) this.addChild(buildObj(kids[i], depth + 1, fr, 1));
+          addPlanned(this, kids, depth + 1, fr, 1, null);
         });
       })(f);
     }
@@ -4393,7 +5640,7 @@ function exportRuntime(data, canvas, options) {
       var fr = Math.min(i + 1, total);
       var holder = new Flashy.MovieClip();
       var kids = symbolObjects(sym, fr);
-      for (var k = 0; k < kids.length; k++) holder.addChild(buildObj(kids[k], depth + 1, fr, 1));
+      addPlanned(holder, kids, depth + 1, fr, 1, null);
       // The hit frame defines the clickable area but is never drawn.
       holder.visible = (name === "up");
       if (name === "hit") holder.alpha = 0;
@@ -4447,7 +5694,7 @@ function exportRuntime(data, canvas, options) {
           inner = new Flashy.MovieClip();
           var gf = graphicFrame(o, sym, parentFrame, startFrame);
           var kids = symbolObjects(sym, gf);
-          for (var i = 0; i < kids.length; i++) inner.addChild(buildObj(kids[i], depth + 1, gf, 1));
+          addPlanned(inner, kids, depth + 1, gf, 1, null);
         }
         inner.x = -hw; inner.y = -hh;
         node.addChild(inner);
@@ -4496,9 +5743,18 @@ function exportRuntime(data, canvas, options) {
 
     node.x = (o.x || 0) + hw;
     node.y = (o.y || 0) + hh;
-    node.rotation = (o.rotation || 0) * Math.PI / 180;
-    node.scaleX = o.scaleX || 1;
-    node.scaleY = o.scaleY || 1;
+    if (isRigPart(o)) {
+      // Rotation and scale live on this part's pivot container, exactly as the
+      // editor applies applyPivotTransform() before stepping into the object's
+      // own frame. Applying them here too would double them.
+      node.rotation = 0;
+      node.scaleX = 1;
+      node.scaleY = 1;
+    } else {
+      node.rotation = (o.rotation || 0) * Math.PI / 180;
+      node.scaleX = o.scaleX || 1;
+      node.scaleY = o.scaleY || 1;
+    }
     node.alpha = o.alpha != null ? o.alpha : 1;
     if (o.blendMode && o.blendMode !== "source-over") node.blendMode = o.blendMode;
     if (o.instanceName) node.name = o.instanceName;
@@ -4620,6 +5876,7 @@ function exportRuntime(data, canvas, options) {
           // keyframe is the one that shows the destination — same as the stage.
           var t = nk ? easeAt((fr - kf.index) / kf.duration, kf.easing) : 0;
 
+          var frameObjs = [];
           for (var oi = 0; oi < kf.objects.length; oi++) {
             var a = kf.objects[oi];
             var o = a;
@@ -4637,11 +5894,13 @@ function exportRuntime(data, canvas, options) {
               var aa = a.alpha != null ? a.alpha : 1, ba = b.alpha != null ? b.alpha : 1;
               o.alpha = aa + (ba - aa) * t;
             }
-            // Stable identity for stateful symbol instances, so a MovieClip
-            // keeps its own playhead and a Button keeps its hover across the
-            // root's per-frame rebuild.
-            this.addChild(buildObj(o, 0, fr, kf.index, li + ":" + kf.index + ":" + oi));
+            frameObjs.push(o);
           }
+          // Stable identity for stateful symbol instances, so a MovieClip
+          // keeps its own playhead and a Button keeps its hover across the
+          // root's per-frame rebuild. addPlanned appends the object's index to
+          // the prefix, so the key is the same one this loop used to build.
+          addPlanned(this, frameObjs, 0, fr, kf.index, li + ":" + kf.index);
         }
         runFrameScripts(fr);
         refreshButtons();
@@ -5471,6 +6730,11 @@ function fullRefresh(){
   updateActionsPanel();
   updateColorUI();
   updateLib();
+  // The Character panel rebuilds from the document rather than tracking it, so
+  // one notification after every refresh is all it needs. Note this is
+  // fullRefresh, not render() — a pose drag calls render() per pointer move and
+  // must not rebuild a DOM tree each time.
+  emitRigChange();
 }
 
 /* ------------------------------------------------------------------ *
@@ -5525,6 +6789,38 @@ function init(){
   initActionsPanel();
   initUnloadGuard();
   initAIPanel();
+  // Character rigs — the panel in character.js drives the editor through this,
+  // and the specs use the same entry points a click would.
+  window._flashyRig = {
+    characters:characters,
+    create:createCharacter,
+    remove:deleteCharacter,
+    addPart:addCharacterPart,
+    removePart:removeCharacterPart,
+    reparent:reparentCharacterPart,
+    nudgeZ:nudgeCharacterPartZ,
+    instance:instanceCharacter,
+    partsOnStage:charPartsOnStage,
+    partById:charPartById,
+    sync:syncCharacterFromStage,
+    savePose:saveCharacterPose,
+    applyPose:applyCharacterPose,
+    deletePose:deleteCharacterPose,
+    mirrorPose:mirrorCharacterPose,
+    mirrorPartner:mirrorPartnerId,
+    animate:animateCharacterPoses,
+    // Geometry, so the panel and the specs can ask where a joint actually is.
+    pivotWorld:function(o){return rigPivotWorld(o,rigIndex((CKF()||{objects:[]}).objects));},
+    worldPoint:function(o,lx,ly){return rigWorldPoint(o,rigIndex((CKF()||{objects:[]}).objects),lx,ly);},
+    localPoint:function(o,wx,wy){return rigLocalPoint(o,rigIndex((CKF()||{objects:[]}).objects),wx,wy);},
+    hitTest:rigHitTest,
+    drawPlan:function(){return rigDrawPlan((CKF()||{objects:[]}).objects);},
+    isPart:isRigPart,
+    fields:RIG_POSE_FIELDS,
+    setTool:setTool,
+    refresh:function(){syncDirty();fullRefresh();emitRigChange();}
+  };
+
   window._flashyAI = {
     doc: doc,
     currentLayers: currentLayers,

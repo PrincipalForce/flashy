@@ -146,6 +146,42 @@ kept a "parts.fla" and raided it forever.
 
 ## EDIT — the drawing and animating itself
 
+### ✅ 4b. Character rigging — shipped in 0.6
+
+A character used to mean a pile of nested symbols, and posing one meant diving
+into a symbol per limb to turn it, with no way to see the whole figure while
+you worked. That is the single biggest reason Flash character animation was
+slow.
+
+A **character** in Flashy is a flat set of parts in one keyframe, each carrying
+its parent and its pivot. Transforms compose as
+`translate(pivot) · rotate · scale · translate(-pivot)` for every ancestor and
+then the part itself, all in one shared space. Two things follow, and both
+matter more than they sound:
+
+- **Parenting never moves anything.** Parts keep the coordinates you drew them
+  at, so building a rig cannot disturb the artwork.
+- **You pose the whole character on one stage.** Rotating the shoulder swings
+  the arm because the child inherits the ancestor transforms — no nesting, no
+  diving in and out of symbols.
+
+Draw order is a separate `rigZ`, because the far arm has to sit *behind* the
+torso it hangs off, which a nested hierarchy cannot express at all.
+
+The same formula maps onto two nested engine containers per part, so the HTML
+export composes identically rather than baking an approximate matrix — a spec
+asserts the stage and the export agree on a posed limb to sub-pixel precision.
+
+**Poses** are per-part transforms, never artwork, so a pose still applies to a
+character you have since redrawn. **Mirror** swaps left/right parts (inferred
+from their names) and reverses the swing, which is how the back half of a walk
+gets built. **Animate Poses** writes a sequence as keyframes with tweens and an
+optional loop back to the first pose. What lands is ordinary keyframes — drag a
+limb on any of them and the tween follows.
+
+Still to come: IK, so dragging a hand bends the elbow for you; and a biped
+template, so a first rig is one click rather than six.
+
 ### ✅ 5. Puppet mechanics — shipped in 0.5
 
 **What landed.** `symbolBehavior` now means something, and the three

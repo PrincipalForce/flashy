@@ -129,6 +129,39 @@ Drive the app through its published seams, not its internals:
   **Set Up Mouth Shapes**; it returns `{created, tightened, frames, chart,
   distinct}`. It never discards artwork — new frames are clones of an existing
   drawing, and `tighten` renumbers rather than deletes.
+- **Character rigs** live behind `window._flashyRig`. The rig *is* the keyframe
+  objects (`rigChar`, `rigPart`, `rigParent`, `pivotX/Y`, `rigZ`);
+  `doc.characters[name]` holds only the template and the pose library. There is
+  deliberately one source of truth, so never assert against a stored structure
+  when the stage is what gets drawn.
+- Rig transforms compose as `translate(pivot) · rotate · scale ·
+  translate(-pivot)` per ancestor then per part, in one shared space. All
+  positional questions go through `rigApplyChain()` — use
+  `_flashyRig.pivotWorld/worldPoint/localPoint` in specs rather than
+  recomputing, and remember **a part's own rotation never moves its own
+  pivot** (only its ancestors do).
+- `paintObj()` keeps its old centre-pivot path for non-rig objects; only
+  `isRigPart(o)` objects take the pivot path. Any change there must leave an
+  unrigged document byte-identical, which the rest of the suite guards.
+- **Export parity is the thing to protect.** `addPlanned()` in `exportRuntime`
+  wraps each part in two nested containers (outer: translate+rotate+scale,
+  inner: -pivot) and `buildObj` therefore zeroes rotation/scale on a rig part's
+  own node — applying them in both places silently doubles every angle. The
+  parity spec finds the part in the exported tree by `instanceName` and
+  accumulates transforms up to the root; it must wait for
+  `__stage.root.children.length > 0`, because the display list is built by the
+  first frame script, not at load.
+- The Pose tool (`setTool("pose")`) is its own mode: drag rotates, Ctrl+drag
+  moves the joint, Alt+drag moves the part, Shift snaps. One drag is one undo
+  step — the snapshot is captured on mousedown and only pushed if something
+  actually changed.
+- The Character panel (`character.js`) owns no state and rebuilds from the
+  document on `flashy:rigchange`, which `fullRefresh()` emits. Note it is
+  emitted from `fullRefresh`, **not** `render()` — a pose drag calls `render()`
+  per pointer move and rebuilding a DOM tree each time would fight the drag.
+- Adding a panel changes `defaultLayout()` and so breaks the workspace specs
+  that assert the exact dock contents. A panel can declare `with: "<panelId>"`
+  to share an existing tab group instead of adding another stacked one.
 - `symbolTotalFrames()` reads the keyframes directly rather than calling
   `Layer.getFrameEnd()`, so a library symbol built as a plain object (a spec
   fixture, a mid-import document, something the assistant wrote) still reports
