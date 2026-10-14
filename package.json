@@ -1,6 +1,6 @@
 {
   "name": "flashy",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "HTML5 Canvas vector animation engine \u2014 a modern Flash alternative with timeline, nested MovieClips, tweening, and a full authoring IDE. Runs in the browser and as an installed desktop app.",
   "// main": "Electron reads `main` to find its entry point, so it points at the desktop shell. Library consumers resolve through `exports` below, which takes precedence in Node and keeps `require(\"flashy\")` on the engine.",
   "main": "electron/main.cjs",

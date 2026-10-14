@@ -349,6 +349,10 @@ var menus=[
     {label:"Paste",action:"paste",shortcut:"Ctrl+V"},
     {label:"Delete",action:"delete",shortcut:"Delete"},
     {type:"sep"},
+    {label:"Cut Frames",action:"cutFrames",shortcut:"Ctrl+Alt+X"},
+    {label:"Copy Frames",action:"copyFrames",shortcut:"Ctrl+Alt+C"},
+    {label:"Paste Frames",action:"pasteFrames",shortcut:"Ctrl+Alt+V"},
+    {type:"sep"},
     {label:"Select All",action:"selectAll",shortcut:"Ctrl+A"},
     {type:"sep"},
     {label:"Preferences...",action:"prefs"}
@@ -854,6 +858,173 @@ function symbolFrameObjects(sym,frame){
   return out;
 }
 
+/* ---- Frame clipboard ---------------------------------------------- *
+ * Copy, cut and paste a block of the timeline — any number of layers, any
+ * span of frames.
+ * -------------------------------------------------------------------- */
+
+/**
+ * Empty frames [f0,f1] on a layer, keeping everything outside them.
+ *
+ * The subtlety is a keyframe that only partly overlaps. Dropping any keyframe
+ * that touches the span is much simpler and silently destroys content either
+ * side of it — if a keyframe runs frames 1-8 and you clear 3-6, frames 1-2 and
+ * 7-8 must survive. So:
+ *
+ *   - entirely inside  → removed
+ *   - starts before    → truncated to end at f0-1
+ *   - ends after       → its tail is kept, starting at f1+1
+ *   - spans both ends  → truncated, and a tail copy added after the span
+ */
+function clearSpan(layer,f0,f1){
+  if(!layer)return;
+  var out=[];
+  (layer.keyframes||[]).forEach(function(kf){
+    var start=kf.index,end=kf.index+kf.duration-1;
+    if(end<f0||start>f1){out.push(kf);return;}      // untouched
+    var keptHead=start<f0,keptTail=end>f1;
+    if(keptHead){
+      var head=kf;
+      head.duration=f0-start;
+      out.push(head);
+    }
+    if(keptTail){
+      // The tail keeps the same artwork: clearing frames in the middle of a
+      // held keyframe leaves the same drawing showing afterwards, which is
+      // what the timeline looked like before.
+      var tail=kf.clone();
+      tail.index=f1+1;
+      tail.duration=end-f1;
+      // A sound belongs to the frame it was placed on, so it does not come
+      // along to a new index.
+      tail.sound=null;
+      out.push(tail);
+    }
+  });
+  out.sort(function(a,b){return a.index-b.index;});
+  layer.keyframes=out;
+}
+
+/**
+ * The frame clipboard: a deep copy, not references.
+ *
+ * It has to be plain data because undo/redo replaces every object in the
+ * document (deserializeDoc rebuilds from a snapshot), so a clipboard holding
+ * live objects would be pasting things that are no longer part of anything.
+ */
+var frameClipboard=null;
+
+/** Plain, detached form of a keyframe. */
+function plainKeyframe(kf){
+  return {
+    index:kf.index,duration:kf.duration,
+    tweenType:kf.tweenType,easing:kf.easing,script:kf.script,
+    sound:kf.sound?cloneSound(kf.sound):null,
+    objects:(kf.objects||[]).map(plainObj)
+  };
+}
+
+/**
+ * Copy the selected block. Keyframes are clipped to the selection and
+ * re-indexed so the block starts at frame 1, which is what makes it pastable
+ * anywhere.
+ */
+function copyFrames(opts){
+  opts=opts||{};
+  var r=opts.range||tlRange();
+  if(!r)return "Select some frames in the timeline first.";
+  var layers=currentLayers();
+  var span=r.f1-r.f0+1;
+  var out=[];
+
+  for(var li=r.l0;li<=r.l1;li++){
+    var layer=layers[li];
+    if(!layer){out.push({name:"Layer",keyframes:[]});continue;}
+    var kfs=keyframesInSpan(layer,r.f0,r.f1).map(function(kf){
+      var from=Math.max(kf.index,r.f0),to=Math.min(kf.index+kf.duration-1,r.f1);
+      var c=kf.clone();
+      c.index=from-r.f0+1;
+      c.duration=to-from+1;
+      // A tween with no destination inside the block has nothing to tween to.
+      return c;
+    });
+    kfs.forEach(function(c,i){
+      if(c.tweenType&&c.tweenType!=="none"&&i===kfs.length-1)c.tweenType="none";
+    });
+    out.push({name:layer.name,keyframes:kfs.map(plainKeyframe)});
+  }
+
+  frameClipboard={frames:span,layers:out};
+  return {frames:span,layers:out.length};
+}
+
+/** Copy, then empty the frames. */
+function cutFrames(opts){
+  var res=copyFrames(opts);
+  if(typeof res==="string")return res;
+  var r=(opts&&opts.range)||tlRange();
+  var layers=currentLayers();
+  for(var li=r.l0;li<=r.l1;li++)clearSpan(layers[li],r.f0,r.f1);
+  for(var ei=r.l0;ei<=r.l1;ei++){
+    var lay=layers[ei];
+    if(lay&&!lay.keyframes.length)lay.keyframes=[new KeyFrame(1)];
+  }
+  return res;
+}
+
+/**
+ * Paste the clipboard at the playhead, starting on the current layer and
+ * running down through as many layers as were copied.
+ *
+ * Overwrites the destination frames, which is what Flash's Paste Frames did
+ * and what you want when replacing a section of a cycle. Layers are created if
+ * the clipboard is deeper than what is below the current one — otherwise
+ * pasting a six-layer block onto the bottom layer would quietly lose five of
+ * them.
+ */
+function pasteFrames(opts){
+  opts=opts||{};
+  if(!frameClipboard||!frameClipboard.layers.length)return "Nothing has been copied yet.";
+  var layers=currentLayers();
+  var at=Math.max(1,opts.frame||curFrame||1);
+  var top=Math.max(0,opts.layerIndex!=null?opts.layerIndex:curLayer);
+  var span=frameClipboard.frames;
+  var end=at+span-1;
+  var made=0;
+
+  frameClipboard.layers.forEach(function(src,i){
+    var idx=top+i;
+    var layer=layers[idx];
+    if(!layer){
+      layer=new Layer(src.name||("Layer "+(idx+1)));
+      layer.keyframes=[];
+      layers.push(layer);
+      made++;
+    }
+    clearSpan(layer,at,end);
+    src.keyframes.forEach(function(kd){
+      var kf=reviveKeyframe(kd);
+      kf.index=kd.index+at-1;
+      layer.keyframes.push(kf);
+    });
+    layer.keyframes.sort(function(a,b){return a.index-b.index;});
+    if(!layer.keyframes.length)layer.keyframes=[new KeyFrame(1)];
+  });
+
+  if(doc.totalFrames<end)doc.totalFrames=end;
+  // Leave the pasted block selected: the next thing you do is usually paste it
+  // again further along, or nudge it.
+  tlSelRange={layerIdx:top,endLayerIdx:top+frameClipboard.layers.length-1,
+              startFrame:at,endFrame:end};
+  return {frames:span,layers:frameClipboard.layers.length,
+          startFrame:at,endFrame:end,layersCreated:made};
+}
+
+/** Is there anything on the frame clipboard? */
+function hasFrameClipboard(){
+  return !!(frameClipboard&&frameClipboard.layers&&frameClipboard.layers.length);
+}
+
 /* ---- Frames to symbol --------------------------------------------- *
  * Select a block of the timeline — any number of layers, any span of frames —
  * and turn it into one symbol.
@@ -978,11 +1149,9 @@ function createSymbolFromFrames(opts){
   if(opts.replace!==false){
     // Clear the block, then drop one instance where the artwork was.
     for(var ri=r.l0;ri<=r.l1;ri++){
-      var lay=layers[ri];
-      if(!lay)continue;
-      lay.keyframes=lay.keyframes.filter(function(kf){
-        return kf.index+kf.duration-1<r.f0||kf.index>r.f1;
-      });
+      // clearSpan trims and splits rather than dropping anything it touches,
+      // so content either side of the selection survives.
+      clearSpan(layers[ri],r.f0,r.f1);
     }
     var host=layers[r.l0];
     var inst=new EditorObject("symbol");
@@ -3725,13 +3894,12 @@ function initTLClicks(){
       {label:"Convert Frames to Symbol\u2026"+rangeInfo,action:function(){
         doAction("framesToSymbol");
       }},
-      {label:"Copy Frames",action:function(){
-        // TODO: implement frame clipboard
-        alert("Copy Frames: coming soon");
-      }},
-      {label:"Paste Frames",action:function(){
-        alert("Paste Frames: coming soon");
-      }}
+      {label:"Cut Frames"+rangeInfo,action:function(){doAction("cutFrames");}},
+      {label:"Copy Frames"+rangeInfo,action:function(){doAction("copyFrames");}},
+      {label:hasFrameClipboard()
+        ? "Paste Frames ("+frameClipboard.frames+" × "+frameClipboard.layers.length+")"
+        : "Paste Frames",
+       action:function(){doAction("pasteFrames");}}
     ]);
   });
 }
@@ -4779,6 +4947,37 @@ function doAction(a){
       context:buildFeedbackContext()
     });
     break;
+  case "copyFrames": {
+    var cres=copyFrames();
+    if(typeof cres==="string")showMessage("Copy Frames",cres);
+    else fullRefresh();
+    break;
+  }
+  case "cutFrames": {
+    if(!tlRange()){
+      showMessage("Cut Frames","Select some frames in the timeline first.");
+      break;
+    }
+    // Before the mutation, or undo would restore the already-cut state.
+    pushUndo();
+    var xres=cutFrames();
+    if(typeof xres==="string")showMessage("Cut Frames",xres);
+    fullRefresh();
+    break;
+  }
+  case "pasteFrames": {
+    if(!hasFrameClipboard()){
+      showMessage("Paste Frames",
+        "Nothing has been copied yet. Select a block of frames and use "+
+        "Edit \u25b8 Copy Frames.");
+      break;
+    }
+    pushUndo();
+    var pres=pasteFrames();
+    if(typeof pres==="string")showMessage("Paste Frames",pres);
+    fullRefresh();
+    break;
+  }
   case "framesToSymbol":
     showFramesToSymbolDialog();
     break;
@@ -5801,9 +6000,14 @@ function initKeys(){
     if(ctrl&&e.key==="y"){e.preventDefault();doAction("redo");return;}
     if(ctrl&&e.key==="s"){e.preventDefault();doAction("save");return;}
     if(ctrl&&e.key==="a"){e.preventDefault();doAction("selectAll");return;}
-    if(ctrl&&e.key==="x"){e.preventDefault();doAction("cut");return;}
-    if(ctrl&&e.key==="c"){e.preventDefault();doAction("copy");return;}
-    if(ctrl&&e.key==="v"){e.preventDefault();doAction("paste");return;}
+    // Frame clipboard first: Ctrl+Alt+C would otherwise be caught by the
+    // object Copy below and silently do the wrong thing.
+    if(ctrl&&e.altKey&&(e.key==="x"||e.key==="X")){e.preventDefault();doAction("cutFrames");return;}
+    if(ctrl&&e.altKey&&(e.key==="c"||e.key==="C")){e.preventDefault();doAction("copyFrames");return;}
+    if(ctrl&&e.altKey&&(e.key==="v"||e.key==="V")){e.preventDefault();doAction("pasteFrames");return;}
+    if(ctrl&&!e.altKey&&e.key==="x"){e.preventDefault();doAction("cut");return;}
+    if(ctrl&&!e.altKey&&e.key==="c"){e.preventDefault();doAction("copy");return;}
+    if(ctrl&&!e.altKey&&e.key==="v"){e.preventDefault();doAction("paste");return;}
     if(ctrl&&e.key==="Enter"){e.preventDefault();doAction("test");return;}
     if(e.key==="Delete"||e.key==="Backspace"){e.preventDefault();doAction("delete");return;}
     if(e.key==="Enter"){e.preventDefault();if(playing)doAction("stop");else doAction("play");return;}
@@ -7552,7 +7756,15 @@ function init(){
       return tlRange();
     },
     tlRange: function(){ return tlRange(); },
-    framesToSymbol: createSymbolFromFrames
+    framesToSymbol: createSymbolFromFrames,
+    /** Frame clipboard, the same entry points the menu uses. */
+    copyFrames: copyFrames,
+    cutFrames: cutFrames,
+    pasteFrames: pasteFrames,
+    hasFrameClipboard: hasFrameClipboard,
+    clearSpan: function(layerIndex,f0,f1){
+      clearSpan(currentLayers()[layerIndex],f0,f1);
+    }
   };
   fullRefresh();
   window.addEventListener("resize",function(){
