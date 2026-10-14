@@ -390,7 +390,7 @@ Fixed step list only. Standard in every comparable tool.
 ### ✅ 25. Tests and CI
 
 **What.** `npm test` runs Playwright against the real editor over
-`scripts/serve.cjs`. **104 specs** in `tests/` — 101 in Chromium, 3 driving the
+`scripts/serve.cjs`. **115 specs** in `tests/` — 112 in Chromium, 3 driving the
 real Electron app:
 
 | Spec | n | Covers |
@@ -404,6 +404,7 @@ real Electron app:
 | `audio` | 9 | Import, waveform, scrub, Stream vs Event, the HTML export's audio gate |
 | `puppet` | 8 | Graphic / Movie Clip / Button behaviour on the stage and in exports, Swap Symbol |
 | `dialogs` | 5 | `prompt()` banned, Document Settings validation, the API key dialog, a 7,200-frame timeline, timeline zoom |
+| `frame-clipboard` | 11 | Clearing the middle and the edges of a held keyframe, copy/paste round-trip, the clipboard being a deep copy, overwrite without collateral damage, layer creation, cut + undo, the empty-clipboard message, Ctrl+Alt vs plain Ctrl shortcuts, the menus, and the data-loss bug this fixed in Convert Frames to Symbol |
 | `frames-symbol` | 12 | Rectangular timeline selection and dragging it, converting frames with position preserved, keyframe clipping and tween repair, replace-vs-keep, sounds staying on the root, refusals, the dialog, the biped template, posing a fresh biped by IK, and a rig surviving conversion into a symbol |
 | `ik` | 11 | Reaching a target, out-of-reach behaviour, chain length, planted parts, joint limits, **rotation-only side effects**, drag-to-IK as one undo step, single-part mode, the panel controls, the limits dialog, persistence |
 | `character` | 12 | Parenting not moving a part, a parent swinging its child, compounded rotation, a refused cycle, rig draw order, **stage/export parity on a posed limb**, poses saved/applied/round-tripped, mirroring, Animate Poses, the panel tree, drag-to-pose with one undo, and building a character through the menus |

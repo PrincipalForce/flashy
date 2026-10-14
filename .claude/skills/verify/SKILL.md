@@ -134,6 +134,18 @@ Drive the app through its published seams, not its internals:
   larger. Always read it through `tlRange()`, which normalises and clamps to
   the layers that exist; `_flashyAI.tlSelect(l0,f0,l1,f1)`/`tlRange()` are the
   spec entry points.
+- **`clearSpan(layer,f0,f1)` is the one way to empty a range of frames.** It
+  trims and splits: a keyframe running 1-8 with 3-6 cleared leaves 1-2 and a
+  tail at 7-8. The obvious alternative — filtering out any keyframe that
+  overlaps — silently destroys content either side, and was live in
+  Convert Frames to Symbol until the clipboard work shared this routine. Never
+  reintroduce an overlap filter.
+- The frame clipboard holds **plain data, not live objects**, because undo/redo
+  rebuilds every object in the document from a snapshot, so references would be
+  pasting things that are no longer part of anything.
+- `Ctrl+Alt+C/X/V` are the frame clipboard and are tested **before** the plain
+  `Ctrl+C/X/V` object handlers, which are guarded with `!e.altKey`. Without the
+  guard Ctrl+Alt+C falls through and copies objects instead.
 - `createSymbolFromFrames()` must leave the artwork visually where it was: the
   instance is placed at `spanBounds()` and the symbol's objects are shifted by
   that origin, because symbol space starts at the instance's top-left. When
