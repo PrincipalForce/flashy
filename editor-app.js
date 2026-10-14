@@ -1014,9 +1014,26 @@ function showEditCharacterPartDialog(){
        value:o.pivotX!=null?o.pivotX:(o.width||0)/2},
       {name:"pivotY",label:"Joint Y",type:"number",
        value:o.pivotY!=null?o.pivotY:(o.height||0)/2},
-      {name:"rotation",label:"Rotation",type:"number",value:o.rotation||0}
+      {name:"rotation",label:"Rotation",type:"number",value:o.rotation||0},
+      {name:"minRot",label:"Limit from",value:o.rigMin!=null?String(o.rigMin):"",
+       placeholder:"\u2014",
+       hint:"Leave blank for no limit. Limits are what stop IK bending an elbow backwards."},
+      {name:"maxRot",label:"Limit to",value:o.rigMax!=null?String(o.rigMax):"",
+       placeholder:"\u2014"},
+      {name:"locked",label:"Planted",type:"select",value:o.rigLocked?"1":"0",options:[
+        ["0","No \u2014 IK may move this part"],
+        ["1","Yes \u2014 hold it still"]
+      ],hint:"A planted part stops the chain, so dragging a hand cannot shift it."}
     ],
     okLabel:"Apply",
+    validate:function(v){
+      var lo=String(v.minRot||"").trim(),hi=String(v.maxRot||"").trim();
+      if(lo!==""&&isNaN(parseFloat(lo)))return "Limit from must be a number, or blank.";
+      if(hi!==""&&isNaN(parseFloat(hi)))return "Limit to must be a number, or blank.";
+      if(lo!==""&&hi!==""&&parseFloat(lo)>parseFloat(hi))
+        return "Limit from must not be greater than Limit to.";
+      return null;
+    },
     extraButtons:[{
       label:"Remove part",
       onClick:function(){
@@ -1036,7 +1053,14 @@ function showEditCharacterPartDialog(){
       o.name=String(v.partName||"").trim()||o.rigPart;
       o.pivotX=parseFloat(v.pivotX)||0;
       o.pivotY=parseFloat(v.pivotY)||0;
-      o.rotation=parseFloat(v.rotation)||0;
+      // Blank means "no limit", which is not the same as zero — hence the
+      // string check rather than parseFloat's 0-for-junk.
+      var lo=String(v.minRot==null?"":v.minRot).trim();
+      var hi=String(v.maxRot==null?"":v.maxRot).trim();
+      o.rigMin=lo===""||isNaN(parseFloat(lo))?null:parseFloat(lo);
+      o.rigMax=hi===""||isNaN(parseFloat(hi))?null:parseFloat(hi);
+      o.rigLocked=v.locked==="1";
+      o.rotation=clampPartRotation(o,parseFloat(v.rotation)||0);
       syncCharacterFromStage(name);
       fullRefresh();
     }
@@ -1155,10 +1179,15 @@ function showAnimateCharacterDialog(){
  *            possible, and what pose-to-pose animation is built from.
  * -------------------------------------------------------------------- */
 
-/** Fields that make up a part's structure, as opposed to its pose. */
-var RIG_STRUCT=["rigPart","rigParent","name","symbolName","pivotX","pivotY","rigZ",
-                "width","height","type","fillColor","strokeColor","strokeWidth"];
-/** Fields a pose captures. A pose is a transform, never artwork. */
+/**
+ * Fields a pose captures. A pose is a transform, never artwork.
+ *
+ * Note there is deliberately no matching list of "structure" fields: a part's
+ * structure is whatever else is on the object, and `plainObj` copies it
+ * generically. That is why `rigMin`/`rigMax`/`rigLocked` needed no
+ * serialization work — and why a spec pins their survival through a save, so
+ * that a future explicit field list cannot drop them silently.
+ */
 var RIG_POSE_FIELDS=["x","y","rotation","scaleX","scaleY"];
 
 function characters(){
@@ -1801,7 +1830,9 @@ function drawRigOverlay(cx){
     var on=o===sel;
     var r=(on?5:3.5)*k;
     cx.beginPath();cx.arc(pv.x,pv.y,r,0,Math.PI*2);
-    cx.fillStyle=on?"#FFD24A":"#5AAAFF";
+    // A locked joint is drawn differently, because "why won't this move" is
+    // otherwise a genuinely baffling few minutes.
+    cx.fillStyle=o.rigLocked?"#FF7A7A":(on?"#FFD24A":"#5AAAFF");
     cx.globalAlpha=on?1:0.8;
     cx.fill();
     cx.globalAlpha=1;
@@ -1821,12 +1852,133 @@ function drawRigOverlay(cx){
   cx.restore();
 }
 
+/* ---- Inverse kinematics -------------------------------------------- *
+ * Drag a hand and the elbow and shoulder bend to follow it.
+ *
+ * The solver writes nothing but `rotation` onto the parts it moves. That is
+ * the whole design: IK is an authoring aid, not a runtime feature, so poses,
+ * keyframes, tweens and the HTML export are completely untouched by it. A
+ * keyframe produced by dragging a hand is indistinguishable from one posed
+ * joint by joint.
+ *
+ * Cyclic Coordinate Descent rather than a closed-form two-bone solution:
+ * closed form only handles exactly two bones, while a character wants three
+ * (shoulder/elbow/wrist, hip/knee/ankle) and sometimes a spine. CCD handles
+ * any length, honours per-joint limits and locked parts for free, and
+ * converges in a handful of passes at these sizes.
+ * -------------------------------------------------------------------- */
+
+/** How far up the chain a drag reaches, and how hard the solver tries. */
+var IK_DEFAULT_BONES=2;
+var IK_ITERATIONS=16;
+/** Stop once the effector is within this many stage pixels of the target. */
+var IK_TOLERANCE=0.25;
+
+/**
+ * Clamp a part's rotation to its own limits, if it has any.
+ *
+ * Limits are what stop an elbow bending backwards — without them IK will
+ * happily find the anatomically wrong solution, because it has no idea which
+ * way a knee goes.
+ */
+function clampPartRotation(o,deg){
+  var lo=o.rigMin,hi=o.rigMax;
+  if(lo!=null&&deg<lo)deg=lo;
+  if(hi!=null&&deg>hi)deg=hi;
+  return deg;
+}
+
+/** A part the solver is allowed to turn. */
+function ikMovable(o){return !!o&&!o.rigLocked;}
+
+/**
+ * The chain a drag on `leaf` should move: the leaf and up to `bones-1` of its
+ * ancestors, nearest first. Stops at a locked part, because a locked part is
+ * the animator saying "this is planted" — reaching past it would move the
+ * thing they pinned down.
+ */
+function ikChain(leaf,byId,bones){
+  bones=Math.max(1,bones||IK_DEFAULT_BONES);
+  var chain=[],cur=leaf,guard=0;
+  while(cur&&chain.length<bones&&guard++<RIG_MAX_DEPTH){
+    if(!ikMovable(cur))break;
+    chain.push(cur);
+    cur=cur.rigParent?byId[cur.rigChar+"/"+cur.rigParent]:null;
+  }
+  return chain;
+}
+
+/**
+ * Bend `leaf`'s chain so the point `grab` (in the leaf's own space) reaches
+ * the stage point (tx, ty).
+ *
+ * Returns {bones, error, iterations} — `error` is the distance still left,
+ * which will be non-zero whenever the target is simply out of reach or the
+ * joint limits forbid it. That is not a failure: the limb straightens toward
+ * the target and stops, which is what it should do.
+ */
+function ikSolve(leaf,byId,grab,tx,ty,opts){
+  opts=opts||{};
+  var chain=ikChain(leaf,byId,opts.bones);
+  if(!chain.length)return null;
+
+  var iters=0;
+  var dist=function(){
+    var e=rigApplyChain(rigAncestors(leaf,byId).concat([leaf]),grab.x,grab.y);
+    var dx=tx-e.x,dy=ty-e.y;
+    return {d:Math.sqrt(dx*dx+dy*dy),e:e};
+  };
+
+  var best=dist().d;
+  for(var it=0;it<(opts.iterations||IK_ITERATIONS);it++){
+    iters++;
+    for(var i=0;i<chain.length;i++){
+      var part=chain[i];
+      var joint=rigPivotWorld(part,byId);
+      var cur=dist().e;
+      // Turn this joint so the effector swings onto the target. Both angles
+      // are measured from the joint, so the difference is exactly the
+      // correction this joint can contribute.
+      var a=Math.atan2(cur.y-joint.y,cur.x-joint.x);
+      var b=Math.atan2(ty-joint.y,tx-joint.x);
+      var delta=(b-a)*180/Math.PI;
+      if(!isFinite(delta))continue;
+      var want=(part.rotation||0)+delta;
+      // Damp the joints further up the chain. Undamped CCD throws the root
+      // around on the first pass, which looks like the whole body lurching.
+      if(i>0)want=(part.rotation||0)+delta*(1/(1+i));
+      part.rotation=Math.round(clampPartRotation(part,want)*1000)/1000;
+    }
+    var now=dist().d;
+    if(now<=IK_TOLERANCE)break;
+    // Converged as far as it is going to (out of reach, or limits binding).
+    if(Math.abs(best-now)<1e-4)break;
+    best=now;
+  }
+  return {bones:chain.length,error:dist().d,iterations:iters};
+}
+
 /* ---- Posing ------------------------------------------------------- *
  * Drag a limb to swing it about its joint; children follow because they
  * inherit the transform rather than being copied. Ctrl drags the joint
  * itself, Alt moves the part, Shift snaps the angle.
  * -------------------------------------------------------------------- */
 var poseDrag=null;
+/**
+ * Drag behaviour for the Pose tool.
+ *
+ * `ik` is the default because bending a limb to put a hand where you want it
+ * is the common case; "single" is a straight one-joint swing. Tool state, not
+ * document state, so it is not saved with the file.
+ */
+var poseMode="ik";
+var poseBones=IK_DEFAULT_BONES;
+
+function setPoseMode(m){poseMode=(m==="single")?"single":"ik";emitRigChange();}
+function setPoseBones(n){
+  poseBones=Math.max(1,Math.min(RIG_MAX_DEPTH,parseInt(n,10)||IK_DEFAULT_BONES));
+  emitRigChange();
+}
 
 function poseMouseDown(e,p){
   var hit=rigHitTest(p.x,p.y);
@@ -1835,9 +1987,16 @@ function poseMouseDown(e,p){
   var kf=CKF();
   var byId=rigIndex(kf?kf.objects:[]);
   var pv=rigPivotWorld(hit,byId);
+
+  var mode;
+  if(e.ctrlKey||e.metaKey)mode="pivot";
+  else if(e.altKey)mode="move";
+  else if(poseMode==="ik"&&!hit.rigLocked&&ikChain(hit,byId,poseBones).length>1)mode="ik";
+  else mode="rotate";
+
   poseDrag={
     part:hit,
-    mode:(e.ctrlKey||e.metaKey)?"pivot":(e.altKey?"move":"rotate"),
+    mode:mode,
     pivot:pv,
     startAngle:Math.atan2(p.y-pv.y,p.x-pv.x),
     startRot:hit.rotation||0,
@@ -1845,7 +2004,15 @@ function poseMouseDown(e,p){
     startPivotX:hit.pivotX!=null?hit.pivotX:(hit.width||0)/2,
     startPivotY:hit.pivotY!=null?hit.pivotY:(hit.height||0)/2,
     from:p,
-    // Captured before anything moves, so one drag is one undo step.
+    // Where on the limb the drag started, in the part's own space. The grab
+    // point *is* the effector, so pulling a limb anywhere along its length
+    // behaves the way grabbing a real arm does.
+    grab:rigLocalPoint(hit,byId,p.x,p.y),
+    // Every rotation in the chain, so one drag is one undo step and a
+    // cancelled drag can put everything back.
+    chainStart:ikChain(hit,byId,poseBones).map(function(q){
+      return {part:q,rotation:q.rotation||0};
+    }),
     pre:snap()
   };
   updateProps();render();
@@ -1854,11 +2021,26 @@ function poseMouseDown(e,p){
 function poseMouseMove(e,p){
   if(!poseDrag)return;
   var o=poseDrag.part;
+  if(poseDrag.mode==="ik"){
+    var kfi=CKF();
+    ikSolve(o,rigIndex(kfi?kfi.objects:[]),poseDrag.grab,p.x,p.y,{bones:poseBones});
+    if(e.shiftKey){
+      // Snapping an IK result means snapping the joints it produced, which is
+      // what you want when a pose has to be exactly horizontal.
+      poseDrag.chainStart.forEach(function(st){
+        st.part.rotation=clampPartRotation(st.part,Math.round((st.part.rotation||0)/15)*15);
+      });
+    }
+    render();
+    return;
+  }
   if(poseDrag.mode==="rotate"){
     var a=Math.atan2(p.y-poseDrag.pivot.y,p.x-poseDrag.pivot.x);
     var deg=poseDrag.startRot+(a-poseDrag.startAngle)*180/Math.PI;
     if(e.shiftKey)deg=Math.round(deg/15)*15;
-    o.rotation=Math.round(deg*100)/100;
+    // The same limits IK respects, so a joint cannot be dragged somewhere the
+    // solver would refuse to put it.
+    o.rotation=Math.round(clampPartRotation(o,deg)*100)/100;
   }else if(poseDrag.mode==="move"){
     o.x=poseDrag.startX+(p.x-poseDrag.from.x);
     o.y=poseDrag.startY+(p.y-poseDrag.from.y);
@@ -1877,11 +2059,15 @@ function poseMouseMove(e,p){
 function poseMouseUp(){
   if(!poseDrag)return;
   var o=poseDrag.part;
-  // Only commit an undo step if something actually changed.
+  // Only commit an undo step if something actually changed. An IK drag can
+  // move joints other than the one grabbed, so the whole chain counts.
   var moved=(o.rotation||0)!==poseDrag.startRot||
             (o.x||0)!==poseDrag.startX||(o.y||0)!==poseDrag.startY||
             (o.pivotX!=null?o.pivotX:0)!==poseDrag.startPivotX||
             (o.pivotY!=null?o.pivotY:0)!==poseDrag.startPivotY;
+  (poseDrag.chainStart||[]).forEach(function(st){
+    if((st.part.rotation||0)!==st.rotation)moved=true;
+  });
   if(moved){
     pushUndoSnap(poseDrag.pre);
     if(poseDrag.mode==="pivot")syncCharacterFromStage(o.rigChar);
@@ -6814,6 +7000,18 @@ function init(){
     worldPoint:function(o,lx,ly){return rigWorldPoint(o,rigIndex((CKF()||{objects:[]}).objects),lx,ly);},
     localPoint:function(o,wx,wy){return rigLocalPoint(o,rigIndex((CKF()||{objects:[]}).objects),wx,wy);},
     hitTest:rigHitTest,
+    // IK. `solve` is the same entry point a drag uses.
+    solve:function(leaf,grab,tx,ty,opts){
+      return ikSolve(leaf,rigIndex((CKF()||{objects:[]}).objects),grab,tx,ty,opts);
+    },
+    chain:function(leaf,bones){
+      return ikChain(leaf,rigIndex((CKF()||{objects:[]}).objects),bones)
+        .map(function(o){return o.rigPart;});
+    },
+    poseMode:function(){return poseMode;},
+    setPoseMode:setPoseMode,
+    bones:function(){return poseBones;},
+    setBones:setPoseBones,
     drawPlan:function(){return rigDrawPlan((CKF()||{objects:[]}).objects);},
     isPart:isRigPart,
     fields:RIG_POSE_FIELDS,

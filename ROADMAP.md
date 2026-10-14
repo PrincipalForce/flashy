@@ -390,7 +390,7 @@ Fixed step list only. Standard in every comparable tool.
 ### ✅ 25. Tests and CI
 
 **What.** `npm test` runs Playwright against the real editor over
-`scripts/serve.cjs`. **80 specs** in `tests/` — 77 in Chromium, 3 driving the
+`scripts/serve.cjs`. **92 specs** in `tests/` — 89 in Chromium, 3 driving the
 real Electron app:
 
 | Spec | n | Covers |
@@ -404,6 +404,7 @@ real Electron app:
 | `audio` | 9 | Import, waveform, scrub, Stream vs Event, the HTML export's audio gate |
 | `puppet` | 8 | Graphic / Movie Clip / Button behaviour on the stage and in exports, Swap Symbol |
 | `dialogs` | 5 | `prompt()` banned, Document Settings validation, the API key dialog, a 7,200-frame timeline, timeline zoom |
+| `ik` | 11 | Reaching a target, out-of-reach behaviour, chain length, planted parts, joint limits, **rotation-only side effects**, drag-to-IK as one undo step, single-part mode, the panel controls, the limits dialog, persistence |
 | `character` | 12 | Parenting not moving a part, a parent swinging its child, compounded rotation, a refused cycle, rig draw order, **stage/export parity on a posed limb**, poses saved/applied/round-tripped, mirroring, Animate Poses, the panel tree, drag-to-pose with one undo, and building a character through the menus |
 | `lipsync` | 18 | Silence vs speech, each sound mapping to its own shape, min hold, editable output keyframes, the mouth chart, re-running, the no-sound message, shapes drawn on multi-frame keyframes, a symbol with no `layers`, a collapsed chart being reported, placement inherited onto a new layer, a sound surviving a pass on its own layer, and Set Up Mouth Shapes (creating, charting, tightening, legacy symbols, end-to-end, the menu) |
 | `desktop.espec` | 3 | The shell boots and installs its bridge; dirty state reaches the title and the main process; the in-app dialogs work where `prompt()` throws |

@@ -151,6 +151,15 @@ Drive the app through its published seams, not its internals:
   accumulates transforms up to the root; it must wait for
   `__stage.root.children.length > 0`, because the display list is built by the
   first frame script, not at load.
+- **IK** is `ikSolve()` (CCD) behind `_flashyRig.solve/chain/poseMode/setPoseMode/bones/setBones`.
+  It writes **only `rotation`** — a spec asserts no other field changes, and
+  that invariant is what keeps poses, tweens and the export ignorant of IK.
+  `ikChain()` stops at a part with `rigLocked`, and `clampPartRotation()`
+  applies `rigMin`/`rigMax` in both IK and FK. Out-of-reach returns a non-zero
+  `error` rather than failing.
+- The Pose tool's **default drag is IK** (`poseMode === "ik"`, 2 bones), so a
+  spec that wants one-joint FK must call `setPoseMode("single")` first — this
+  caught an older spec that had encoded the pre-IK default.
 - The Pose tool (`setTool("pose")`) is its own mode: drag rotates, Ctrl+drag
   moves the joint, Alt+drag moves the part, Shift snaps. One drag is one undo
   step — the snapshot is captured on mousedown and only pushed if something
