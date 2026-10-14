@@ -383,12 +383,16 @@ test("the Character panel shows the hierarchy and follows the selection", async 
   await expect(panel.locator(".ch-detail")).toContainText("Joint");
 });
 
-test("dragging a limb with the Pose tool rotates it about its joint, once", async ({ page }) => {
+test("in single-part mode a drag rotates one joint, once", async ({ page }) => {
   await openEditor(page);
   await loadDoc(page, armDoc());
 
+  // Forward kinematics explicitly: since IK shipped, a plain drag bends the
+  // whole chain, which is the default and is covered in ik.spec.js. This is
+  // the one-joint path.
   await page.evaluate(() => {
     window._flashyRig.setTool("pose");
+    window._flashyRig.setPoseMode("single");
     window._flashyAI.fullRefresh();
   });
 

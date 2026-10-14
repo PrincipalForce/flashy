@@ -179,8 +179,22 @@ gets built. **Animate Poses** writes a sequence as keyframes with tweens and an
 optional loop back to the first pose. What lands is ordinary keyframes — drag a
 limb on any of them and the tween follows.
 
-Still to come: IK, so dragging a hand bends the elbow for you; and a biped
-template, so a first rig is one click rather than six.
+**IK shipped in 0.7.1.** Dragging a limb bends the joints above it to follow —
+Cyclic Coordinate Descent rather than a closed-form two-bone solve, because a
+character wants three joints (shoulder/elbow/wrist, hip/knee/ankle) and
+sometimes a spine, and CCD handles any length while honouring per-joint limits
+and planted parts for free. The point worth repeating: **the solver writes
+nothing but `rotation`**, so IK is an authoring aid and poses, keyframes,
+tweens and the export are completely untouched by it. A keyframe made by
+dragging a hand is indistinguishable from one posed joint by joint.
+
+Joints take optional limits (an elbow that only bends one way) and parts can be
+planted so a drag cannot shift them — without limits the solver happily finds
+the anatomically wrong answer, because it has no idea which way a knee goes.
+Out of reach, the limb straightens toward the target and stops, which is what
+it should do.
+
+Still to come: a biped template, so a first rig is one click rather than six.
 
 ### ✅ 5. Puppet mechanics — shipped in 0.5
 

@@ -137,6 +137,7 @@
       return;
     }
 
+    host.appendChild(dragSection());
     host.appendChild(partsSection(name));
     host.appendChild(posesSection(name));
   }
@@ -196,6 +197,52 @@
     return row;
   }
 
+  /**
+   * How a drag on the stage behaves.
+   *
+   * Chain (IK) is the default: putting a hand where you want it and letting
+   * the elbow work itself out is the common case, and it is the thing that
+   * makes a rig faster than drawing the pose. Single part is a plain one-joint
+   * swing for when you want exactly that.
+   */
+  function dragSection() {
+    var sec = el("div", "ch-sec");
+    var head = el("div", "ch-sec-head");
+    head.appendChild(el("span", null, "Pose tool"));
+    sec.appendChild(head);
+
+    var row = el("div", "ch-row");
+    var mode = el("select", "ch-select");
+    [["ik", "Drag the chain (IK)"], ["single", "Swing one part"]].forEach(function (o) {
+      var op = el("option", null, o[1]);
+      op.value = o[0];
+      if (rig().poseMode() === o[0]) op.selected = true;
+      mode.appendChild(op);
+    });
+    mode.addEventListener("change", function () { rig().setPoseMode(mode.value); });
+    row.appendChild(mode);
+
+    if (rig().poseMode() === "ik") {
+      var bones = el("input", "ch-num");
+      bones.type = "number";
+      bones.min = "1";
+      bones.max = "8";
+      bones.value = String(rig().bones());
+      bones.title = "How many joints up the chain a drag reaches. 2 for an arm from the hand, 3 to include the shoulder.";
+      bones.addEventListener("change", function () { rig().setBones(bones.value); });
+      row.appendChild(bones);
+    }
+    sec.appendChild(row);
+
+    sec.appendChild(el("p", "ch-dim",
+      rig().poseMode() === "ik"
+        ? "Drag a limb and the joints above it follow. Ctrl+drag moves a joint, " +
+          "Alt+drag moves the part, Shift snaps."
+        : "Drag a limb to swing just that joint. Ctrl+drag moves the joint, " +
+          "Alt+drag moves the part, Shift snaps."));
+    return sec;
+  }
+
   function partsSection(name) {
     var sec = el("div", "ch-sec");
     var head = el("div", "ch-sec-head");
@@ -220,6 +267,15 @@
       r.appendChild(label);
 
       var tools = el("span", "ch-part-tools");
+      tools.appendChild(button(o.rigLocked ? "🔒" : "🔓",
+        o.rigLocked ? "Planted — IK will not move this part" : "Let IK move this part",
+        function (e) {
+          e.stopPropagation();
+          ai().pushUndo();
+          o.rigLocked = !o.rigLocked;
+          rig().sync(name);
+          rig().refresh();
+        }, "ch-mini" + (o.rigLocked ? " ch-locked" : "")));
       tools.appendChild(button("▲", "Bring forward", function (e) {
         e.stopPropagation();
         ai().pushUndo();
@@ -262,6 +318,11 @@
     stat("Parent", o.rigParent || "(root)");
     stat("Rotation", (Math.round((o.rotation || 0) * 10) / 10) + "°");
     stat("Joint", Math.round(pv.x) + ", " + Math.round(pv.y));
+    if (o.rigMin != null || o.rigMax != null) {
+      stat("Limits", (o.rigMin != null ? o.rigMin : "—") + "° … " +
+                     (o.rigMax != null ? o.rigMax : "—") + "°");
+    }
+    if (o.rigLocked) stat("Planted", "yes");
     box.appendChild(grid);
 
     var row = el("div", "ch-row");
@@ -269,6 +330,9 @@
       ai().pushUndo();
       o.rotation = 0;
       rig().refresh();
+    }));
+    row.appendChild(button("Limits…", "Set how far this joint may turn", function () {
+      window._flashyEditor.doAction("editCharacterPart");
     }));
     row.appendChild(button("Centre joint", "Put the joint back in the middle of the part", function () {
       ai().pushUndo();

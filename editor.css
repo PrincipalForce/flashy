@@ -1063,3 +1063,12 @@ input[type="range"].props-input {
 .ch-empty { padding: 4px; }
 .ch-empty p { margin: 0 0 6px; line-height: 1.45; }
 .ch-dim { color: var(--text-dim); }
+.ch-num {
+  width: 44px; flex: 0 0 auto; text-align: right;
+  background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--bevel-lo); border-radius: 3px; padding: 2px 4px;
+  font-size: 11px;
+}
+/* A planted joint reads as locked at a glance, matching the red handle the
+   stage overlay draws for it. */
+.ch-locked { color: #FF7A7A; }
