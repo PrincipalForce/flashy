@@ -373,6 +373,7 @@ var menus=[
   ]},
   {label:"Modify",items:[
     {label:"Convert to Symbol...",action:"convertSym",shortcut:"F8"},
+    {label:"Convert Frames to Symbol...",action:"framesToSymbol"},
     {type:"sep"},
     {label:"Create Motion Tween",action:"motionTween"},
     {label:"Create Shape Tween",action:"shapeTween"},
@@ -385,6 +386,7 @@ var menus=[
     {label:"Remove Frames",action:"removeFrames",shortcut:"Shift+F5"}
   ]},
   {label:"Character",items:[
+    {label:"New Biped...",action:"newBiped"},
     {label:"New Character...",action:"newCharacter"},
     {label:"Add Part...",action:"addCharacterPart"},
     {label:"Edit Part...",action:"editCharacterPart"},
@@ -850,6 +852,447 @@ function symbolFrameObjects(sym,frame){
     if(skf)out=out.concat(skf.objects);
   }
   return out;
+}
+
+/* ---- Frames to symbol --------------------------------------------- *
+ * Select a block of the timeline — any number of layers, any span of frames —
+ * and turn it into one symbol.
+ *
+ * Flash's answer to this was Copy Frames, make a symbol, Paste Frames: three
+ * steps, and it dropped the content's position so you had to line the instance
+ * up by eye afterwards. Here the instance lands exactly where the artwork
+ * already was, which is the difference between a useful command and one you
+ * stop trusting.
+ * -------------------------------------------------------------------- */
+
+/** Every keyframe of `layer` that overlaps frames [f0,f1]. */
+function keyframesInSpan(layer,f0,f1){
+  return (layer.keyframes||[]).filter(function(kf){
+    var end=kf.index+kf.duration-1;
+    return !(end<f0||kf.index>f1);
+  });
+}
+
+/**
+ * The bounding box of every object in the selected block.
+ *
+ * The instance is placed at this box and the symbol's contents are shifted to
+ * be relative to it, because symbol space has its origin at the instance's
+ * top-left. That is what makes the conversion visually invisible.
+ */
+function spanBounds(layers,r){
+  var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,found=false;
+  for(var li=r.l0;li<=r.l1;li++){
+    var layer=layers[li];
+    if(!layer)continue;
+    keyframesInSpan(layer,r.f0,r.f1).forEach(function(kf){
+      (kf.objects||[]).forEach(function(o){
+        var x0=Math.min(o.x||0,(o.x||0)+(o.width||0));
+        var x1=Math.max(o.x||0,(o.x||0)+(o.width||0));
+        var y0=Math.min(o.y||0,(o.y||0)+(o.height||0));
+        var y1=Math.max(o.y||0,(o.y||0)+(o.height||0));
+        if(x0<minX)minX=x0;
+        if(y0<minY)minY=y0;
+        if(x1>maxX)maxX=x1;
+        if(y1>maxY)maxY=y1;
+        found=true;
+      });
+    });
+  }
+  if(!found)return null;
+  return {x:minX,y:minY,width:Math.max(1,maxX-minX),height:Math.max(1,maxY-minY)};
+}
+
+/**
+ * Build a symbol from the selected block.
+ *
+ * opts: {name, behavior, replace, range}
+ * Returns {name, layers, frames, bounds, sounds} or an error string.
+ */
+function createSymbolFromFrames(opts){
+  opts=opts||{};
+  var r=opts.range||tlRange();
+  if(!r)return "Select some frames in the timeline first.";
+  var name=String(opts.name||"").trim();
+  if(!name)return "Give the symbol a name.";
+  if(doc.library[name])return "There is already a symbol called \u201c"+name+"\u201d.";
+
+  var layers=currentLayers();
+  var bounds=spanBounds(layers,r);
+  if(!bounds)return "Those frames are empty \u2014 there is nothing to put in a symbol.";
+
+  var span=r.f1-r.f0+1;
+  var symLayers=[],soundsFound=[];
+
+  for(var li=r.l0;li<=r.l1;li++){
+    var layer=layers[li];
+    if(!layer)continue;
+    var kfs=keyframesInSpan(layer,r.f0,r.f1);
+    if(!kfs.length)continue;
+    var newLayer=new Layer(layer.name);
+    newLayer.visible=layer.visible!==false;
+    newLayer.locked=false;      // a locked layer inside a new symbol is a trap
+    newLayer.keyframes=[];
+
+    kfs.forEach(function(kf){
+      // Clip to the selection: a keyframe may start before it or run past it.
+      var from=Math.max(kf.index,r.f0);
+      var to=Math.min(kf.index+kf.duration-1,r.f1);
+      var nk=kf.clone();
+      nk.index=from-r.f0+1;
+      nk.duration=to-from+1;
+      // A sound belongs to the main timeline: the engine builds its soundtrack
+      // from the root layers only, so carrying one in here would silently mute
+      // it. Note it and leave it behind instead.
+      if(nk.sound){
+        soundsFound.push({index:kf.index,sound:kf.sound,layerIdx:li});
+        nk.sound=null;
+      }
+      // A tween whose destination keyframe fell outside the selection has
+      // nothing left to tween to.
+      if(nk.tweenType&&nk.tweenType!=="none"){
+        var hasNext=kfs.some(function(q){return q.index>kf.index&&q.index<=r.f1;});
+        if(!hasNext)nk.tweenType="none";
+      }
+      nk.objects.forEach(function(o){
+        o.x=(o.x||0)-bounds.x;
+        o.y=(o.y||0)-bounds.y;
+      });
+      newLayer.keyframes.push(nk);
+    });
+
+    if(!newLayer.keyframes.length)newLayer.keyframes=[new KeyFrame(1)];
+    newLayer.keyframes.sort(function(a,b){return a.index-b.index;});
+    symLayers.push(newLayer);
+  }
+
+  if(!symLayers.length)return "Those frames are empty \u2014 there is nothing to put in a symbol.";
+
+  doc.library[name]={
+    objects:[],
+    layers:symLayers,
+    totalFrames:span,
+    behavior:opts.behavior||"movieclip"
+  };
+
+  if(opts.replace!==false){
+    // Clear the block, then drop one instance where the artwork was.
+    for(var ri=r.l0;ri<=r.l1;ri++){
+      var lay=layers[ri];
+      if(!lay)continue;
+      lay.keyframes=lay.keyframes.filter(function(kf){
+        return kf.index+kf.duration-1<r.f0||kf.index>r.f1;
+      });
+    }
+    var host=layers[r.l0];
+    var inst=new EditorObject("symbol");
+    inst.type="symbol";
+    inst.symbolName=name;
+    inst.symbolBehavior=opts.behavior||"movieclip";
+    inst.firstFrame=1;
+    inst.loopMode="loop";
+    inst.x=bounds.x;inst.y=bounds.y;
+    inst.width=bounds.width;inst.height=bounds.height;
+    var kfNew=new KeyFrame(r.f0);
+    kfNew.duration=span;
+    kfNew.objects=[inst];
+    host.keyframes.push(kfNew);
+    host.keyframes.sort(function(a,b){return a.index-b.index;});
+
+    // A Layer with no keyframes at all makes getKeyframeAt() return null
+    // forever, so the layer would be permanently unusable. Done after the
+    // instance is placed — doing it during the clear left the host layer with
+    // a blank keyframe sitting on top of the instance at the same index.
+    for(var ei=r.l0;ei<=r.l1;ei++){
+      var lay3=layers[ei];
+      if(lay3&&!lay3.keyframes.length)lay3.keyframes=[new KeyFrame(1)];
+    }
+
+    // Put the sounds back on the layers they came from, at their own frames.
+    soundsFound.forEach(function(sv){
+      var lay2=layers[sv.layerIdx];
+      if(!lay2)return;
+      var at=lay2.getKeyframeAt(sv.index);
+      if(!at){
+        at=new KeyFrame(sv.index);
+        at.duration=1;
+        lay2.keyframes.push(at);
+        lay2.keyframes.sort(function(a,b){return a.index-b.index;});
+      }
+      if(!at.sound)at.sound=sv.sound;
+    });
+  }
+
+  return {
+    name:name,
+    layers:symLayers.length,
+    frames:span,
+    bounds:bounds,
+    sounds:soundsFound.length,
+    replaced:opts.replace!==false
+  };
+}
+
+function showFramesToSymbolDialog(){
+  var r=tlRange();
+  if(!r){
+    showMessage("Convert Frames to Symbol",
+      "Select some frames in the timeline first \u2014 drag across the frames and "+
+      "layers you want, or shift-click to extend the block.");
+    return;
+  }
+  var layers=currentLayers();
+  if(!spanBounds(layers,r)){
+    showMessage("Convert Frames to Symbol",
+      "Those frames are empty, so there is nothing to put in a symbol.");
+    return;
+  }
+  var span=r.f1-r.f0+1,lays=r.l1-r.l0+1;
+
+  showDialog({
+    title:"Convert Frames to Symbol",
+    message:"Turns the selected "+span+" frame"+(span===1?"":"s")+" on "+lays+
+            " layer"+(lays===1?"":"s")+" into one symbol. The instance is placed "+
+            "exactly where the artwork is now, so nothing moves.",
+    fields:[
+      {name:"name",label:"Name",value:uniqueSymbolName("Symbol")},
+      {name:"behavior",label:"Behaviour",type:"select",value:span>1?"movieclip":"graphic",
+       options:[
+         ["movieclip","Movie Clip \u2014 runs its own timeline"],
+         ["graphic","Graphic \u2014 driven by the parent timeline"],
+         ["button","Button \u2014 frames 1-4 are Up/Over/Down/Hit"]
+       ]},
+      {name:"replace",label:"The frames",type:"select",value:"1",options:[
+        ["1","Replace them with an instance"],
+        ["0","Leave them alone, just add the symbol"]
+      ]}
+    ],
+    okLabel:"Convert",
+    validate:function(v){
+      var n=String(v.name||"").trim();
+      if(!n)return "Give the symbol a name.";
+      if(doc.library[n])return "There is already a symbol called \u201c"+n+"\u201d.";
+      return null;
+    },
+    onOk:function(v){
+      pushUndo();
+      var res=createSymbolFromFrames({
+        name:v.name,
+        behavior:v.behavior,
+        replace:v.replace==="1",
+        range:r
+      });
+      if(typeof res==="string"){
+        showMessage("Convert Frames to Symbol",res);
+        return;
+      }
+      if(res.replaced)tlSelRange=null;
+      fullRefresh();
+      var note="\u201c"+res.name+"\u201d created from "+res.frames+" frame"+
+               (res.frames===1?"":"s")+" on "+res.layers+" layer"+
+               (res.layers===1?"":"s")+".";
+      if(res.replaced)note+=" The frames are now one instance \u2014 double-click it to edit inside.";
+      else note+=" The frames are untouched.";
+      if(res.sounds){
+        note+="\n\n"+res.sounds+" sound"+(res.sounds===1?" was":"s were")+
+              " left on the main timeline: the engine builds its soundtrack from "+
+              "the root layers, so a sound inside a symbol would not play.";
+      }
+      showMessage("Convert Frames to Symbol",note,{okLabel:"Done"});
+    }
+  });
+}
+
+/** A library name that is not taken yet. */
+function uniqueSymbolName(base){
+  base=String(base||"Symbol").trim()||"Symbol";
+  if(!doc.library[base])return base;
+  var n=2;
+  while(doc.library[base+" "+n])n++;
+  return base+" "+n;
+}
+
+/* ---- Biped template ----------------------------------------------- *
+ * A whole rig in one step.
+ *
+ * Building the first character by hand is eleven Add Part dialogs, and the
+ * part that actually needs judgement — where the joints go, what is parented
+ * to what, which arm draws in front — is the part a beginner gets wrong. The
+ * template encodes the answers: hips at the root, spine up through chest to
+ * head, limbs hanging off the right places, joints at the top of each limb,
+ * and the far arm and leg behind the body.
+ *
+ * Each part is still an ordinary symbol instance, so every piece of it can be
+ * re-drawn, re-parented, re-pivoted or deleted afterwards. It is a starting
+ * point, not a fixed skeleton.
+ * -------------------------------------------------------------------- */
+
+/**
+ * The skeleton, in fractions of the figure's height and width.
+ *
+ * Proportions are roughly a stylised 7-heads-tall figure. `px/py` are the
+ * joint's position within the part, as fractions of that part's own box —
+ * 0.5,0 means top-centre, which is where a limb's joint belongs.
+ *
+ * `z` is draw order: the far arm and leg sit behind the torso, which is the
+ * whole reason draw order is separate from the hierarchy.
+ */
+var BIPED_PARTS=[
+  // id            label            parent      x     y     w     h     px   py   z
+  ["hips",        "Hips",          "",        0.30, 0.52, 0.40, 0.12, 0.5, 0.5,  6],
+  ["torso",       "Torso",         "hips",    0.28, 0.28, 0.44, 0.26, 0.5, 1.0,  7],
+  ["head",        "Head",          "torso",   0.34, 0.06, 0.32, 0.22, 0.5, 1.0,  8],
+  ["arm-far",     "Right Arm",     "torso",   0.17, 0.30, 0.12, 0.20, 0.5, 0.0,  2],
+  ["forearm-far", "Right Forearm", "arm-far", 0.17, 0.49, 0.11, 0.19, 0.5, 0.0,  1],
+  ["hand-far",    "Right Hand",    "forearm-far", 0.17, 0.67, 0.10, 0.08, 0.5, 0.0, 0],
+  ["leg-far",     "Right Leg",     "hips",    0.34, 0.63, 0.13, 0.20, 0.5, 0.0,  4],
+  ["shin-far",    "Right Shin",    "leg-far", 0.34, 0.82, 0.12, 0.18, 0.5, 0.0,  3],
+  ["arm-near",    "Left Arm",      "torso",   0.71, 0.30, 0.12, 0.20, 0.5, 0.0, 10],
+  ["forearm-near","Left Forearm",  "arm-near",0.71, 0.49, 0.11, 0.19, 0.5, 0.0, 11],
+  ["hand-near",   "Left Hand",     "forearm-near",0.71,0.67,0.10,0.08,0.5, 0.0, 12],
+  ["leg-near",    "Left Leg",      "hips",    0.53, 0.63, 0.13, 0.20, 0.5, 0.0,  5],
+  ["shin-near",   "Left Shin",     "leg-near",0.53, 0.82, 0.12, 0.18, 0.5, 0.0,  9]
+];
+
+/** Joint limits that keep IK anatomically honest on a fresh rig. */
+var BIPED_LIMITS={
+  "forearm-far":[-150,0],  "forearm-near":[-150,0],   // elbows bend one way
+  "shin-far":[0,150],      "shin-near":[0,150],       // so do knees
+  "head":[-40,40]
+};
+
+/**
+ * Placeholder artwork for a part, so a new rig is visible and posable
+ * immediately. A rounded block reads as a limb well enough to animate with,
+ * and every one is a normal symbol you can open and redraw.
+ */
+function bipedPlaceholderSymbol(name,label,w,h,colour){
+  if(doc.library[name])return name;
+  var o=new EditorObject("rect");
+  o.x=0;o.y=0;o.width=w;o.height=h;
+  o.fillColor=colour;
+  o.fillAlpha=1;
+  o.fillType="solid";
+  o.strokeColor="#2B2B33";
+  o.strokeWidth=2;
+  o.strokeStyle="solid";
+  o.name=label;
+  var layer=new Layer("Layer 1");
+  layer.keyframes=[new KeyFrame(1)];
+  layer.keyframes[0].objects=[o];
+  doc.library[name]={objects:[],layers:[layer],totalFrames:1,behavior:"graphic"};
+  return name;
+}
+
+/**
+ * Build a biped.
+ *
+ * opts: {character, height, x, y, symbols}
+ * `symbols` optionally maps a part id to an existing library symbol, so the
+ * template can be built straight onto artwork you have already drawn.
+ */
+function createBiped(opts){
+  opts=opts||{};
+  var name=String(opts.character||"").trim();
+  if(!name)return "Give the character a name.";
+  var cs=characters();
+  if(cs[name])return "There is already a character called \u201c"+name+"\u201d.";
+  var kf=CKF();
+  if(!kf)return "Select a keyframe to build the character on.";
+
+  var H=Math.max(60,opts.height||Math.round(doc.height*0.8));
+  var W=Math.round(H*0.42);
+  var ox=opts.x!=null?opts.x:Math.round((doc.width-W)/2);
+  var oy=opts.y!=null?opts.y:Math.round((doc.height-H)/2);
+  var supplied=opts.symbols||{};
+
+  // Skin tones: torso and head darker, limbs lighter, so the hierarchy reads
+  // at a glance before any artwork exists.
+  var COLOURS={hips:"#6E7A8A",torso:"#7D8A9C",head:"#95A3B5"};
+  var FAR="#5E6878",NEAR="#8795A8";
+
+  cs[name]={name:name,parts:[],poses:{}};
+  var made=[];
+
+  BIPED_PARTS.forEach(function(spec){
+    var id=spec[0],label=spec[1],parent=spec[2];
+    var w=Math.max(4,Math.round(spec[5]*W)),h=Math.max(4,Math.round(spec[6]*H));
+    var x=ox+Math.round(spec[3]*W),y=oy+Math.round(spec[4]*H);
+    var colour=COLOURS[id]||(id.indexOf("-far")>=0?FAR:NEAR);
+    var symName=supplied[id]||bipedPlaceholderSymbol(
+      name+" "+label,label,w,h,colour);
+
+    var o=new EditorObject("symbol");
+    o.type="symbol";
+    o.symbolName=symName;
+    o.symbolBehavior="graphic";
+    o.loopMode="single";
+    o.firstFrame=1;
+    o.x=x;o.y=y;o.width=w;o.height=h;
+    o.name=label;
+    o.instanceName=id;
+    o.rigChar=name;
+    o.rigPart=id;
+    o.rigParent=parent;
+    o.pivotX=Math.round(spec[7]*w);
+    o.pivotY=Math.round(spec[8]*h);
+    o.rigZ=spec[9];
+    var lim=BIPED_LIMITS[id];
+    if(lim){o.rigMin=lim[0];o.rigMax=lim[1];}
+    kf.objects.push(o);
+    made.push(o);
+  });
+
+  syncCharacterFromStage(name);
+  // A rest pose straight away, so there is something to animate back to and
+  // "Animate Poses" is usable without posing anything first.
+  saveCharacterPose(name,"Rest");
+  return {character:name,parts:made.length,width:W,height:H,x:ox,y:oy};
+}
+
+function showBipedDialog(){
+  showDialog({
+    title:"New Biped",
+    message:"Builds a complete rig \u2014 hips, spine, head, two arms and two legs \u2014 "+
+            "with the joints and draw order already right. Every part is an ordinary "+
+            "symbol you can redraw, re-parent or delete.",
+    fields:[
+      {name:"name",label:"Name",value:"Hero"},
+      {name:"height",label:"Height",type:"number",value:Math.round(doc.height*0.8),
+       min:60,max:4000,
+       hint:"In stage pixels, head to foot. Each part starts as a placeholder "+
+            "block — double-click one to draw the real artwork in its place."}
+    ],
+    okLabel:"Build",
+    validate:function(v){
+      var n=String(v.name||"").trim();
+      if(!n)return "Give the character a name.";
+      if(characters()[n])return "There is already a character called \u201c"+n+"\u201d.";
+      var h=parseInt(v.height,10);
+      if(!(h>=60))return "Height must be at least 60 pixels.";
+      return null;
+    },
+    onOk:function(v){
+      pushUndo();
+      var res=createBiped({
+        character:String(v.name).trim(),
+        height:parseInt(v.height,10)
+      });
+      if(typeof res==="string"){
+        showMessage("New Biped",res);
+        return;
+      }
+      if(window._flashyCharacterPanel)window._flashyCharacterPanel.select(res.character);
+      setTool("pose");
+      fullRefresh();
+      showMessage("New Biped",
+        "\u201c"+res.character+"\u201d built with "+res.parts+" parts and a \u201cRest\u201d pose.\n\n"+
+        "The Pose tool is selected: drag a hand or a foot and the limb bends to "+
+        "follow. Elbows and knees already have limits so they cannot bend "+
+        "backwards. Double-click any part to redraw it.",
+        {okLabel:"Start posing"});
+    }
+  });
 }
 
 /* ---- Character commands ------------------------------------------- *
@@ -2181,8 +2624,12 @@ function paintObj(cx,o,opts){
         // instance's top-left — shift there from the centre.
         cx.save();
         cx.translate(-hw,-hh);
-        for(var si=0;si<symObjs.length;si++){
-          paintObj(cx,symObjs[si],{chrome:chrome,depth:depth+1});
+        // Through the rig plan, so a character rig nested inside a symbol
+        // composes its hierarchy here exactly as addPlanned() does in the
+        // export. Painting the flat list would drop every ancestor transform.
+        var symPlan=rigDrawPlan(symObjs);
+        for(var si=0;si<symPlan.length;si++){
+          paintPlanned(cx,symPlan[si],{chrome:chrome,depth:depth+1});
         }
         cx.restore();
       }else if(chrome){
@@ -2926,17 +3373,17 @@ function renderTLFrames(){
     tlCtx.strokeStyle="#222";tlCtx.lineWidth=0.5;
     tlCtx.beginPath();tlCtx.moveTo(sx,y+fh);tlCtx.lineTo(right,y+fh);tlCtx.stroke();
   });
-  // Frame range selection highlight
-  if(tlSelRange&&tlSelRange.layerIdx>=0&&tlSelRange.layerIdx<layers.length){
-    var rs=Math.min(tlSelRange.startFrame,tlSelRange.endFrame);
-    var re=Math.max(tlSelRange.startFrame,tlSelRange.endFrame);
-    var ry=TL_HDR+tlSelRange.layerIdx*fh;
-    var rx=(rs-1)*fw;
-    var rw=(re-rs+1)*fw;
+  // Selected block of cells: one rectangle spanning layers and frames.
+  var selR=tlRange();
+  if(selR){
+    var rx=(selR.f0-1)*fw;
+    var rw=(selR.f1-selR.f0+1)*fw;
+    var ry=TL_HDR+selR.l0*fh;
+    var rh=(selR.l1-selR.l0+1)*fh;
     tlCtx.fillStyle="rgba(68,136,204,0.2)";
-    tlCtx.fillRect(rx,ry,rw,fh);
+    tlCtx.fillRect(rx,ry,rw,rh);
     tlCtx.strokeStyle="rgba(68,136,204,0.6)";tlCtx.lineWidth=1;
-    tlCtx.strokeRect(rx+0.5,ry+0.5,rw-1,fh-1);
+    tlCtx.strokeRect(rx+0.5,ry+0.5,rw-1,rh-1);
   }
   // playhead
   var phx=(curFrame-1)*fw+fw/2;
@@ -3031,7 +3478,39 @@ function updatePH(){
   var ph=document.getElementById("playhead");
   if(ph)ph.style.left=((curFrame-1)*TL_FW_())+'px';
 }
-var tlSelRange=null; // {layerIdx, startFrame, endFrame} for frame range selection
+/**
+ * The selected block of timeline cells.
+ *
+ * `{layerIdx, endLayerIdx, startFrame, endFrame}` — a rectangle, because
+ * anything you would want to do to a span of animation (convert it to a
+ * symbol, remove it, copy it) applies across the layers that make it up, not
+ * one at a time. Either corner may be the larger; use tlRange() to normalise.
+ */
+var tlSelRange=null;
+
+/** The selection as {l0,l1,f0,f1}, clamped to the layers that exist. */
+function tlRange(){
+  if(!tlSelRange)return null;
+  var layers=currentLayers();
+  var a=tlSelRange.layerIdx,b=tlSelRange.endLayerIdx!=null?tlSelRange.endLayerIdx:a;
+  var l0=Math.max(0,Math.min(a,b)),l1=Math.min(layers.length-1,Math.max(a,b));
+  if(l1<l0)return null;
+  return {
+    l0:l0,l1:l1,
+    f0:Math.max(1,Math.min(tlSelRange.startFrame,tlSelRange.endFrame)),
+    f1:Math.max(1,Math.max(tlSelRange.startFrame,tlSelRange.endFrame))
+  };
+}
+
+/** How many cells the selection covers, for labelling menu entries. */
+function tlRangeLabel(){
+  var r=tlRange();
+  if(!r)return "";
+  var frames=r.f1-r.f0+1,lays=r.l1-r.l0+1;
+  if(frames<=1&&lays<=1)return "";
+  return " ("+frames+" frame"+(frames===1?"":"s")+
+         (lays>1?" \u00d7 "+lays+" layers":"")+")";
+}
 function initTLClicks(){
   var tc=document.getElementById("tlCanvas");
   if(!tc)return;
@@ -3086,11 +3565,13 @@ function initTLClicks(){
     var layers=currentLayers();
     if(li>=0&&li<layers.length)curLayer=li;
     curFrame=f;
-    // Shift-click for range selection
-    if(e.shiftKey&&tlSelRange&&tlSelRange.layerIdx===li){
+    // Shift-click extends the block from wherever it started, across layers as
+    // well as frames — that is the whole point of a rectangle.
+    if(e.shiftKey&&tlSelRange){
       tlSelRange.endFrame=f;
+      tlSelRange.endLayerIdx=li;
     }else{
-      tlSelRange={layerIdx:li,startFrame:f,endFrame:f};
+      tlSelRange={layerIdx:li,endLayerIdx:li,startFrame:f,endFrame:f};
     }
     // select keyframe
     if(li>=0&&li<layers.length){
@@ -3109,7 +3590,13 @@ function initTLClicks(){
     audioScrub(curFrame);
     // scrub/range-drag
     function scrub(ev){
-      var sf=Math.max(1,Math.floor(tlPos(ev).x/TL_FW_())+1);
+      var sp=tlPos(ev);
+      var sf=Math.max(1,Math.floor(sp.x/TL_FW_())+1);
+      // Dragging up or down grows the block over those layers, so selecting a
+      // span of an animation is one gesture rather than one per layer.
+      var sl=Math.max(0,Math.min(layers.length-1,Math.floor((sp.y-TL_HDR)/TL_FH)));
+      var changed=false;
+      if(tlSelRange&&tlSelRange.endLayerIdx!==sl){tlSelRange.endLayerIdx=sl;changed=true;}
       if(sf!==curFrame){
         curFrame=sf;
         if(tlSelRange)tlSelRange.endFrame=sf;
@@ -3120,8 +3607,9 @@ function initTLClicks(){
           else selectedKF=null;
         }
         audioScrub(sf);
-        fullRefresh();
+        changed=true;
       }
+      if(changed)fullRefresh();
     }
     function stopScrub(){
       document.removeEventListener("mousemove",scrub);
@@ -3164,12 +3652,7 @@ function initTLClicks(){
     var layers=currentLayers();
     if(li>=0&&li<layers.length)curLayer=li;
     curFrame=f;
-    var rangeInfo="";
-    if(tlSelRange){
-      var s=Math.min(tlSelRange.startFrame,tlSelRange.endFrame);
-      var en=Math.max(tlSelRange.startFrame,tlSelRange.endFrame);
-      if(en>s)rangeInfo=" ("+s+"-"+en+")";
-    }
+    var rangeInfo=tlRangeLabel();
     showTLContextMenu(e.clientX,e.clientY,[
       {label:"Insert Keyframe (F6)",action:function(){doAction("insKF");}},
       {label:"Insert Blank Keyframe (F7)",action:function(){doAction("insBlankKF");}},
@@ -3178,11 +3661,8 @@ function initTLClicks(){
       {label:"Insert Frames"+rangeInfo,action:function(){
         pushUndo();var layer=layers[curLayer];if(!layer)return;
         var count=1;
-        if(tlSelRange){
-          var s2=Math.min(tlSelRange.startFrame,tlSelRange.endFrame);
-          var e2=Math.max(tlSelRange.startFrame,tlSelRange.endFrame);
-          count=e2-s2+1;
-        }
+        var ri=tlRange();
+        if(ri)count=ri.f1-ri.f0+1;
         // Insert N frames at curFrame by extending the keyframe there
         var kfIns=layer.getKeyframeAt(curFrame);
         if(kfIns){
@@ -3197,18 +3677,24 @@ function initTLClicks(){
         fullRefresh();
       }},
       {label:"Remove Frames"+rangeInfo,action:function(){
-        pushUndo();var layer=layers[curLayer];if(!layer)return;
-        if(tlSelRange){
-          var s2=Math.min(tlSelRange.startFrame,tlSelRange.endFrame);
-          var e2=Math.max(tlSelRange.startFrame,tlSelRange.endFrame);
-          var count=e2-s2+1;
-          for(var ff=0;ff<count;ff++){
-            var kfr=layer.getKeyframeAt(s2);
-            if(kfr&&kfr.duration>1)kfr.duration--;
+        pushUndo();
+        var rr=tlRange();
+        if(rr){
+          // Across every selected layer, not just the current one.
+          for(var rl=rr.l0;rl<=rr.l1;rl++){
+            var lay=layers[rl];
+            if(!lay)continue;
+            for(var ff=0;ff<(rr.f1-rr.f0+1);ff++){
+              var kfr=lay.getKeyframeAt(rr.f0);
+              if(kfr&&kfr.duration>1)kfr.duration--;
+            }
           }
         }else{
-          var kfr2=layer.getKeyframeAt(f);
-          if(kfr2&&kfr2.duration>1)kfr2.duration--;
+          var lay2=layers[curLayer];
+          if(lay2){
+            var kfr2=lay2.getKeyframeAt(f);
+            if(kfr2&&kfr2.duration>1)kfr2.duration--;
+          }
         }
         fullRefresh();
       }},
@@ -3225,8 +3711,19 @@ function initTLClicks(){
       {sep:true},
       {label:"Select All Frames",action:function(){
         var layer=layers[curLayer];if(!layer)return;
-        tlSelRange={layerIdx:curLayer,startFrame:1,endFrame:layer.getFrameEnd()};
+        tlSelRange={layerIdx:curLayer,endLayerIdx:curLayer,
+                    startFrame:1,endFrame:layer.getFrameEnd()};
         fullRefresh();
+      }},
+      {label:"Select All Layers",action:function(){
+        var end=1;
+        layers.forEach(function(l){var e2=l.getFrameEnd();if(e2>end)end=e2;});
+        tlSelRange={layerIdx:0,endLayerIdx:layers.length-1,startFrame:1,endFrame:end};
+        fullRefresh();
+      }},
+      {sep:true},
+      {label:"Convert Frames to Symbol\u2026"+rangeInfo,action:function(){
+        doAction("framesToSymbol");
       }},
       {label:"Copy Frames",action:function(){
         // TODO: implement frame clipboard
@@ -4281,6 +4778,12 @@ function doAction(a){
       type:a==="reportBug"?"bug":"feature",
       context:buildFeedbackContext()
     });
+    break;
+  case "framesToSymbol":
+    showFramesToSymbolDialog();
+    break;
+  case "newBiped":
+    showBipedDialog();
     break;
   case "newCharacter":
     showNewCharacterDialog();
@@ -6980,6 +7483,8 @@ function init(){
   window._flashyRig = {
     characters:characters,
     create:createCharacter,
+    biped:createBiped,
+    bipedParts:function(){return BIPED_PARTS.map(function(p){return p[0];});},
     remove:deleteCharacter,
     addPart:addCharacterPart,
     removePart:removeCharacterPart,
@@ -7038,7 +7543,16 @@ function init(){
     curLayer: function(){ return curLayer; },
     setCurLayer: function(l){ curLayer = l; },
     /** Timeline pixels-per-frame — the timeline is zoomable. */
-    tlFrameWidth: function(){ return TL_FW_(); }
+    tlFrameWidth: function(){ return TL_FW_(); },
+    /** Timeline cell selection: a rectangle of layers x frames. */
+    tlSelect: function(l0,f0,l1,f1){
+      tlSelRange={layerIdx:l0,endLayerIdx:l1!=null?l1:l0,
+                  startFrame:f0,endFrame:f1!=null?f1:f0};
+      fullRefresh();
+      return tlRange();
+    },
+    tlRange: function(){ return tlRange(); },
+    framesToSymbol: createSymbolFromFrames
   };
   fullRefresh();
   window.addEventListener("resize",function(){
