@@ -426,6 +426,48 @@
       // Nearest-neighbour is what you want for pixel art, and for anything
       // you are about to trace; smoothing is the sane default otherwise.
       this.smoothing = opts.smoothing !== false;
+      /* Erased areas, as a flat path command stream (0 moveTo x y · 1 lineTo
+         x y · 2 quadTo cx cy x y · 3 closePath) in a box of maskWidth x
+         maskHeight, scaled to fit this Bitmap's own box when drawn.
+         Read under the NONZERO rule, with each loop wound backwards against
+         the box so it subtracts. The loops are expected not to overlap each
+         other — the editor unions them as they are made — because an area
+         covered by two reversed loops would total -1, which is nonzero, and
+         would come back into view. */
+      this.mask = opts.mask || null;
+      this.maskWidth = opts.maskWidth || 0;
+      this.maskHeight = opts.maskHeight || 0;
+    }
+
+    /** The clip to draw through: this bitmap's box, minus the erased loops. */
+    _maskPath(w, h) {
+      const p = new Path2D();
+      p.rect(0, 0, w, h);
+      const sx = this.maskWidth ? w / this.maskWidth : 1;
+      const sy = this.maskHeight ? h / this.maskHeight : 1;
+      // Each loop is replayed BACKWARDS so it winds against the rect: under
+      // nonzero that subtracts it. Reversing is also why the mask may be
+      // stored in its natural orientation and still read as holes here.
+      const m = this.mask;
+      let i = 0;
+      const loops = [];
+      let cur = null;
+      while (i < m.length) {
+        const op = m[i];
+        if (op === 0) { if (cur && cur.length >= 6) loops.push(cur); cur = [m[i + 1] * sx, m[i + 2] * sy]; i += 3; }
+        else if (op === 1) { if (cur) cur.push(m[i + 1] * sx, m[i + 2] * sy); i += 3; }
+        else if (op === 2) { if (cur) cur.push(m[i + 3] * sx, m[i + 4] * sy); i += 5; }
+        else if (op === 3) { if (cur && cur.length >= 6) loops.push(cur); cur = null; i += 1; }
+        else break;
+      }
+      if (cur && cur.length >= 6) loops.push(cur);
+      for (let l = 0; l < loops.length; l++) {
+        const pts = loops[l];
+        p.moveTo(pts[pts.length - 2], pts[pts.length - 1]);
+        for (let k = pts.length - 4; k >= 0; k -= 2) p.lineTo(pts[k], pts[k + 1]);
+        p.closePath();
+      }
+      return p;
     }
 
     /** The image to draw, resolving an asset name through the cache. */
@@ -447,7 +489,10 @@
       const w = this.width || nw, h = this.height || nh;
       const prev = ctx.imageSmoothingEnabled;
       ctx.imageSmoothingEnabled = !!this.smoothing;
+      const masked = this.mask && this.mask.length;
+      if (masked) { ctx.save(); ctx.clip(this._maskPath(w, h), 'nonzero'); }
       ctx.drawImage(img, 0, 0, nw, nh, 0, 0, w, h);
+      if (masked) ctx.restore();
       ctx.imageSmoothingEnabled = prev;
     }
   }
@@ -1184,7 +1229,7 @@
   const Flashy = {
     // Keep in step with package.json's "version" and the splash card in
     // editor.html; they had drifted to three different numbers.
-    version: '0.7.4',
+    version: '0.7.5',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
     Shape, TextField, Bitmap, MovieClip, Timeline, Tween, Stage,

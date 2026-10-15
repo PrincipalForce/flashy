@@ -260,7 +260,7 @@ bucket, eyedropper, hand, zoom) is about half of what the work needs:
 | --- | --- |
 | **Subselection** (edit points/handles) | Right now a stroke can only be redrawn, never adjusted. This is the single most-missed editing capability. |
 | **Pen / bezier** | Clean curves. The README has claimed a Pen tool that does not exist. |
-| **Eraser** (incl. erase-inside-shape) | There is no eraser at all. |
+| ~~**Eraser**~~ ✅ (0.7.5) | Erases vector shapes and bitmaps alike. A shape is subtracted as real geometry — erase through the middle and you get two objects you can move apart; erase the inside and you get a hole. A line is cut rather than outlined, so the pieces are still lines. A bitmap is masked, so it is reversible. Still missing Flash's Erase Fills / Erase Lines / Erase Inside modes and the faucet. |
 | **Lasso / magic wand** | Select part of a drawing, not whole objects. |
 | **Free Transform with handles** | Rotate/scale/skew on the stage with a visible transform point, not numeric fields. The transform point is also the rotation pivot for tweens. |
 | **Gradient fills + gradient transform** | **The engine already has `beginGradientFill`** (linear and radial) and the editor cannot author one. Skies, shading, glows — all gradient work. Cheap, high-visibility win. |

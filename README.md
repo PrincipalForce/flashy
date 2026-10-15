@@ -29,6 +29,12 @@ Load legacy .swf files directly. Parses headers, DefineShape 1-3, DefineSprite, 
 ### flashy-fla.js — FLA/XFL Importer  
 Open Flash authoring files. Reads CS5+ ZIP-based .fla files and unzipped XFL directories. Parses DOMDocument.xml, edge strings, fill/stroke styles, and symbol libraries.
 
+### flashy-geom.js — Polygon Geometry
+Outlines, boolean operations and polyline cutting — what the eraser is built
+on. Pure, like the tracer: loops of numbers in, loops of numbers out. A brush
+stroke's swept area is taken as a contour of its distance field rather than by
+unioning capsules, which keeps a self-crossing scribble solid at the crossing.
+
 ### flashy-trace.js — Bitmap Tracer
 Raster → vector, with no DOM and no editor: hand it an `ImageData` and it
 returns filled path command streams. Quantises colours, finds connected
@@ -59,6 +65,7 @@ A browser-based authoring IDE inspired by Macromedia Flash MX2004:
 - **AI Assistant** — Describe what you want and Claude builds it directly in your project: streamed as it writes, with a Stop button, and nothing applied until you press Apply. Runs on `claude-opus-5` with adaptive thinking. Add your own Anthropic API key under **Edit ▸ Preferences**, or from the button the panel shows when no key is set. Note that it works by running model-authored JavaScript inside the editor page — see [ROADMAP.md](ROADMAP.md) §31
 - **Bitmaps** — **File ▸ Import Image**, or drop a PNG/JPEG/GIF/WebP on the stage or the timeline. The image lands in the **Library** alongside your symbols, travels inside the `.flashy` as base64 (so a project stays one file), and comes out of every exporter. **Swap Bitmap** repoints an instance without disturbing its box
 - **Trace Bitmap** — **Modify ▸ Trace Bitmap…** converts a raster into editable vector shapes, with Flash's four settings: **Color Threshold** (1–500) for how far apart two colours must be to stay separate, **Minimum Area** (1–1000 px) for the smallest region that keeps its own colour, **Curve Fit** from Pixels to Very Smooth, and **Corner Threshold** for whether sharp corners survive or get rounded into the curve. The dialog **retraces as you type and shows the result beside the original** — nobody has an intuition for what "Minimum Area 8" looks like, and in Flash you guessed, pressed OK, looked, and undid. What lands is ordinary filled paths you can recolour, delete and convert to a symbol; holes stay holes
+- **Eraser (E)** — Drag to erase, with a size (the `[` and `]` keys, or the slider under the tools) and a round or square tip. It works on **vector art and bitmaps alike**. A shape is subtracted as real geometry: erase a corner and you get an editable filled path, erase through the middle and you get **two objects you can move apart**, erase the inside and you get a genuine hole. Because it is geometry and not a re-rasterise, an edge the brush never touched stays exactly where it was no matter how many strokes you make. A drawn line is **cut rather than outlined**, so the pieces are still lines you can restyle. A bitmap is **masked, not repainted** — the pixels are kept, so erasing costs nothing in the document and *Restore Erased Areas* in the Properties panel takes it all back. Symbols and text are left alone, the way Flash leaves a group alone
 - **Import** — Open .flashy projects, import from URL (inspect live Flashy animations), load .swf and .fla files
 - **Export** — Self-contained HTML with the full engine embedded inline (no server needed — just open the file), plus SVG, a JS module, an embed snippet, a sprite sheet, and WebM/MP4 video
 - **Pointer input** — mouse, pen and touch, so the editor works on a tablet
@@ -214,6 +221,7 @@ flashy.js          Core engine (Graphics, DisplayObject, MovieClip, Timeline, St
 flashy-swf.js      SWF binary parser and importer
 flashy-fla.js      FLA/XFL (ZIP + XML) parser and importer
 flashy-trace.js    Raster -> vector tracer (pure: ImageData in, paths out)
+flashy-geom.js     Polygon geometry for the eraser: outlines, booleans, cutting
 editor.html        Editor shell (layout)
 editor.css         Macromedia Flash MX2004-style dark chrome theme
 editor-app.js      Editor application (tools, timeline, properties, library, AI)
@@ -260,7 +268,6 @@ auto lip sync. Major areas that need work:
 
 - **Auto lip sync** — phoneme track from a dialogue layer; now unblocked by audio + puppet mechanics, and the biggest remaining time sink in 2D animation
 - **Onion skinning** and pressure-sensitive brushes
-- **An eraser** — there is no eraser at all; erasing vector art means a real boolean subtraction
 - **Better tracing** — the tracer is a classic auto-trace, so it produces flat regions. Tapered ink lines from a scanned pencil test is the harder, more valuable problem (see [VISION.md](VISION.md) §Source)
 - **Bitmaps on import from URL** — `walkDisplayObject` skips them; recovering the bytes from a live `Bitmap` needs a same-origin canvas
 - **Authoring the engine's own features** — gradients, stars, polygons and rounded rects all exist in `flashy.js` with no editor UI to reach them

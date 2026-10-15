@@ -251,6 +251,41 @@ Drive the app through its published seams, not its internals:
   everything, since that is what gets saved. Stringifying a 2048px bitmap into
   fifty undo steps is ~100MB of duplicated base64. `_flashyAI.snapshot()` is
   the seam a spec uses to check this.
+- **The eraser** is `window._flashyEraser`: `stroke(points, opts)` (the same
+  entry point a drag uses), `region(points, size, shape)` (the swept area,
+  without touching the document), `size/setSize`, `shape/setShape`,
+  `objectRegion(o)`, `maskPath(o)`, `fullyErased(o)`. Tool state is on
+  `_flashyAI`: `curTool()` / `setTool(id)`.
+- Erasing a vector shape is a **real boolean subtraction** (`flashy-geom.js`),
+  not a rasterise-and-retrace. The invariant that matters, and the one a spec
+  pins: an edge the brush never reached keeps its **exact** coordinate however
+  many strokes are made. Re-tracing would pass every other eraser spec and
+  silently degrade the whole drawing. Never swap it for the tracer.
+- A brush stroke's swept area is a contour of its **distance field**, not a
+  union of capsules. Equal-radius capsules laid end to end share exactly
+  collinear edges and land vertices exactly on each other's boundaries —
+  precisely what a boolean op gets wrong — and a plain horizontal drag makes
+  them every time. `boolOp` additionally perturbs one operand by 1e-5px, and
+  drops result loops under 0.01px², for the same reason. If you touch either,
+  re-run `tests/geom.spec.js` first: it states the invariants as arithmetic, so
+  it says whether the geometry or the editor is at fault.
+- A bitmap's erase mask is a flat path command stream in a `maskW` x `maskH`
+  box, and its loops are **unioned, never concatenated**. The clip is the box
+  plus each loop wound backwards, read **nonzero**: append two overlapping
+  strokes and the overlap totals -1, which is nonzero, so it reappears. Two
+  crossing strokes on a photo is the first thing anyone tries, and there is a
+  spec for exactly that.
+- `eraseMask`, `path` and `points` are **flat arrays of numbers, never arrays
+  of arrays**. `EditorObject.clone()` copies arrays with a shallow `.slice()`,
+  so a nested structure would be shared between an object and its copy.
+- Erasing never touches symbols, text or rig parts, and says so in a dialog
+  rather than doing nothing visible — "I dragged the eraser and nothing
+  happened" is otherwise the first bug report.
+- **Resizing the Playwright viewport does not re-centre the stage** —
+  `resizeCanvas()` re-measures but leaves the pan set for the old size, so
+  every document coordinate afterwards is off by half the difference. Call
+  `_flashyAI.centerStage()` after `setViewportSize`, or the pointer events you
+  synthesise land somewhere else entirely.
 - `showDialog()` grew two things for Trace Bitmap: `opts.build(body, inputs)`
   for custom content inside the standard chrome (so a dialog gets Escape/Enter
   and validation for free), and `type: "checkbox"` fields, which read through

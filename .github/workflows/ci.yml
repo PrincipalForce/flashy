@@ -58,7 +58,7 @@ jobs:
       - name: node --check every source file
         run: |
           set -e
-          for f in flashy.js flashy-swf.js flashy-fla.js flashy-trace.js \
+          for f in flashy.js flashy-swf.js flashy-fla.js flashy-trace.js flashy-geom.js \
                    editor-app.js desktop.js workspace.js character.js \
                    splash.js feedback.js electron/*.cjs scripts/*.cjs; do
             echo "checking $f"

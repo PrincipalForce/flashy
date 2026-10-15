@@ -5,15 +5,16 @@ var N=1;function uid(){return N++;}
 // `bitmapAsset` names an entry in doc.bitmaps (type "bitmap"); `path` is a
 // flat command stream for traced vector outlines (type "path") — see
 // flashy-trace.js for the encoding, and `pathW`/`pathH` for how resizing one
-// works.
+// works. `eraseMask` is the same encoding again, holding the parts of a bitmap
+// the eraser has taken out, in a `maskW` x `maskH` box.
 //
-// `path` is a FLAT array of numbers rather than an array of loops, and that is
-// deliberate: clone() below copies arrays with a shallow slice, so a nested
+// All three are FLAT arrays of numbers rather than arrays of loops, and that
+// is deliberate: clone() below copies arrays with a shallow slice, so a nested
 // structure would be shared between an object and its copy and every edit to
 // one would show up in the other.
 //
-// Both default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.path=null;this.pathW=0;this.pathH=0;}
+// All default empty, so every other object type is unchanged.
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
@@ -635,6 +636,7 @@ var TOOLS=[
   {id:"oval",label:"Oval Tool (O)",key:"o",svg:'<ellipse cx="7" cy="7" rx="5" ry="4" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
   {id:"pencil",label:"Pencil Tool (Y)",key:"y",svg:'<path d="M2,12 L4,10 L10,4 L12,2 L11,3 L5,9 L3,11 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"brush",label:"Brush Tool (B)",key:"b",svg:'<path d="M9,1 Q12,4 8,8 Q6,10 3,13 Q2,12 4,9 Q5,7 6,6 L9,1 Z" fill="currentColor"/>'},
+  {id:"eraser",label:"Eraser Tool (E) — erases vector shapes and bitmaps alike",key:"e",svg:'<path d="M5.5,11.5 L1.5,7.5 L7.5,1.5 L11.5,5.5 Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><line x1="3.5" y1="9.5" x2="9.5" y2="3.5" stroke="currentColor" stroke-width="1"/><line x1="1" y1="12.5" x2="13" y2="12.5" stroke="currentColor" stroke-width="1.2"/>'},
   {id:"bucket",label:"Paint Bucket (K)",key:"k",svg:'<path d="M3,5 L7,1 L11,5 L7,9 Z" fill="currentColor" opacity="0.4"/><path d="M2,9 L2,13 L12,13 L12,9 L10,7 L7,10 L4,7 Z" fill="currentColor"/>'},
   {id:"eyedrop",label:"Eyedropper (I)",key:"i",svg:'<path d="M10,1 L12,3 L11,4 L5,10 L3,11 L2,9 L8,3 L9,2 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"hand",label:"Hand Tool (H)",key:"h",svg:'<path d="M7,13 Q3,13 3,9 L3,6 Q3,5 4,5 Q5,5 5,6 L5,7 L5,4 Q5,3 6,3 Q7,3 7,4 L7,7 L7,3 Q7,2 8,2 Q9,2 9,3 L9,7 L9,5 Q9,4 10,4 Q11,4 11,5 L11,10 Q11,13 7,13 Z" fill="none" stroke="currentColor" stroke-width="0.8"/>'},
@@ -654,6 +656,50 @@ function buildToolbox(){
     btn.addEventListener("click",function(){setTool(t.id);});
     tb.appendChild(btn);
   });
+
+  /* Tool options, under the tools — where Flash put them. Only the eraser has
+     any for now, and they only appear when it is the active tool. */
+  var opts=document.createElement("div");
+  opts.id="tool-options";
+  opts.className="tool-options";
+  var sizeLabel=document.createElement("div");
+  sizeLabel.className="tool-opt-label";
+  sizeLabel.id="eraserSizeLabel";
+  opts.appendChild(sizeLabel);
+  var slider=document.createElement("input");
+  slider.type="range";slider.className="tool-opt-range";slider.id="eraserSizeRange";
+  slider.min=ERASER_MIN;slider.max=120;slider.step=1;
+  slider.title="Eraser size — [ and ] change it too";
+  slider.addEventListener("input",function(){setEraserSize(parseInt(slider.value,10));});
+  opts.appendChild(slider);
+  var shapes=document.createElement("div");
+  shapes.className="tool-opt-shapes";
+  [["round","●","Round"],["square","■","Square"]].forEach(function(s){
+    var b=document.createElement("button");
+    b.type="button";b.className="tool-opt-btn";b.dataset.shape=s[0];
+    b.textContent=s[1];b.title=s[2]+" eraser";
+    b.addEventListener("click",function(){setEraserShape(s[0]);});
+    shapes.appendChild(b);
+  });
+  opts.appendChild(shapes);
+  tb.appendChild(opts);
+  updateEraserUI();
+}
+
+/** Keep the tool-options strip in step with the eraser's state. */
+function updateEraserUI(){
+  var box=document.getElementById("tool-options");
+  if(box)box.style.display=curTool==="eraser"?"":"none";
+  var lab=document.getElementById("eraserSizeLabel");
+  if(lab)lab.textContent=eraserSize+" px";
+  var rng=document.getElementById("eraserSizeRange");
+  // The slider tops out well below ERASER_MAX; the brackets go all the way, so
+  // the thumb is allowed to sit at the end rather than snapping the value back.
+  if(rng&&String(eraserSize)!==rng.value)rng.value=Math.min(eraserSize,parseInt(rng.max,10));
+  var btns=document.querySelectorAll(".tool-opt-btn");
+  for(var i=0;i<btns.length;i++){
+    btns[i].className="tool-opt-btn"+(btns[i].dataset.shape===eraserShape?" active":"");
+  }
 }
 // Custom SVG cursors for each tool
 var toolCursors={};
@@ -700,6 +746,10 @@ function setTool(id){
   if(cv){
     cv.style.cursor=toolCursors[id]||"default";
   }
+  updateEraserUI();
+  // Leaving the eraser must take its ghost with it.
+  if(id!=="eraser"&&eraserHover){eraserHover=null;}
+  render();
 }
 
 // === Canvas / Stage ===
@@ -787,6 +837,7 @@ function render(){
   selection.forEach(function(o){drawSel(o);});
   // tool preview
   if(dragging&&dragPreview)drawPrev();
+  drawEraserGhost();
 }
 
 /* ------------------------------------------------------------------ *
@@ -2834,7 +2885,18 @@ function paintObj(cx,o,opts){
         var prevSmooth=cx.imageSmoothingEnabled;
         cx.imageSmoothingEnabled=o.smoothing!==false;
         cx.globalAlpha=alpha;
+        var bmask=bitmapMaskPath(o);
+        if(bmask){
+          cx.save();
+          cx.translate(-hw,-hh);
+          // Nonzero, with every erased loop wound backwards against the box:
+          // that subtracts them, and lets overlapping strokes union instead of
+          // cancelling back into view.
+          cx.clip(bmask,"nonzero");
+          cx.translate(hw,hh);
+        }
         cx.drawImage(bimg,0,0,bnw,bnh,-hw,-hh,o.width,o.height);
+        if(bmask)cx.restore();
         cx.imageSmoothingEnabled=prevSmooth;
       }
     }else if(chrome){
@@ -3083,6 +3145,29 @@ function drawPrev(){
       ctx.lineWidth=(p.type==="brush"?strokeWidth*3:strokeWidth)*zoom;
       ctx.lineCap="round";ctx.lineJoin="round";ctx.stroke();
     }
+  }else if(p.type==="eraser"){
+    /* The stroke as it is being drawn, at its true width. Drawn as a plain
+       thick line rather than by running the real swept-area geometry on every
+       pointer move — the two agree to within a fraction of a pixel, and the
+       geometry is for the one time it matters, on release. */
+    if(p.points&&p.points.length>=2){
+      ctx.save();
+      ctx.beginPath();
+      var ep=s2c(p.points[0],p.points[1]);
+      ctx.moveTo(ep.x,ep.y);
+      for(var ei=2;ei<p.points.length;ei+=2){
+        var ec=s2c(p.points[ei],p.points[ei+1]);
+        ctx.lineTo(ec.x,ec.y);
+      }
+      if(p.points.length===2)ctx.lineTo(ep.x+0.01,ep.y);
+      ctx.strokeStyle="rgba(255,90,90,0.35)";
+      ctx.lineWidth=eraserSize*zoom;
+      ctx.lineCap=eraserShape==="square"?"butt":"round";
+      ctx.lineJoin=eraserShape==="square"?"miter":"round";
+      ctx.setLineDash([]);
+      ctx.stroke();
+      ctx.restore();
+    }
   }else if(p.type==="select"){
     var sp1=s2c(Math.min(p.x1,p.x2),Math.min(p.y1,p.y2));
     var sp2=s2c(Math.max(p.x1,p.x2),Math.max(p.y1,p.y2));
@@ -3090,6 +3175,29 @@ function drawPrev(){
     ctx.strokeRect(sp1.x,sp1.y,sp2.x-sp1.x,sp2.y-sp1.y);
     ctx.setLineDash([]);
   }
+  ctx.restore();
+}
+
+/* The eraser's own cursor, drawn on the stage rather than as a CSS cursor.
+   It has to show the real size at the current zoom, and a CSS cursor is both
+   capped at about 128px and would need regenerating on every size and zoom
+   change. Seeing exactly what the brush will take is most of the tool. */
+var eraserHover=null;
+function drawEraserGhost(){
+  if(curTool!=="eraser"||!eraserHover)return;
+  var c=s2c(eraserHover.x,eraserHover.y);
+  var r=eraserSize*zoom/2;
+  ctx.save();
+  ctx.beginPath();
+  if(eraserShape==="square")ctx.rect(c.x-r,c.y-r,r*2,r*2);
+  else ctx.arc(c.x,c.y,r,0,Math.PI*2);
+  ctx.strokeStyle="rgba(255,255,255,0.9)";ctx.lineWidth=1;
+  ctx.setLineDash([]);
+  ctx.stroke();
+  ctx.strokeStyle="rgba(0,0,0,0.75)";ctx.lineWidth=1;
+  ctx.setLineDash([3,3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
   ctx.restore();
 }
 
@@ -3119,6 +3227,17 @@ function initMouse(){
     onMouseDown(e);
   });
   canvas.addEventListener("pointermove",onMouseMove);
+  /* The eraser's ghost follows the pointer whether or not a button is down,
+     so a repaint is needed on plain hover — but only for this one tool, since
+     re-rendering the stage on every mouse move is not free. */
+  canvas.addEventListener("pointermove",function(e){
+    if(curTool!=="eraser")return;
+    eraserHover=getStagePos(e);
+    if(!dragging)render();
+  });
+  canvas.addEventListener("pointerleave",function(){
+    if(eraserHover){eraserHover=null;render();}
+  });
   canvas.addEventListener("pointerup",onMouseUp);
   // A cancelled pointer (OS gesture, palm rejection) must not leave `dragging`
   // stuck true — that would make the next click continue the abandoned drag.
@@ -3208,7 +3327,8 @@ function onMouseDown(e){
     dragPreview={type:curTool,x1:p.x,y1:p.y,x2:p.x,y2:p.y};
   }else if(curTool==="pencil"||curTool==="brush"){
     dragPreview={type:curTool,points:[p.x,p.y]};
-
+  }else if(curTool==="eraser"){
+    dragPreview={type:"eraser",points:[p.x,p.y]};
   }else if(curTool==="text"){
     dragPreview={type:"text",x1:p.x,y1:p.y,x2:p.x,y2:p.y};
   }else if(curTool==="hand"){
@@ -3260,7 +3380,7 @@ function onMouseMove(e){
     }
   }else if(curTool==="rect"||curTool==="oval"||curTool==="line"||curTool==="text"){
     if(dragPreview){dragPreview.x2=p.x;dragPreview.y2=p.y;}
-  }else if(curTool==="pencil"||curTool==="brush"){
+  }else if(curTool==="pencil"||curTool==="brush"||curTool==="eraser"){
     if(dragPreview&&dragPreview.points){dragPreview.points.push(p.x,p.y);}
   }else if(curTool==="hand"){
     panX+=e.clientX-moveStartX;panY+=e.clientY-moveStartY;
@@ -3340,6 +3460,23 @@ function onMouseUp(e){
         obj2.fillColor=fillColor;obj2.strokeColor=strokeColor;obj2.strokeWidth=strokeWidth;
         kf3.objects.push(obj2);selection=[obj2];
       }
+    }
+    dragPreview=null;
+  }else if(curTool==="eraser"){
+    if(dragPreview&&dragPreview.points&&dragPreview.points.length>=2){
+      var res=eraseStroke(dragPreview.points.slice(),{});
+      if(res.locked){
+        showMessage("Eraser","This layer is locked or hidden, so nothing on it can be erased.");
+      }else if(!res.erased&&!res.removed&&res.skipped){
+        // The commonest confusion by far: dragging the eraser over a symbol
+        // and watching nothing happen.
+        showMessage("Eraser",
+          "Nothing was erased.\n\nThe eraser works on shapes and bitmaps. "+
+          "Symbols, text and character rig parts are left alone — "+
+          "double-click a symbol to erase inside it, or use Modify ▸ Convert "+
+          "to Symbol in reverse by editing its contents.");
+      }
+      fullRefresh();
     }
     dragPreview=null;
   }else if(curTool==="text"){
@@ -4323,6 +4460,18 @@ function updateProps(){
           render();updateProps();
         }}
       ]);
+      if(o.eraseMask&&o.eraseMask.length){
+        // Erasing a bitmap is a stencil over the original pixels, not a
+        // rewrite of them, so it is always fully reversible.
+        note("Parts of this image have been erased. The pixels are still there — "+
+             "the erased areas are masked out, so this can be undone at any time.");
+        actionRow([
+          {label:"Restore Erased Areas",onClick:function(){
+            pushUndo();o.eraseMask=null;o.maskW=0;o.maskH=0;
+            render();updateProps();
+          }}
+        ]);
+      }
       if(!bitmapImage(o.bitmapAsset)){
         note("This image has not finished decoding — the stage shows a labelled frame until it has.");
       }
@@ -5535,6 +5684,36 @@ var BITMAP_MAX_EDGE=2048;
     for detail no vector outline is going to keep anyway. */
 var TRACE_MAX_EDGE=900;
 
+/* Erased bitmaps are redrawn on every frame and a mask can run to thousands of
+   numbers, so the Path2D is cached against the mask array itself. A WeakMap
+   rather than a field on the object: plainObj() serialises every own key, so a
+   cache stashed on the object would end up inside the .flashy. */
+var bitmapMaskCache=new WeakMap();
+
+/** The clip for an erased bitmap — its box minus the erased loops — or null. */
+function bitmapMaskPath(o){
+  if(!o.eraseMask||!o.eraseMask.length||typeof Path2D==="undefined")return null;
+  var w=Math.abs(o.width)||1,h=Math.abs(o.height)||1;
+  var hit=bitmapMaskCache.get(o.eraseMask);
+  if(hit&&hit.w===w&&hit.h===h)return hit.path;
+  var G=window.FlashyGeom;
+  if(!G)return null;
+  var sx=o.maskW?w/o.maskW:1,sy=o.maskH?h/o.maskH:1;
+  var loops=G.scaleLoops(G.pathToLoops(o.eraseMask,ERASE_FLATTEN),sx,sy);
+  var p=new Path2D();
+  p.rect(0,0,w,h);
+  for(var i=0;i<loops.length;i++){
+    var l=loops[i];
+    if(l.length<6)continue;
+    // Backwards, so it winds against the box.
+    p.moveTo(l[l.length-2],l[l.length-1]);
+    for(var k=l.length-4;k>=0;k-=2)p.lineTo(l[k],l[k+1]);
+    p.closePath();
+  }
+  bitmapMaskCache.set(o.eraseMask,{w:w,h:h,path:p});
+  return p;
+}
+
 /** The decoded image for an asset name, or null if it is not ready yet. */
 function bitmapImage(name){
   if(!name||typeof Flashy==="undefined"||!Flashy.Bitmaps)return null;
@@ -6096,6 +6275,338 @@ function showSwapBitmapDialog(){
       fullRefresh();
     }
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Eraser
+ *
+ * Erasing vector art is a boolean subtraction and erasing a bitmap is a
+ * stencil, and the tool hides that difference: you drag, and whatever is under
+ * the brush on the current layer goes away.
+ *
+ * A shape comes back as a `path` — the same editable filled outline the
+ * tracer produces — because that is what a rectangle with a bite out of it
+ * *is*. Erasing through the middle of one splits it into two objects you can
+ * then move apart. A drawn line is cut rather than subtracted, so the pieces
+ * are still lines you can restyle. A bitmap keeps all its pixels and gains a
+ * mask, so erasing it is reversible and costs no memory worth counting.
+ *
+ * The geometry is in flashy-geom.js; everything here is about getting each
+ * object's artwork into stage space, handing it over, and turning what comes
+ * back into objects again.
+ * ------------------------------------------------------------------ */
+
+var eraserSize=24;        // diameter, in stage units
+var eraserShape="round";  // "round" | "square"
+var ERASER_MIN=2,ERASER_MAX=400;
+/* Curve flattening tolerance when a path is handed to the boolean, in stage
+   units. A twentieth of a pixel is far below what any display resolves and
+   keeps a traced outline's curves from visibly faceting when it is erased. */
+var ERASE_FLATTEN=0.05;
+
+function setEraserSize(v){
+  eraserSize=Math.max(ERASER_MIN,Math.min(ERASER_MAX,Math.round(v)||ERASER_MIN));
+  updateEraserUI();
+  if(curTool==="eraser")render();
+}
+function setEraserShape(s){
+  eraserShape=s==="square"?"square":"round";
+  updateEraserUI();
+  if(curTool==="eraser")render();
+}
+
+// --- transforms -----------------------------------------------------
+// A 2D affine as [a,b,c,d,e,f]: x' = a·x + c·y + e, y' = b·x + d·y + f —
+// the same six numbers ctx.setTransform takes, in the same order.
+
+function matMul(m,n){
+  return [
+    m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1],
+    m[0]*n[2]+m[2]*n[3], m[1]*n[2]+m[3]*n[3],
+    m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]
+  ];
+}
+function matInvert(m){
+  var det=m[0]*m[3]-m[1]*m[2];
+  if(!isFinite(det)||Math.abs(det)<1e-12)return null;
+  var a=m[3]/det,b=-m[1]/det,c=-m[2]/det,d=m[0]/det;
+  return [a,b,c,d,-(a*m[4]+c*m[5]),-(b*m[4]+d*m[5])];
+}
+function matApplyLoops(m,loops){
+  return loops.map(function(l){
+    var o=new Array(l.length);
+    for(var i=0;i<l.length;i+=2){
+      o[i]=m[0]*l[i]+m[2]*l[i+1]+m[4];
+      o[i+1]=m[1]*l[i]+m[3]*l[i+1]+m[5];
+    }
+    return o;
+  });
+}
+
+/**
+ * Object-local artwork space -> stage.
+ *
+ * Mirrors paintObj exactly, including that it does NOT apply skew to ordinary
+ * objects (only rig parts take the pivot path, and those are skipped here).
+ * Local coordinates are centred: the artwork spans -w/2..w/2.
+ */
+function objMatrix(o){
+  var hw=(o.width||0)/2,hh=(o.height||0)/2;
+  var m=[1,0,0,1,(o.x||0)+hw,(o.y||0)+hh];
+  if(o.rotation){
+    var r=o.rotation*Math.PI/180,cs=Math.cos(r),sn=Math.sin(r);
+    m=matMul(m,[cs,sn,-sn,cs,0,0]);
+  }
+  var sx=o.scaleX||1,sy=o.scaleY||1;
+  if(sx!==1||sy!==1)m=matMul(m,[sx,0,0,sy,0,0]);
+  return m;
+}
+/** Where a `path` object's own coordinates live: top-left origin, authored size. */
+function pathMatrix(o){
+  var hw=(o.width||0)/2,hh=(o.height||0)/2;
+  var psx=o.pathW?(o.width/o.pathW):1,psy=o.pathH?(o.height/o.pathH):1;
+  return matMul(matMul(objMatrix(o),[1,0,0,1,-hw,-hh]),[psx,0,0,psy,0,0]);
+}
+/** Where a bitmap's box lives: top-left origin, current displayed size. */
+function boxMatrix(o){
+  var hw=(o.width||0)/2,hh=(o.height||0)/2;
+  return matMul(objMatrix(o),[1,0,0,1,-hw,-hh]);
+}
+
+// --- object artwork as polygons ------------------------------------
+
+/** The filled region an object covers, in stage space — or null if it is not
+    the kind of thing the eraser subtracts from. */
+function objectRegion(o){
+  var G=window.FlashyGeom;
+  if(!G)return null;
+  var hw=Math.abs((o.width||0)/2),hh=Math.abs((o.height||0)/2);
+  if(o.type==="rect"){
+    return matApplyLoops(objMatrix(o),G.normalize([G.rectLoop(-hw,-hh,hw*2,hh*2)]));
+  }
+  if(o.type==="oval"){
+    return matApplyLoops(objMatrix(o),G.normalize([G.ellipseLoop(0,0,hw,hh)]));
+  }
+  if(o.type==="path"&&o.path&&o.path.length){
+    var m=pathMatrix(o);
+    // Flatten in the object's own space but at a tolerance meant for stage
+    // space, so a path scaled up 10x is not flattened 10x too coarsely.
+    var sc=Math.max(1e-6,Math.hypot(m[0],m[1]),Math.hypot(m[2],m[3]));
+    return matApplyLoops(m,G.normalize(G.pathToLoops(o.path,ERASE_FLATTEN/sc)));
+  }
+  if(o.type==="brush"&&o.points&&o.points.length>=4){
+    // A brush stroke is drawn as a thick round-capped line, so the region it
+    // covers is that line's own swept area.
+    var pts=[];
+    for(var i=0;i<o.points.length;i+=2)pts.push(o.points[i]-hw,o.points[i+1]-hh);
+    var stage=matApplyLoops(objMatrix(o),[pts])[0];
+    return G.strokeRegion(stage,Math.max(0.5,(o.strokeWidth||1)*3/2),false);
+  }
+  return null;
+}
+
+/** The polyline a stroke object draws, in stage space — or null. */
+function objectPolyline(o){
+  var hw=(o.width||0)/2,hh=(o.height||0)/2;
+  var pts;
+  if(o.type==="line"){
+    pts=[-hw,-hh,hw,hh];
+  }else if(o.type==="pencil"&&o.points&&o.points.length>=4){
+    pts=[];
+    for(var i=0;i<o.points.length;i+=2)pts.push(o.points[i]-Math.abs(hw),o.points[i+1]-Math.abs(hh));
+  }else return null;
+  return matApplyLoops(objMatrix(o),[pts])[0];
+}
+
+// --- making objects out of the result ------------------------------
+
+/** Copy the look of `src` onto `dst` without copying its geometry or identity. */
+function copyStyle(dst,src){
+  ["fillColor","fillAlpha","fillType","strokeColor","strokeAlpha","strokeWidth",
+   "strokeStyle","strokeCap","strokeJoin","alpha","blendMode","name"].forEach(function(k){
+    dst[k]=src[k];
+  });
+}
+
+/** One `path` object per connected piece of `region` (stage space). */
+function regionToPathObjects(region,src){
+  var G=window.FlashyGeom;
+  var made=[];
+  G.separate(region).forEach(function(piece){
+    var b=G.bounds(piece);
+    if(!(b.width>0)||!(b.height>0))return;
+    var local=G.translateLoops(piece,-b.minX,-b.minY);
+    var o=new EditorObject("path");
+    copyStyle(o,src);
+    // A brush stroke's colour lives in fillColor but it is painted as a
+    // stroke; as a filled path it has to become the fill.
+    if(src.type==="brush"){o.fillType="solid";o.strokeStyle="none";o.strokeWidth=0;}
+    o.path=G.loopsToPath(local);
+    o.pathW=b.width;o.pathH=b.height;
+    o.x=b.minX;o.y=b.minY;o.width=b.width;o.height=b.height;
+    made.push(o);
+  });
+  return made;
+}
+
+/** One `pencil` object per surviving piece of a cut line. */
+function polylinesToObjects(pieces,src){
+  var made=[];
+  pieces.forEach(function(pts){
+    if(pts.length<4)return;
+    var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(var i=0;i<pts.length;i+=2){
+      if(pts[i]<minX)minX=pts[i];if(pts[i]>maxX)maxX=pts[i];
+      if(pts[i+1]<minY)minY=pts[i+1];if(pts[i+1]>maxY)maxY=pts[i+1];
+    }
+    var o=new EditorObject("pencil");
+    copyStyle(o,src);
+    o.x=minX;o.y=minY;
+    o.width=(maxX-minX)||1;o.height=(maxY-minY)||1;
+    o.points=pts.map(function(v,i){return i%2===0?v-minX:v-minY;});
+    made.push(o);
+  });
+  return made;
+}
+
+/**
+ * Add an erased region to a bitmap's mask.
+ *
+ * The new region is UNIONED into what is already there, and that is load
+ * bearing. The mask is drawn as a clip — the bitmap's box with each erased
+ * loop wound backwards — read under the nonzero rule. Simply appending the
+ * loops looks like it should work, and does until two strokes overlap: the
+ * box contributes +1 and each reversed loop -1, so an area covered twice
+ * totals -1, which is nonzero, and the overlap comes back into view. Keeping
+ * the stored loops non-overlapping is what makes the clip exact.
+ *
+ * Unioning also keeps the mask SMALL: twenty overlapping scrubs merge into one
+ * blob rather than piling up twenty outlines.
+ */
+function addBitmapMask(o,stageRegion){
+  var G=window.FlashyGeom;
+  var inv=matInvert(boxMatrix(o));
+  if(!inv)return false;
+  var local=G.normalize(matApplyLoops(inv,stageRegion));
+  var w=Math.abs(o.width)||1,h=Math.abs(o.height)||1;
+  var existing=[];
+  if(o.eraseMask&&o.eraseMask.length){
+    var sx=o.maskW?w/o.maskW:1,sy=o.maskH?h/o.maskH:1;
+    existing=G.normalize(G.scaleLoops(G.pathToLoops(o.eraseMask,ERASE_FLATTEN),sx,sy));
+  }
+  var merged;
+  if(!existing.length){
+    merged=local;
+  }else{
+    merged=G.union(existing,local);
+    /* A union can only lie between "the bigger of the two" and "both added
+       together". Anything outside that means the boolean tripped over the two
+       freehand outlines, and showing the new stroke alone is a far better
+       failure than showing a corrupted mask. */
+    var ae=G.area(existing),al=G.area(local),am=G.area(merged);
+    if(!merged.length||am<Math.max(ae,al)-1||am>ae+al+1)merged=local;
+  }
+  o.eraseMask=G.loopsToPath(merged);
+  o.maskW=w;o.maskH=h;
+  return true;
+}
+
+/** Is any of this bitmap still showing? */
+function bitmapFullyErased(o){
+  var G=window.FlashyGeom;
+  if(!o.eraseMask||!o.eraseMask.length)return false;
+  var w=Math.abs(o.width)||1,h=Math.abs(o.height)||1;
+  var sx=o.maskW?w/o.maskW:1,sy=o.maskH?h/o.maskH:1;
+  var mask=G.scaleLoops(G.pathToLoops(o.eraseMask,ERASE_FLATTEN),sx,sy);
+  var left=G.difference([G.rectLoop(0,0,w,h)],mask);
+  return G.area(left)<0.5;
+}
+
+/**
+ * Erase along `points` (stage space). Returns what happened, so the caller can
+ * say something useful rather than leaving a no-op unexplained.
+ */
+function eraseStroke(points,opts){
+  opts=opts||{};
+  var G=window.FlashyGeom;
+  if(!G||!points||points.length<2)return {erased:0,skipped:0,removed:0};
+  var radius=Math.max(0.5,(opts.size!=null?opts.size:eraserSize)/2);
+  var region=G.strokeRegion(points,radius,(opts.shape||eraserShape)==="square");
+  if(!region.length)return {erased:0,skipped:0,removed:0};
+
+  var layer=CL();
+  if(!layer||layer.locked||layer.visible===false){
+    return {erased:0,skipped:0,removed:0,locked:true};
+  }
+  var kf=layer.getKeyframeAt(curFrame);
+  if(!kf)return {erased:0,skipped:0,removed:0};
+
+  var rb=G.bounds(region);
+  var out=[],erased=0,skipped=0,removed=0,touched=false;
+  /* The undo snapshot is taken lazily. snap() serialises the whole document,
+     and a stroke that lands on empty stage must not pay for that — the eraser
+     is dragged constantly and most of a drag is over nothing. Vector objects
+     are rebuilt into `out` rather than edited, so the document still holds the
+     pre-stroke state right up until `kf.objects` is replaced below; only a
+     bitmap is changed in place, so that one path has to snapshot first. */
+  var pre=null;
+  var ensurePre=function(){ if(!pre)pre=snap(); };
+
+  for(var i=0;i<kf.objects.length;i++){
+    var o=kf.objects[i];
+    // Cheap reject first: most of a drawing is nowhere near the brush.
+    var ox0=Math.min(o.x,o.x+o.width),ox1=Math.max(o.x,o.x+o.width);
+    var oy0=Math.min(o.y,o.y+o.height),oy1=Math.max(o.y,o.y+o.height);
+    // A rotated or scaled object's box is bigger than x/y/w/h implies, so pad
+    // generously rather than miss one.
+    var pad=(o.rotation||(o.scaleX||1)!==1||(o.scaleY||1)!==1)
+      ? Math.hypot(ox1-ox0,oy1-oy0) : 0;
+    if(ox1+pad<rb.minX||ox0-pad>rb.maxX||oy1+pad<rb.minY||oy0-pad>rb.maxY){
+      out.push(o);continue;
+    }
+    /* Symbols, text and rig parts are left alone, the way Flash leaves a group
+       alone: there is a right way to erase inside one (open it, or break it
+       apart) and silently rewriting it from out here is not it. */
+    if(o.type==="symbol"||o.type==="text"||isRigPart(o)){
+      out.push(o);skipped++;continue;
+    }
+    if(o.type==="bitmap"){
+      ensurePre();
+      if(addBitmapMask(o,region)){
+        touched=true;
+        if(bitmapFullyErased(o)){removed++;continue;}
+        erased++;
+      }
+      out.push(o);continue;
+    }
+    if(o.type==="pencil"||o.type==="line"){
+      var line=objectPolyline(o);
+      if(!line){out.push(o);continue;}
+      var pieces=G.cutPolyline(line,region);
+      if(pieces.length===1&&pieces[0].length===line.length){out.push(o);continue;}
+      touched=true;
+      if(!pieces.length){removed++;continue;}
+      erased++;
+      polylinesToObjects(pieces,o).forEach(function(p){out.push(p);});
+      continue;
+    }
+    var reg=objectRegion(o);
+    if(!reg||!reg.length){out.push(o);continue;}
+    var left=G.difference(reg,region);
+    if(!left.length){touched=true;removed++;continue;}
+    // Unchanged area means the brush passed by without overlapping.
+    if(Math.abs(G.area(left)-G.area(reg))<0.01){out.push(o);continue;}
+    touched=true;erased++;
+    regionToPathObjects(left,o).forEach(function(p){out.push(p);});
+  }
+
+  if(!touched)return {erased:0,skipped:skipped,removed:0};
+  // One undo step per stroke, holding the state from before it began.
+  ensurePre();
+  pushUndoSnap(pre);
+  kf.objects=out;
+  selection=[];
+  return {erased:erased,skipped:skipped,removed:removed};
 }
 
 /* ------------------------------------------------------------------ *
@@ -6843,6 +7354,17 @@ function initKeys(){
     // Don't handle if typing in input
     if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
     var ctrl=e.ctrlKey||e.metaKey;
+    /* Brush size on the bracket keys, as in every other drawing application.
+       Only while the eraser is actually the active tool — jumping tools out
+       from under someone who is mid-drawing would be worse than the keys
+       doing nothing. Tested before the Ctrl shortcuts because neither key
+       takes a modifier. */
+    if(!ctrl&&curTool==="eraser"&&(e.key==="["||e.key==="]")){
+      e.preventDefault();
+      var step=Math.max(1,Math.round(eraserSize*0.25));
+      setEraserSize(eraserSize+(e.key==="]"?step:-step));
+      return;
+    }
     if(ctrl&&e.key==="z"){e.preventDefault();doAction("undo");return;}
     if(ctrl&&e.key==="y"){e.preventDefault();doAction("redo");return;}
     if(ctrl&&e.key==="s"){e.preventDefault();doAction("save");return;}
@@ -7481,7 +8003,11 @@ function exportRuntime(data, canvas, options) {
       // fills. An asset that has not landed yet draws nothing and appears when
       // it does, exactly as the soundtrack joins late.
       node = new Flashy.Bitmap(o.bitmapAsset, {
-        width: o.width, height: o.height, smoothing: o.smoothing !== false
+        width: o.width, height: o.height, smoothing: o.smoothing !== false,
+        // Erased areas travel with the object; Flashy.Bitmap applies them as
+        // a clip, so an erased photo exports erased.
+        mask: o.eraseMask && o.eraseMask.length ? o.eraseMask : null,
+        maskWidth: o.maskW, maskHeight: o.maskH
       });
       node.x = -hw; node.y = -hh;
       var bwrap = new Flashy.MovieClip();
@@ -8002,10 +8528,32 @@ function _objToSVG(o, depth) {
       // export — a file that needs a sidecar PNG is not an export.
       var burl = bitmapDataURL(o.bitmapAsset);
       if (!burl) return '';
-      return '<image'+a+' x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+
+      var clipRef = '';
+      var defs = '';
+      if (o.eraseMask && o.eraseMask.length && window.FlashyGeom) {
+        // A clipPath of the box with each erased loop wound backwards, read
+        // under clip-rule nonzero — the same construction as the canvas and
+        // the engine use, so all three agree about what is gone.
+        var mw = Math.abs(o.width), mh = Math.abs(o.height);
+        var msx = o.maskW ? mw / o.maskW : 1, msy = o.maskH ? mh / o.maskH : 1;
+        var mloops = FlashyGeom.scaleLoops(FlashyGeom.pathToLoops(o.eraseMask, ERASE_FLATTEN), msx, msy);
+        var d = 'M' + (-hw) + ',' + (-hh) + ' h' + mw + ' v' + mh + ' h' + (-mw) + ' Z';
+        for (var mi = 0; mi < mloops.length; mi++) {
+          var ml = mloops[mi];
+          if (ml.length < 6) continue;
+          d += ' M' + (ml[ml.length - 2] - hw) + ',' + (ml[ml.length - 1] - hh);
+          for (var mk = ml.length - 4; mk >= 0; mk -= 2) d += ' L' + (ml[mk] - hw) + ',' + (ml[mk + 1] - hh);
+          d += ' Z';
+        }
+        var cid = 'fyclip' + (o.id || 0) + '_' + depth;
+        defs = '<defs><clipPath id="' + xmlAttr(cid) + '" clip-rule="nonzero">' +
+               '<path d="' + xmlAttr(d) + '"/></clipPath></defs>';
+        clipRef = ' clip-path="url(#' + xmlAttr(cid) + ')"';
+      }
+      return '<g'+a+'>'+defs+'<image'+clipRef+' x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+
              '" height="'+Math.abs(o.height)+'" preserveAspectRatio="none"'+
              (o.smoothing===false?' image-rendering="pixelated"':'')+
-             ' xlink:href="'+xmlAttr(burl)+'" href="'+xmlAttr(burl)+'"/>\n';
+             ' xlink:href="'+xmlAttr(burl)+'" href="'+xmlAttr(burl)+'"/></g>\n';
     case "text":
       var size = o.fontSize||24;
       var anchor = o.textAlign==="center" ? "middle" : (o.textAlign==="right" ? "end" : "start");
@@ -8648,6 +9196,25 @@ function init(){
     trace:traceBitmapObject,
     maxEdge:function(){return {bitmap:BITMAP_MAX_EDGE,trace:TRACE_MAX_EDGE};}
   };
+  /* Eraser seam. `stroke` is the same entry point a drag uses, so a spec
+     exercises the real path rather than a parallel one. */
+  window._flashyEraser={
+    stroke:eraseStroke,
+    size:function(){return eraserSize;},
+    setSize:setEraserSize,
+    shape:function(){return eraserShape;},
+    setShape:setEraserShape,
+    /** The swept area of a stroke, without touching the document. */
+    region:function(points,size,shape){
+      return FlashyGeom.strokeRegion(points,Math.max(0.5,(size!=null?size:eraserSize)/2),
+        (shape||eraserShape)==="square");
+    },
+    /** The filled area an object covers, in stage space. */
+    objectRegion:objectRegion,
+    objectPolyline:objectPolyline,
+    maskPath:bitmapMaskPath,
+    fullyErased:bitmapFullyErased
+  };
   initActionsPanel();
   initUnloadGuard();
   initAIPanel();
@@ -8717,6 +9284,9 @@ function init(){
     setCurFrame: function(f){ curFrame = f; },
     curLayer: function(){ return curLayer; },
     setCurLayer: function(l){ curLayer = l; },
+    /** The active tool — the same call a toolbox click makes. */
+    curTool: function(){ return curTool; },
+    setTool: setTool,
     /** Timeline pixels-per-frame — the timeline is zoomable. */
     tlFrameWidth: function(){ return TL_FW_(); },
     /** Timeline cell selection: a rectangle of layers x frames. */
