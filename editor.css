@@ -375,6 +375,14 @@ input[type="range"].props-input {
 .lib-item:hover { background: #4A4A4A; color: #fff; }
 .lib-icon { font-size: 12px; }
 .lib-title { font-size: 10px; }
+/* Bitmaps share the Library panel with symbols, under their own heading. */
+.lib-subtitle {
+  margin-top: 8px; padding-top: 6px;
+  border-top: 1px solid var(--divider);
+  color: var(--text-dim);
+}
+.lib-dim { margin-left: auto; color: #888; font-size: 10px; }
+.lib-item:hover .lib-dim { color: #BBB; }
 
 /* ─── TIMELINE ─── */
 #tl-section {
@@ -512,6 +520,35 @@ input[type="range"].props-input {
   border-color: var(--accent-dk); color: #fff; font-weight: bold;
 }
 .fy-dialog-btn.primary:hover { background: linear-gradient(to bottom, #66AAEE, #5599DD); }
+/* A checkbox should not stretch to fill the row the way a text input does. */
+.fy-dialog-row-check { align-items: center; }
+.fy-dialog-input.fy-dialog-check {
+  flex: 0 0 auto; width: 14px; height: 14px; padding: 0;
+  accent-color: var(--accent); cursor: pointer;
+}
+
+/* ─── Trace Bitmap preview ───
+   The four trace settings have no intuition attached to them, so the dialog
+   shows the result next to the original and retraces as you type. The
+   checkerboard is the usual transparency tell: a traced PNG with a cut-out
+   background has to look cut out, not white. */
+.fy-trace-preview {
+  display: flex; gap: 8px; margin: 10px 0 6px;
+  justify-content: center; flex-wrap: wrap;
+}
+.fy-trace-cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.fy-trace-cap { color: var(--text-dim); font-size: 10px; text-align: center; }
+.fy-trace-cell canvas {
+  display: block; max-width: 100%;
+  border: 1px solid var(--input-bd); border-radius: 3px;
+  background-color: #2b2b2b;
+  background-image:
+    linear-gradient(45deg, #353535 25%, transparent 25%, transparent 75%, #353535 75%),
+    linear-gradient(45deg, #353535 25%, transparent 25%, transparent 75%, #353535 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 6px 6px;
+}
+.fy-trace-readout { margin-left: 0; text-align: center; }
 
 /* "No API key yet" banner inside the AI panel. */
 .ai-key-notice {
@@ -535,6 +572,7 @@ input[type="range"].props-input {
 
 /* Audio file dragged over the timeline. */
 #tlCanvas.drop-audio { outline: 2px dashed #6ac98a; outline-offset: -3px; }
+#stageCanvas.drop-image { outline: 2px dashed #6ac98a; outline-offset: -3px; }
 
 /* ─── ACTIONS PANEL ───
    The frame-script editor. It fills its dock body rather than being a fixed

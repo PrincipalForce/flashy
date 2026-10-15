@@ -214,3 +214,45 @@ Drive the app through its published seams, not its internals:
   `shapesVisible` for the same reason.
 - 1px strokes antialias to ~50% gray — use a lenient threshold (<200) when
   pixel-sampling, and exclude selection UI (it is blue, b≈255).
+- **The stage canvas is the viewport, not the movie.** At the default window a
+  550×400 stage sits in a ~991×310 canvas, so `(clientHeight - doc.height) / 2`
+  is **negative** and document rows above about y=45 are not on the canvas at
+  all. Probe near the middle of the stage; a probe near its top or bottom edge
+  reads nothing and looks exactly like a drawing bug. (Exported pages are the
+  opposite — their canvas *is* movie-sized, so document coordinates map
+  straight through.)
+- **Bitmaps and tracing** live behind `window._flashyBitmap`: `importImageFile`,
+  `place`, `assets()`, `image(name)`, `deleteBitmapAsset`, `selected()`,
+  `preview(obj, opts)` (trace without touching the document — what the dialog's
+  live preview uses) and `trace(obj, opts)` (trace and write the shapes onto
+  the timeline — what the menu uses). Specs generate a PNG in the page with a
+  canvas and `toDataURL`, so there is no binary fixture.
+- The tracer itself is `window.FlashyTrace` in `flashy-trace.js` — pure, no DOM,
+  `trace(imageData, opts)` in and path command streams out, so it is testable
+  in plain Node as well as in the page. Walk a path with
+  `FlashyTrace.eachCommand(path, fn)`; never index the array by hand, since the
+  stride depends on the opcode (`0 moveTo x y · 1 lineTo x y · 2 quadTo cx cy x
+  y · 3 closePath`).
+- A traced region's **holes are extra loops in the same path**, filled
+  **even-odd** — on the stage, in `Graphics` (via `beginFill(color, alpha,
+  'evenodd')`) and in the SVG export. Nonzero fills the holes in, and the only
+  thing that catches it is a pixel probe through the middle of a traced ring,
+  which is why there is one for both the editor and the export.
+- **Bitmap decoding is async everywhere**, on purpose: the movie starts and
+  images join as they land rather than frame one waiting on a photo. So in an
+  export spec, "the image is drawn" is an *eventual* property — poll the pixel
+  with `waitForFunction`. Counting `requestAnimationFrame`s races and was flaky.
+- `path` objects carry `pathW`/`pathH`, the size they were authored at, so
+  editing W/H **rescales** them (unlike pencil/brush, which ignore it). Any new
+  renderer for them must divide by that, and the stroke width must be divided
+  back out or a scaled trace gets a stretched outline.
+- **Undo snapshots carry asset payloads by reference, not in the JSON.**
+  `snap()` returns `{json, sounds, bitmaps}`; `serializeDoc()` still embeds
+  everything, since that is what gets saved. Stringifying a 2048px bitmap into
+  fifty undo steps is ~100MB of duplicated base64. `_flashyAI.snapshot()` is
+  the seam a spec uses to check this.
+- `showDialog()` grew two things for Trace Bitmap: `opts.build(body, inputs)`
+  for custom content inside the standard chrome (so a dialog gets Escape/Enter
+  and validation for free), and `type: "checkbox"` fields, which read through
+  `fieldValue()` — `values()` must never go back to plain `.value`, which
+  returns `"on"` for a checkbox regardless of its state.

@@ -225,15 +225,29 @@ before, so a canvas displayed at a non-native size hit-tests correctly.
 unreachable touch branch inside its coordinate converter. You could not draw a
 single line on an iPad, and **exported games did not respond to touch at all**.
 
-### ⬜ 11. No raster images, anywhere
+### ✅ 11. Raster images, and tracing them (0.7.4)
 
-**What.** Add a `Flashy.Bitmap` display object, a `bitmap` EditorObject type,
-File ▸ Import Image, and the corresponding export cases.
+**Was.** Nothing in the document model could hold an image. The largest missing
+capability for the stated audience — nearly every real Flash project
+composited bitmaps with vectors — and conspicuous from inside the app, since
+the AI panel accepted a reference image you then could not place on the stage.
 
-**Why.** This is the largest missing capability for the stated audience —
-nearly every real Flash project composited bitmaps with vectors. It is also
-conspicuous from inside the app: the AI panel accepts a reference image you then
-cannot place on the stage.
+**Now.** `Flashy.Bitmap` and a `Flashy.Bitmaps` asset cache in the engine, a
+`bitmap` EditorObject type, File ▸ Import Image (and drop onto the stage or
+the timeline), bitmaps in the Library, Swap Bitmap, and the bitmap cases in
+every exporter. Images travel inside the `.flashy` as base64, exactly as
+sounds do, so a project is still one file.
+
+**And Trace Bitmap**, which is what the images were mostly wanted for:
+`flashy-trace.js` quantises colours, finds regions, absorbs undersized ones,
+walks each region's boundary and fits curves to it, emitting a new `path`
+EditorObject per region. The four knobs are Flash's — Color Threshold,
+Minimum Area, Curve Fit, Corner Threshold — and the dialog retraces as you
+type, because nobody has an intuition for what "Minimum Area 8" looks like.
+
+**Known gap.** Import from URL still skips bitmaps: `walkDisplayObject` would
+have to recover the encoded bytes from a live `Bitmap`, and a cross-origin
+canvas will not give them up.
 
 ### 🚧 12. Button symbols work; text still is not clickable
 
