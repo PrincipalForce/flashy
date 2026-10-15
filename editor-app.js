@@ -2,7 +2,18 @@
 (function(){
 "use strict";
 var N=1;function uid(){return N++;}
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";}
+// `bitmapAsset` names an entry in doc.bitmaps (type "bitmap"); `path` is a
+// flat command stream for traced vector outlines (type "path") — see
+// flashy-trace.js for the encoding, and `pathW`/`pathH` for how resizing one
+// works.
+//
+// `path` is a FLAT array of numbers rather than an array of loops, and that is
+// deliberate: clone() below copies arrays with a shallow slice, so a nested
+// structure would be shared between an object and its copy and every edit to
+// one would show up in the other.
+//
+// Both default empty, so every other object type is unchanged.
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.path=null;this.pathW=0;this.pathH=0;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
@@ -20,7 +31,12 @@ Layer.prototype.removeKeyframe=function(f){var i=-1;for(var j=0;j<this.keyframes
 // duration}. Keyframes reference assets by name, the same way symbol instances
 // reference `library`. Audio travels inside the .flashy document so a project
 // is still one self-contained file.
-var doc={width:550,height:400,fps:24,backgroundColor:"#FFFFFF",layers:[new Layer("Layer 1")],library:{},sounds:{},characters:{},totalFrames:60};
+// `bitmaps` is the raster asset library: name -> {name, mediaType, data
+// (base64), width, height}. Objects of type "bitmap" reference assets by name,
+// exactly as keyframes reference sounds and instances reference `library`, and
+// the bytes travel inside the .flashy so a project with a photo background is
+// still one self-contained file.
+var doc={width:550,height:400,fps:24,backgroundColor:"#FFFFFF",layers:[new Layer("Layer 1")],library:{},sounds:{},bitmaps:{},characters:{},totalFrames:60};
 Object.defineProperty(doc,"maxFrame",{get:function(){var m=1;this.layers.forEach(function(l){var e=l.getFrameEnd();if(e>m)m=e;});return Math.max(m,this.totalFrames);}});
 var curLayer=0,curFrame=1,selection=[],clipboard=[],playing=false,playTimer=null;
 var selectedKF=null; // {layerIdx, frameIdx} — which keyframe cell is selected in the timeline
@@ -75,13 +91,29 @@ function isDirty(){return dirty;}
 // Snapshots carry the edit stack (which symbol you are inside), so undo does
 // not silently strand you editing a library symbol that deserializeDoc has
 // since replaced with a different object.
+//
+// Asset payloads are carried by reference rather than serialised into the
+// snapshot string. An asset record is immutable once imported — importing
+// makes a new record, deleting removes the key, nothing edits one in place —
+// so sharing them is safe, and `data` is a string, which JavaScript shares
+// rather than copies.
+//
+// Stringifying them instead would materialise the base64 into every snapshot:
+// one 2048px bitmap across fifty undo steps is a hundred megabytes of
+// duplicated text, and audio had the same leak at MP3 scale.
 function snap(){
-  return JSON.stringify({
-    d:serializeDoc(),f:curFrame,l:curLayer,
-    path:editStack.map(function(c){
-      return {name:c.name,savedFrame:c.savedFrame,savedLayer:c.savedLayer};
-    })
-  });
+  var d=serializeDoc();
+  var sounds=d.sounds,bitmaps=d.bitmaps;
+  d.sounds={};d.bitmaps={};
+  return {
+    json:JSON.stringify({
+      d:d,f:curFrame,l:curLayer,
+      path:editStack.map(function(c){
+        return {name:c.name,savedFrame:c.savedFrame,savedLayer:c.savedLayer};
+      })
+    }),
+    sounds:sounds,bitmaps:bitmaps
+  };
 }
 function pushUndo(){pushUndoSnap(snap());}
 function pushUndoSnap(s){undoStack.push(s);if(undoStack.length>50)undoStack.shift();redoStack.length=0;touchDoc();}
@@ -93,7 +125,8 @@ function pushUndoSnap(s){undoStack.push(s);if(undoStack.length>50)undoStack.shif
  * document. The stack has to be rebuilt by name against the new library.
  */
 function restoreSnap(s){
-  var st=JSON.parse(s);
+  var st=JSON.parse(s.json);
+  st.d.sounds=s.sounds;st.d.bitmaps=s.bitmaps;
   deserializeDoc(st.d);
   editStack=[];
   (st.path||[]).forEach(function(entry){
@@ -130,6 +163,10 @@ function CKF(){var l=CL();return l?l.getKeyframeAt(curFrame):null;}
  * better: several fields at once, a password field that does not shoulder-surf
  * an API key, Escape/Enter, and validation before it closes.
  * ------------------------------------------------------------------ */
+/** A field's value — `.checked` for a checkbox, `.value` for everything else. */
+function fieldValue(inp){
+  return (inp&&inp.type==="checkbox")?!!inp.checked:(inp?inp.value:"");
+}
 function showDialog(opts){
   opts=opts||{};
   var fields=opts.fields||[];
@@ -180,13 +217,25 @@ function showDialog(opts){
     }else{
       inp=document.createElement("input");
       inp.type=f.type||"text";
-      inp.value=f.value!=null?String(f.value):"";
+      if(f.type==="checkbox")inp.checked=!!f.value;
+      else inp.value=f.value!=null?String(f.value):"";
       if(f.placeholder)inp.placeholder=f.placeholder;
       if(f.type==="number"){
         if(f.min!=null)inp.min=f.min;
         if(f.max!=null)inp.max=f.max;
+        if(f.step!=null)inp.step=f.step;
       }
       inp.spellcheck=false;
+      // Live feedback needs every keystroke, not just blur — a dialog with a
+      // preview is useless if the preview waits for focus to leave.
+      if(f.onChange){
+        inp.addEventListener("input",function(){f.onChange(fieldValue(inp));});
+        inp.addEventListener("change",function(){f.onChange(fieldValue(inp));});
+      }
+    }
+    if(f.type==="checkbox"){
+      inp.classList.add("fy-dialog-check");
+      row.classList.add("fy-dialog-row-check");
     }
     inp.className="fy-dialog-input";
     row.appendChild(inp);
@@ -199,6 +248,14 @@ function showDialog(opts){
     }
     inputs[f.name]=inp;
   });
+
+  /* A hook for dialogs that need more than labelled fields — Trace Bitmap's
+     side-by-side preview, for one. It gets the body and the live inputs, so
+     custom content can read and drive the standard fields instead of
+     reimplementing the chrome, the Escape/Enter handling and the validation. */
+  if(opts.build)opts.build(body,inputs,{values:values,setError:function(m){
+    err.textContent=m||"";err.style.display=m?"":"none";
+  }});
 
   if(opts.footnote){
     var fn=document.createElement("div");
@@ -222,7 +279,7 @@ function showDialog(opts){
   }
   function values(){
     var v={};
-    Object.keys(inputs).forEach(function(k){v[k]=inputs[k].value;});
+    Object.keys(inputs).forEach(function(k){v[k]=fieldValue(inputs[k]);});
     return v;
   }
   function submit(){
@@ -337,6 +394,10 @@ var menus=[
     {type:"sep"},
     {label:"Document Settings...",action:"docSettings"},
     {type:"sep"},
+    // No accelerator: Ctrl+R and Ctrl+Shift+R are the browser's reload, which
+    // a page cannot reliably intercept. (The Ctrl+R on Import Sound below has
+    // never actually been bound for the same reason.)
+    {label:"Import Image...",action:"importImage"},
     {label:"Import Sound...",action:"importSound",shortcut:"Ctrl+R"},
     {label:"Import from URL...",action:"importURL"}
   ]},
@@ -382,6 +443,9 @@ var menus=[
     {label:"Create Motion Tween",action:"motionTween"},
     {label:"Create Shape Tween",action:"shapeTween"},
     {label:"Remove Tween",action:"removeTween"},
+    {type:"sep"},
+    {label:"Trace Bitmap...",action:"traceBitmap"},
+    {label:"Swap Bitmap...",action:"swapBitmap"},
     {type:"sep"},
     {label:"Set Up Mouth Shapes...",action:"mouthSetup"},
     {label:"Auto Lip Sync...",action:"lipSync"},
@@ -2762,6 +2826,61 @@ function paintObj(cx,o,opts){
       }
       cx.globalAlpha=strokeA;cx.stroke();
     }
+  }else if(o.type==="bitmap"){
+    var bimg=bitmapImage(o.bitmapAsset);
+    if(bimg){
+      var bnw=bimg.naturalWidth||bimg.width,bnh=bimg.naturalHeight||bimg.height;
+      if(bnw&&bnh){
+        var prevSmooth=cx.imageSmoothingEnabled;
+        cx.imageSmoothingEnabled=o.smoothing!==false;
+        cx.globalAlpha=alpha;
+        cx.drawImage(bimg,0,0,bnw,bnh,-hw,-hh,o.width,o.height);
+        cx.imageSmoothingEnabled=prevSmooth;
+      }
+    }else if(chrome){
+      // Decoding is async and a missing asset is a real possibility; an
+      // invisible rectangle you cannot find or select is worse than a frame
+      // that says what it is waiting for.
+      cx.save();
+      cx.globalAlpha=alpha*0.6;
+      cx.strokeStyle="#888";cx.lineWidth=1;cx.setLineDash([4,3]);
+      cx.strokeRect(-hw,-hh,o.width,o.height);
+      cx.setLineDash([]);
+      cx.fillStyle="#888";cx.font="10px Tahoma, sans-serif";
+      cx.textAlign="center";cx.textBaseline="middle";
+      cx.fillText(o.bitmapAsset||"(no image)",0,0,Math.max(10,Math.abs(o.width)-6));
+      cx.textAlign="start";
+      cx.restore();
+    }
+  }else if(o.type==="path"){
+    /* A traced outline. Coordinates are object-local with the bounding box at
+       (0,0), like pencil points — but `pathW`/`pathH` record the size they
+       were authored at, so editing W/H in the inspector actually rescales the
+       artwork instead of silently doing nothing (which is what the pencil
+       does, and the one thing you always want to do to a trace). */
+    if(o.path&&o.path.length&&window.FlashyTrace){
+      var psx=o.pathW?(o.width/o.pathW):1,psy=o.pathH?(o.height/o.pathH):1;
+      cx.save();
+      cx.translate(-hw,-hh);
+      if(psx!==1||psy!==1)cx.scale(psx,psy);
+      cx.beginPath();
+      FlashyTrace.pathToContext(o.path,cx);
+      if(fillOn){
+        cx.fillStyle=o.fillColor;cx.globalAlpha=fillA;
+        // Even-odd, because a traced region carries its holes as extra loops
+        // in the same path and their winding is whatever the boundary walk
+        // produced. Nonzero would fill the holes in.
+        cx.fill("evenodd");
+      }
+      if(strokeOn){
+        cx.strokeStyle=o.strokeColor;
+        // Undo the shape scale on the pen so a scaled trace keeps an even
+        // outline instead of a stretched one.
+        cx.lineWidth=o.strokeWidth/Math.max(1e-6,(Math.abs(psx)+Math.abs(psy))/2);
+        cx.globalAlpha=strokeA;applyStroke();cx.stroke();
+      }
+      cx.restore();
+    }
   }else if(o.type==="text"){
     cx.font=(o.fontItalic?"italic ":"")+(o.fontBold?"bold ":"")+(o.fontSize||24)+"px "+(o.font||"Arial");
     cx.fillStyle=o.fillColor;
@@ -3010,6 +3129,32 @@ function initMouse(){
   canvas.addEventListener("dblclick",onDblClick);
   canvas.addEventListener("wheel",onWheel,{passive:false});
   canvas.addEventListener("contextmenu",function(e){e.preventDefault();showCtx(e);});
+
+  /* Drop an image onto the stage and it lands where you dropped it. This is
+     the gesture for "use this photo as a background" and for "here is the
+     pencil test I want to trace", and both are the first thing people try. */
+  canvas.addEventListener("dragover",function(e){
+    if(!e.dataTransfer)return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect="copy";
+    canvas.classList.add("drop-image");
+  });
+  canvas.addEventListener("dragleave",function(){canvas.classList.remove("drop-image");});
+  canvas.addEventListener("drop",function(e){
+    canvas.classList.remove("drop-image");
+    var files=e.dataTransfer&&e.dataTransfer.files;
+    if(!files||!files.length)return;
+    e.preventDefault();
+    if(String(files[0].type).indexOf("image/")!==0){
+      // An audio file dropped here is a near miss, not a mistake worth a
+      // dialog — send it where it was going to go.
+      if(String(files[0].type).indexOf("audio/")===0)importSoundFile(files[0]);
+      else showMessage("Drop","Drop an image to place it, or an audio file to add it to the timeline.");
+      return;
+    }
+    var p=getStagePos(e);
+    importImageFile(files[0],{dropX:p.x,dropY:p.y});
+  });
 }
 function getStagePos(e){
   var r=canvas.getBoundingClientRect();
@@ -3063,6 +3208,7 @@ function onMouseDown(e){
     dragPreview={type:curTool,x1:p.x,y1:p.y,x2:p.x,y2:p.y};
   }else if(curTool==="pencil"||curTool==="brush"){
     dragPreview={type:curTool,points:[p.x,p.y]};
+
   }else if(curTool==="text"){
     dragPreview={type:"text",x1:p.x,y1:p.y,x2:p.x,y2:p.y};
   }else if(curTool==="hand"){
@@ -3789,8 +3935,9 @@ function initTLClicks(){
     document.addEventListener("mouseup",stopScrub);
   });
 
-  /* Drop an audio file anywhere on the timeline to import it onto the
-     current keyframe — the gesture people try first. */
+  /* Drop a file anywhere on the timeline to import it onto the frame and
+     layer you dropped it on — the gesture people try first. Audio and images
+     both land here; the file's type decides which. */
   tc.addEventListener("dragover",function(e){
     if(!e.dataTransfer)return;
     e.preventDefault();
@@ -3810,7 +3957,8 @@ function initTLClicks(){
     var layers=currentLayers();
     if(li>=0&&li<layers.length)curLayer=li;
     curFrame=f;
-    importSoundFile(files[0]);
+    if(String(files[0].type).indexOf("image/")===0)importImageFile(files[0]);
+    else importSoundFile(files[0]);
   });
   // Right-click context menu on timeline
   tc.addEventListener("contextmenu",function(e){
@@ -4154,11 +4302,47 @@ function updateProps(){
       ["hue","Hue"],["saturation","Saturation"],["color","Color"],["luminosity","Luminosity"]
     ]});
 
+    // ── Bitmap Properties ──
+    if(o.type==="bitmap"){
+      var basset=doc.bitmaps[o.bitmapAsset];
+      sect("Bitmap");
+      row("Image",o.bitmapAsset||"(none)",function(){},{type:"readonly"});
+      row("Source",basset&&basset.width?(basset.width+" × "+basset.height+" px"):"decoding…",
+          function(){},{type:"readonly"});
+      row("Smoothing",o.smoothing!==false,function(v){
+        pushUndo();o.smoothing=!!v;render();
+      },{type:"checkbox"});
+      actionRow([
+        {label:"Trace Bitmap...",onClick:function(){selection=[o];showTraceBitmapDialog();}},
+        {label:"Swap Bitmap...",onClick:function(){selection=[o];showSwapBitmapDialog();}}
+      ]);
+      actionRow([
+        {label:"Reset to Source Size",onClick:function(){
+          if(!basset||!basset.width)return;
+          pushUndo();o.width=basset.width;o.height=basset.height;
+          render();updateProps();
+        }}
+      ]);
+      if(!bitmapImage(o.bitmapAsset)){
+        note("This image has not finished decoding — the stage shows a labelled frame until it has.");
+      }
+    }
+
+    // ── Traced Path Properties ──
+    if(o.type==="path"){
+      sect("Traced Path");
+      var nodes=(o.path&&window.FlashyTrace)?FlashyTrace.pathNodeCount(o.path):0;
+      row("Nodes",nodes,function(){},{type:"readonly"});
+      note("A traced outline. Editing W and H rescales it, and the fill below is "+
+           "the colour the trace assigned — change it like any other shape.");
+    }
+
     /* Fill and stroke belong to the artwork, not to a symbol instance —
-       the shapes inside the symbol carry their own. Showing dead controls
-       above the frame picker is noise in exactly the workflow (lip sync,
-       posing) where the frame picker gets used most. */
-    if(o.type!=="symbol"){
+       the shapes inside the symbol carry their own. A bitmap has neither: it
+       is pixels. Showing dead controls above the frame picker is noise in
+       exactly the workflow (lip sync, posing) where the frame picker gets
+       used most. */
+    if(o.type!=="symbol"&&o.type!=="bitmap"){
     // ── Fill ──
     sect("Fill");
     row("Type",o.fillType||"solid",function(v){pushUndo();o.fillType=v;render();updateProps();},{type:"select",width:"80px",options:[["solid","Solid"],["none","None"]]});
@@ -4480,9 +4664,10 @@ function updateLib(){
   title.textContent="Library";
   lp.appendChild(title);
   var keys=Object.keys(doc.library);
-  if(keys.length===0){
+  var bkeys=Object.keys(doc.bitmaps||{});
+  if(keys.length===0&&bkeys.length===0){
     var empty=document.createElement("div");empty.className="lib-empty";
-    empty.textContent="No symbols";lp.appendChild(empty);
+    empty.textContent="No symbols or bitmaps";lp.appendChild(empty);
     return;
   }
   keys.forEach(function(k){
@@ -4507,6 +4692,59 @@ function updateLib(){
     });
     lp.appendChild(row);
   });
+
+  /* Bitmaps share the Library, because that is what they are: reusable assets
+     referenced by name. Click places an instance; double-click goes straight
+     to tracing it, which is the thing you most often imported it to do. */
+  if(bkeys.length){
+    var bt=document.createElement("div");
+    bt.className="lib-title lib-subtitle";
+    bt.textContent="Bitmaps";
+    lp.appendChild(bt);
+    bkeys.forEach(function(k){
+      var a=doc.bitmaps[k];
+      var row=document.createElement("div");row.className="lib-item";
+      var icon=document.createElement("span");icon.className="lib-icon";icon.textContent="▦";
+      row.appendChild(icon);
+      var name=document.createElement("span");
+      name.textContent=k;
+      row.appendChild(name);
+      var dim=document.createElement("span");
+      dim.className="lib-dim";
+      dim.textContent=a&&a.width?a.width+"×"+a.height:"";
+      row.appendChild(dim);
+      row.title=k+(a&&a.width?" — "+a.width+"×"+a.height+" px":"")+
+        "\nClick to place, double-click to trace, right-click to delete.";
+      row.addEventListener("click",function(){
+        pushUndo();
+        var placed=placeBitmap(k,{});
+        if(placed)selection=[placed];
+        fullRefresh();
+      });
+      row.addEventListener("dblclick",function(e){
+        e.stopPropagation();
+        var placed=selectedBitmap();
+        if(!placed||placed.bitmapAsset!==k){
+          pushUndo();
+          placed=placeBitmap(k,{});
+          if(placed)selection=[placed];
+          fullRefresh();
+        }
+        if(placed)showTraceBitmapDialog();
+      });
+      row.addEventListener("contextmenu",function(e){
+        e.preventDefault();e.stopPropagation();
+        showDialog({
+          title:"Delete Bitmap",
+          message:"Delete “"+k+"” from the library?\n\n"+
+                  "Every instance of it on the timeline goes too. This can be undone.",
+          fields:[],okLabel:"Delete",
+          onOk:function(){deleteBitmapAsset(k);}
+        });
+      });
+      lp.appendChild(row);
+    });
+  }
 }
 
 // === Symbol Editing ===
@@ -4605,17 +4843,26 @@ function showCtx(e){
       {label:"Cut",action:"cut"},{label:"Copy",action:"copy"},
       {label:"Paste",action:"paste"},{label:"Delete",action:"delete"},
       {type:"sep"},
-      {label:"Convert to Symbol...",action:"convertSym"},
-      {type:"sep"},
-      {label:"Bring to Front",action:"bringFront"},
-      {label:"Send to Back",action:"sendBack"}
+      {label:"Convert to Symbol...",action:"convertSym"}
     ];
+    // Tracing is reached from a bitmap you right-clicked far more often than
+    // from the Modify menu, so it only appears when there is one selected.
+    if(selectedBitmap()){
+      items.push({type:"sep"});
+      items.push({label:"Trace Bitmap...",action:"traceBitmap"});
+      items.push({label:"Swap Bitmap...",action:"swapBitmap"});
+    }
+    items.push({type:"sep"});
+    items.push({label:"Bring to Front",action:"bringFront"});
+    items.push({label:"Send to Back",action:"sendBack"});
   }else{
     items=[
       {label:"Paste",action:"paste"},
       {type:"sep"},
       {label:"Insert Keyframe",action:"insKF"},
       {label:"Insert Blank Keyframe",action:"insBlankKF"},
+      {type:"sep"},
+      {label:"Import Image...",action:"importImage"},
       {type:"sep"},
       {label:"Document Settings...",action:"docSettings"}
     ];
@@ -4651,7 +4898,7 @@ function doAction(a){
     // Only interrupt when there is actually something to lose.
     if(!isDirty()||confirm("Create new document? Unsaved changes will be lost.")){
       doc.width=550;doc.height=400;doc.fps=24;doc.backgroundColor="#FFFFFF";
-      doc.layers=[new Layer("Layer 1")];doc.library={};doc.sounds={};doc.totalFrames=60;
+      doc.layers=[new Layer("Layer 1")];doc.library={};doc.sounds={};doc.bitmaps={};doc.totalFrames=60;
       curLayer=0;curFrame=1;selection=[];undoStack=[];redoStack=[];editStack=[];
       markSaved();
       updateBreadcrumb();fullRefresh();
@@ -5019,6 +5266,21 @@ function doAction(a){
   case "lipSync":
     showLipSyncDialog();
     break;
+  case "importImage":
+    var iinp=document.createElement("input");
+    iinp.type="file";
+    iinp.accept="image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp";
+    iinp.addEventListener("change",function(){
+      if(iinp.files&&iinp.files[0])importImageFile(iinp.files[0]);
+    });
+    iinp.click();
+    break;
+  case "traceBitmap":
+    showTraceBitmapDialog();
+    break;
+  case "swapBitmap":
+    showSwapBitmapDialog();
+    break;
   case "importSound":
     var sinp=document.createElement("input");
     sinp.type="file";
@@ -5249,6 +5511,591 @@ function deleteSoundAsset(name){
     if(doc.library[k]&&doc.library[k].layers)scrub(doc.library[k].layers);
   });
   fullRefresh();
+}
+
+/* ------------------------------------------------------------------ *
+ * Bitmaps
+ *
+ * Until now nothing in the document model could hold an image, which made a
+ * whole category of work impossible: a scanned pencil test, a photo
+ * background, a texture, and — the reason this landed — anything to trace.
+ *
+ * The model mirrors audio exactly, because audio got it right: the document
+ * carries encoded bytes under a name, the decoded image lives in
+ * Flashy.Bitmaps, and an object of type "bitmap" refers to the asset by name.
+ * So one image placed on forty frames is stored once and decoded once, a
+ * .flashy stays a single self-contained file, and the exporters have one
+ * place to look.
+ * ------------------------------------------------------------------ */
+
+/** Longest edge a stored bitmap may have. Beyond this the import downscales. */
+var BITMAP_MAX_EDGE=2048;
+/** Longest edge the tracer looks at. Above this it traces a downscaled copy
+    and scales the result back up — a 12-megapixel photo is minutes of work
+    for detail no vector outline is going to keep anyway. */
+var TRACE_MAX_EDGE=900;
+
+/** The decoded image for an asset name, or null if it is not ready yet. */
+function bitmapImage(name){
+  if(!name||typeof Flashy==="undefined"||!Flashy.Bitmaps)return null;
+  return Flashy.Bitmaps.get(name);
+}
+
+function bitmapDataURL(name){
+  var a=doc.bitmaps&&doc.bitmaps[name];
+  if(!a||!a.data)return "";
+  return "data:"+(a.mediaType||"image/png")+";base64,"+a.data;
+}
+
+function uniqueBitmapName(base){
+  base=(base||"Bitmap").trim()||"Bitmap";
+  if(!doc.bitmaps[base])return base;
+  var n=2;
+  while(doc.bitmaps[base+" "+n])n++;
+  return base+" "+n;
+}
+
+/**
+ * Decode an asset so it can be drawn, then redraw.
+ * Safe to call repeatedly — Flashy.Bitmaps caches by name.
+ */
+function decodeBitmap(name){
+  var asset=doc.bitmaps&&doc.bitmaps[name];
+  if(!asset||typeof Flashy==="undefined"||!Flashy.Bitmaps)return Promise.resolve(null);
+  if(Flashy.Bitmaps.has(name))return Promise.resolve(Flashy.Bitmaps.get(name));
+  return Flashy.Bitmaps.load(name,bitmapDataURL(name))
+    .then(function(img){
+      // Trust the decoded image over whatever the document claimed.
+      asset.width=img.naturalWidth||img.width;
+      asset.height=img.naturalHeight||img.height;
+      render();
+      return img;
+    })
+    .catch(function(err){
+      if(window.console)console.warn("Flashy: could not decode bitmap "+name,err);
+      return null;
+    });
+}
+function decodeAllBitmaps(){
+  Object.keys(doc.bitmaps||{}).forEach(decodeBitmap);
+}
+
+/** Place an instance of a bitmap asset on the current keyframe. */
+function placeBitmap(assetName,opts){
+  opts=opts||{};
+  var asset=doc.bitmaps[assetName];
+  if(!asset)return null;
+  var kf=CKF();
+  if(!kf){var l=CL();if(l)kf=l.insertKeyframe(curFrame);}
+  if(!kf)return null;
+  var w=asset.width||100,h=asset.height||100;
+  // Shrink an oversized image to fit the stage on arrival. Importing a 4000px
+  // photo and seeing one of its pixels fill the canvas is not a useful start.
+  var fit=Math.min(1,doc.width/w,doc.height/h);
+  if(fit<1){w=Math.round(w*fit);h=Math.round(h*fit);}
+  var o=new EditorObject("bitmap");
+  o.bitmapAsset=assetName;
+  o.width=w;o.height=h;
+  // `x`/`y` place the top-left; `dropX`/`dropY` centre it on a drop point,
+  // which is only knowable here because the fit above decides the final size.
+  if(opts.x!=null&&opts.y!=null){o.x=opts.x;o.y=opts.y;}
+  else if(opts.dropX!=null&&opts.dropY!=null){
+    o.x=Math.round(opts.dropX-w/2);o.y=Math.round(opts.dropY-h/2);
+  }else{
+    o.x=Math.round((doc.width-w)/2);o.y=Math.round((doc.height-h)/2);
+  }
+  o.fillType="none";o.strokeStyle="none";o.strokeWidth=0;
+  kf.objects.push(o);
+  return o;
+}
+
+/**
+ * Import an image File into the document and place it on the current frame.
+ *
+ * The bytes are re-encoded through a canvas when the image is larger than
+ * BITMAP_MAX_EDGE, and kept byte-for-byte otherwise — so a PNG you import and
+ * never resize is the PNG you get back out, and a 6000px photo does not turn
+ * a 40KB document into a 20MB one.
+ */
+function importImageFile(file,opts){
+  opts=opts||{};
+  var OK=["image/png","image/jpeg","image/gif","image/webp","image/bmp","image/svg+xml"];
+  var looksImage=file&&(String(file.type).indexOf("image/")===0||OK.indexOf(file.type)>=0);
+  if(!looksImage){
+    showMessage("Import Image","That is not an image file: "+((file&&file.name)||"(none)")+
+      "\n\nUse PNG, JPEG, GIF, WebP or BMP.");
+    return Promise.resolve(null);
+  }
+  if(typeof Flashy==="undefined"||!Flashy.Bitmaps){
+    showMessage("Import Image","This build has no bitmap support.");
+    return Promise.resolve(null);
+  }
+
+  return new Promise(function(resolve){
+    var reader=new FileReader();
+    reader.onerror=function(){showMessage("Import Image","Could not read "+file.name);resolve(null);};
+    reader.onload=function(){
+      var dataURL=String(reader.result);
+      var probe=new Image();
+      probe.onerror=function(){
+        showMessage("Import Image","Could not decode "+file.name+
+          "\n\nTry PNG, JPEG, GIF or WebP.");
+        resolve(null);
+      };
+      probe.onload=function(){
+        var nw=probe.naturalWidth||probe.width,nh=probe.naturalHeight||probe.height;
+        if(!nw||!nh){
+          showMessage("Import Image",file.name+" has no pixels.");
+          resolve(null);return;
+        }
+        var mediaType=file.type||"image/png";
+        var url=dataURL,outW=nw,outH=nh;
+        var longEdge=Math.max(nw,nh);
+        if(longEdge>BITMAP_MAX_EDGE){
+          var k=BITMAP_MAX_EDGE/longEdge;
+          outW=Math.max(1,Math.round(nw*k));outH=Math.max(1,Math.round(nh*k));
+          var cv=document.createElement("canvas");
+          cv.width=outW;cv.height=outH;
+          cv.getContext("2d").drawImage(probe,0,0,outW,outH);
+          // JPEG stays JPEG (a photo re-encoded as PNG balloons); everything
+          // else becomes PNG so transparency survives.
+          if(mediaType==="image/jpeg"){url=cv.toDataURL("image/jpeg",0.9);}
+          else{url=cv.toDataURL("image/png");mediaType="image/png";}
+        }
+        var name=uniqueBitmapName((file.name||"Bitmap").replace(/\.[^.]+$/,""));
+        Flashy.Bitmaps.load(name,url).then(function(img){
+          pushUndo();
+          doc.bitmaps[name]={
+            name:name,mediaType:mediaType,
+            data:url.slice(url.indexOf(",")+1),
+            width:img.naturalWidth||outW,height:img.naturalHeight||outH
+          };
+          var placed=opts.place===false?null:placeBitmap(name,opts);
+          if(placed)selection=[placed];
+          fullRefresh();
+          resolve(name);
+        })["catch"](function(err){
+          showMessage("Import Image","Could not decode "+file.name+":\n"+
+            ((err&&err.message)||err));
+          resolve(null);
+        });
+      };
+      probe.src=dataURL;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Remove a bitmap asset and every object that referenced it. */
+function deleteBitmapAsset(name){
+  pushUndo();
+  delete doc.bitmaps[name];
+  var scrub=function(layers){
+    (layers||[]).forEach(function(l){
+      l.keyframes.forEach(function(kf){
+        kf.objects=kf.objects.filter(function(o){
+          return !(o.type==="bitmap"&&o.bitmapAsset===name);
+        });
+      });
+    });
+  };
+  scrub(doc.layers);
+  Object.keys(doc.library).forEach(function(k){
+    if(doc.library[k]&&doc.library[k].layers)scrub(doc.library[k].layers);
+  });
+  selection=selection.filter(function(o){
+    return !(o.type==="bitmap"&&o.bitmapAsset===name);
+  });
+  if(typeof Flashy!=="undefined"&&Flashy.Bitmaps)Flashy.Bitmaps.remove(name);
+  fullRefresh();
+}
+
+/* ------------------------------------------------------------------ *
+ * Trace Bitmap
+ *
+ * Converting a raster image into editable vector shapes. The work is in
+ * flashy-trace.js (pure, no DOM, no editor); everything here is about getting
+ * pixels out of a placed bitmap, turning the tracer's output into ordinary
+ * EditorObjects, and putting them where the bitmap was.
+ *
+ * What lands is nothing special: plain filled `path` objects on the same
+ * layer and frame, each with its own fill colour. Select one and recolour it,
+ * delete the ones you did not want, convert the lot to a symbol. That is the
+ * whole point of tracing rather than placing — the result has to be editable
+ * art, not a different kind of image.
+ * ------------------------------------------------------------------ */
+
+/** Default trace settings, shared by the dialog and the seam. */
+function traceDefaults(){
+  var d=(window.FlashyTrace&&FlashyTrace.DEFAULTS)||{};
+  return {
+    colorThreshold:d.colorThreshold!=null?d.colorThreshold:100,
+    minArea:d.minArea!=null?d.minArea:8,
+    curveFit:d.curveFit||"normal",
+    cornerThreshold:d.cornerThreshold||"normal"
+  };
+}
+
+/** The bitmap object the trace commands act on: the selected one, if any. */
+function selectedBitmap(){
+  for(var i=0;i<selection.length;i++){
+    if(selection[i].type==="bitmap"&&selection[i].bitmapAsset)return selection[i];
+  }
+  return null;
+}
+
+/**
+ * Pixels for a bitmap object, at a size the tracer can work through.
+ *
+ * Returns `{imageData, scale}` where `scale` converts traced coordinates back
+ * into the object's own space: the tracer may have seen a downscaled copy, and
+ * the object may be displayed at a size other than the asset's natural one.
+ */
+function bitmapPixels(obj,maxEdge){
+  var img=bitmapImage(obj.bitmapAsset);
+  if(!img)return null;
+  var nw=img.naturalWidth||img.width,nh=img.naturalHeight||img.height;
+  if(!nw||!nh)return null;
+  // Trace at the natural resolution, capped — but never above the size the
+  // object is actually drawn at, since detail finer than that is invisible.
+  var target=Math.min(nw,Math.max(1,Math.abs(obj.width)||nw));
+  var k=Math.min(1,(maxEdge||TRACE_MAX_EDGE)/Math.max(nw,nh),target/nw);
+  var w=Math.max(1,Math.round(nw*k)),h=Math.max(1,Math.round(nh*k));
+  var cv=document.createElement("canvas");
+  cv.width=w;cv.height=h;
+  var cx=cv.getContext("2d",{willReadFrequently:true});
+  cx.imageSmoothingEnabled=true;
+  cx.drawImage(img,0,0,nw,nh,0,0,w,h);
+  return {
+    imageData:cx.getImageData(0,0,w,h),
+    // Traced coords are in the downscaled copy's space; this maps them onto
+    // the object's displayed box.
+    scaleX:(obj.width||nw)/w,
+    scaleY:(obj.height||nh)/h,
+    width:w,height:h
+  };
+}
+
+/** Run the tracer over a bitmap object. Returns the tracer's result, or null. */
+function traceBitmapPixels(obj,opts,maxEdge){
+  if(!window.FlashyTrace)return null;
+  var px=bitmapPixels(obj,maxEdge);
+  if(!px)return null;
+  // The tracer scales uniformly, so trace in pixel space and stretch the
+  // finished paths; a non-uniform object box would otherwise skew minArea.
+  var res=FlashyTrace.trace(px.imageData,{
+    colorThreshold:opts.colorThreshold,
+    minArea:opts.minArea,
+    curveFit:opts.curveFit,
+    cornerThreshold:opts.cornerThreshold
+  });
+  res.scaleX=px.scaleX;res.scaleY=px.scaleY;
+  res.traceWidth=px.width;res.traceHeight=px.height;
+  return res;
+}
+
+/**
+ * Trace a placed bitmap and put the vector shapes on the timeline.
+ *
+ * `replace` removes the bitmap object afterwards, which is what Flash does —
+ * but it is a choice, because keeping the original underneath to compare
+ * against is exactly what you want on the first few attempts.
+ *
+ * Returns `{shapes, regions, colors, objects}` so the dialog and the specs can
+ * report what happened without re-deriving it.
+ */
+function traceBitmapObject(obj,opts){
+  opts=opts||{};
+  var settings=traceDefaults();
+  ["colorThreshold","minArea","curveFit","cornerThreshold"].forEach(function(k){
+    if(opts[k]!=null)settings[k]=opts[k];
+  });
+  if(!obj||obj.type!=="bitmap")return null;
+  var res=traceBitmapPixels(obj,settings);
+  if(!res||!res.shapes.length)return null;
+
+  var kf=CKF();
+  if(!kf){var l=CL();if(l)kf=l.insertKeyframe(curFrame);}
+  if(!kf)return null;
+
+  var idx=kf.objects.indexOf(obj);
+  if(idx<0)idx=kf.objects.length;
+  // The bitmap's own top-left in stage space. `width`/`height` may be
+  // negative if it was flipped by a drag, so normalise.
+  var ox=Math.min(obj.x,obj.x+obj.width),oy=Math.min(obj.y,obj.y+obj.height);
+
+  var made=[];
+  res.shapes.forEach(function(sh){
+    // Tracer space -> object box -> stage.
+    var p=FlashyTrace.pathTransform(sh.path,res.scaleX,res.scaleY,0,0);
+    var b=FlashyTrace.pathBounds(p);
+    if(!(b.width>0)&&!(b.height>0))return;
+    // Store object-local, bounding box at (0,0) — the same convention the
+    // pencil uses, so selection, moving and getBounds all work unchanged.
+    var local=FlashyTrace.pathTransform(p,1,1,-b.x,-b.y);
+    var o=new EditorObject("path");
+    o.path=local;
+    o.pathW=b.width;o.pathH=b.height;
+    o.x=ox+b.x;o.y=oy+b.y;
+    o.width=b.width;o.height=b.height;
+    o.fillColor=sh.color;
+    o.fillType="solid";o.fillAlpha=1;
+    // Pure fills, no outline: Flash's trace produces filled regions, and a
+    // default 1px black stroke on every one of two hundred shapes is a mess
+    // you then have to undo by hand.
+    o.strokeStyle="none";o.strokeWidth=0;
+    o.name="Trace "+(made.length+1);
+    made.push(o);
+  });
+  if(!made.length)return null;
+
+  pushUndo();
+  /* Splice in at the bitmap's own depth, so the trace inherits it instead of
+     jumping to the front of the layer.
+     When the bitmap is kept it has to end up BEHIND the trace — the whole
+     reason to keep it is to compare the two, and later in the array means
+     painted later, so inserting at `idx` would hide the trace under the image
+     it came from. */
+  var insertAt=opts.replace===false?idx+1:idx;
+  Array.prototype.splice.apply(kf.objects,[insertAt,0].concat(made));
+  if(opts.replace!==false){
+    var at=kf.objects.indexOf(obj);
+    if(at>=0)kf.objects.splice(at,1);
+  }
+  selection=made.slice();
+  fullRefresh();
+  return {
+    shapes:made.length,regions:res.regions,colors:res.colors,
+    objects:made
+  };
+}
+
+/**
+ * Trace Bitmap.
+ *
+ * The four settings do not have intuitions attached to them — nobody knows
+ * what "Minimum Area 8" looks like — so the dialog traces as you type and
+ * shows the result next to the original. In Flash you guessed, pressed OK,
+ * looked, undid, and guessed again; the preview is the whole difference
+ * between a usable feature and a lottery.
+ *
+ * The preview traces a smaller copy than OK will, so it stays responsive; the
+ * shape and colour counts it reports are therefore close rather than exact,
+ * and it says so.
+ */
+function showTraceBitmapDialog(){
+  if(!window.FlashyTrace){
+    showMessage("Trace Bitmap","This build is missing flashy-trace.js, so there is nothing to trace with.");
+    return;
+  }
+  var obj=selectedBitmap();
+  if(!obj){
+    var any=Object.keys(doc.bitmaps||{}).length;
+    showMessage("Trace Bitmap",
+      any
+        ? "Select a bitmap on the stage first.\n\nClick the image you want to trace — Trace Bitmap works on a placed bitmap, not on a library asset."
+        : "There are no images in this document yet.\n\nFile ▸ Import Image…, or drop an image file onto the stage, then select it and try again.");
+    return;
+  }
+  if(!bitmapImage(obj.bitmapAsset)){
+    showMessage("Trace Bitmap","“"+obj.bitmapAsset+"” has not finished decoding yet. Try again in a moment.");
+    return;
+  }
+
+  var d=traceDefaults();
+  var preview=null,previewCtx=null,readout=null;
+  var pending=null,lastRes=null;
+
+  var read=function(vals){
+    return {
+      colorThreshold:Math.max(1,Math.min(500,parseInt(vals.ct,10)||d.colorThreshold)),
+      minArea:Math.max(1,Math.min(1000,parseInt(vals.ma,10)||d.minArea)),
+      curveFit:vals.cf,
+      cornerThreshold:vals.cr
+    };
+  };
+
+  /* Debounced: dragging a number field fires per keystroke and a trace is
+     tens of milliseconds, which is long enough to make typing feel sticky. */
+  var schedule=function(getVals){
+    if(pending)clearTimeout(pending);
+    pending=setTimeout(function(){pending=null;runPreview(getVals());},120);
+  };
+
+  var runPreview=function(vals){
+    if(!preview)return;
+    var opts=read(vals);
+    var pw=preview.width,ph=preview.height;
+    previewCtx.clearRect(0,0,pw,ph);
+    var res;
+    try{
+      // Half the normal cap: this runs on every keystroke.
+      res=traceBitmapPixels(obj,opts,Math.round(TRACE_MAX_EDGE/2));
+    }catch(err){
+      readout.textContent="Could not trace this image: "+((err&&err.message)||err);
+      return;
+    }
+    lastRes=res;
+    if(!res||!res.shapes.length){
+      readout.textContent="Nothing to trace at these settings — try a lower Minimum Area.";
+      return;
+    }
+    // Fit the traced artwork into the preview box.
+    var k=Math.min(pw/res.traceWidth,ph/res.traceHeight);
+    var dx=(pw-res.traceWidth*k)/2,dy=(ph-res.traceHeight*k)/2;
+    previewCtx.save();
+    previewCtx.translate(dx,dy);
+    previewCtx.scale(k,k);
+    for(var i=0;i<res.shapes.length;i++){
+      previewCtx.beginPath();
+      FlashyTrace.pathToContext(res.shapes[i].path,previewCtx);
+      previewCtx.fillStyle=res.shapes[i].color;
+      previewCtx.fill("evenodd");
+    }
+    previewCtx.restore();
+    readout.textContent=res.shapes.length+" shape"+(res.shapes.length===1?"":"s")+
+      ", "+res.colors+" colour"+(res.colors===1?"":"s")+
+      " — preview is traced at reduced size, so the final count will differ a little.";
+  };
+
+  showDialog({
+    title:"Trace Bitmap",
+    message:"Converting “"+obj.bitmapAsset+"” into editable vector shapes.",
+    okLabel:"Trace",
+    fields:[
+      {name:"ct",label:"Color threshold",type:"number",value:d.colorThreshold,min:1,max:500,
+       hint:"1–500. How far apart two colours must be to stay separate. High lumps "+
+            "broad ranges together for a simpler graphic; low (1–10) keeps fine "+
+            "variation and stays closer to the original."},
+      {name:"ma",label:"Minimum area",type:"number",value:d.minArea,min:1,max:1000,
+       hint:"1–1000 pixels. The smallest region that keeps its own colour; anything "+
+            "smaller is absorbed by its neighbour. Higher is cleaner and more "+
+            "generalised; 1 captures fine, intricate detail."},
+      {name:"cf",label:"Curve fit",type:"select",value:d.curveFit,
+       options:FlashyTrace.CURVE_FITS,
+       hint:"How smoothly outlines are drawn, from Pixels (the staircase, kept "+
+            "exactly) to Very Smooth (clean flowing curves)."},
+      {name:"cr",label:"Corner threshold",type:"select",value:d.cornerThreshold,
+       options:FlashyTrace.CORNER_THRESHOLDS,
+       hint:"Whether sharp corners are retained or rounded out. Many Corners keeps "+
+            "them; Few Corners rounds all but the sharpest into the curve."},
+      {name:"keep",label:"Keep bitmap",type:"checkbox",value:false,
+       hint:"Leave the original image on the stage underneath the trace, to compare "+
+            "against. Off replaces it, as Flash does."}
+    ],
+    build:function(body,inputs){
+      var wrap=document.createElement("div");
+      wrap.className="fy-trace-preview";
+
+      var mk=function(label){
+        var cell=document.createElement("div");
+        cell.className="fy-trace-cell";
+        var cap=document.createElement("div");
+        cap.className="fy-trace-cap";
+        cap.textContent=label;
+        var cv=document.createElement("canvas");
+        cv.width=200;cv.height=150;
+        cell.appendChild(cap);cell.appendChild(cv);
+        wrap.appendChild(cell);
+        return cv;
+      };
+
+      var src=mk("Original");
+      preview=mk("Traced");
+      previewCtx=preview.getContext("2d");
+
+      // The original, letterboxed the same way as the trace so the two line up.
+      var img=bitmapImage(obj.bitmapAsset);
+      if(img){
+        var sc=src.getContext("2d");
+        var nw=img.naturalWidth||img.width,nh=img.naturalHeight||img.height;
+        var k=Math.min(src.width/nw,src.height/nh);
+        sc.drawImage(img,0,0,nw,nh,(src.width-nw*k)/2,(src.height-nh*k)/2,nw*k,nh*k);
+      }
+      body.appendChild(wrap);
+
+      readout=document.createElement("div");
+      readout.className="fy-dialog-hint fy-trace-readout";
+      readout.textContent="Tracing…";
+      body.appendChild(readout);
+
+      var vals=function(){
+        var v={};
+        Object.keys(inputs).forEach(function(k){v[k]=fieldValue(inputs[k]);});
+        return v;
+      };
+      ["ct","ma","cf","cr"].forEach(function(k){
+        inputs[k].addEventListener("input",function(){schedule(vals);});
+        inputs[k].addEventListener("change",function(){schedule(vals);});
+      });
+      // First pass after the dialog is on screen, so it paints rather than
+      // blocking the open.
+      setTimeout(function(){runPreview(vals());},0);
+    },
+    onCancel:function(){if(pending)clearTimeout(pending);},
+    onOk:function(v){
+      if(pending)clearTimeout(pending);
+      var opts=read(v);
+      opts.replace=!v.keep;
+      var res=traceBitmapObject(obj,opts);
+      if(!res){
+        showMessage("Trace Bitmap",
+          "That produced no shapes.\n\nMinimum Area may be larger than anything in "+
+          "the image — try a smaller value.");
+        return;
+      }
+      showMessage("Trace Bitmap",
+        "Traced into "+res.shapes+" shape"+(res.shapes===1?"":"s")+
+        " across "+res.colors+" colour"+(res.colors===1?"":"s")+".\n\n"+
+        "They are ordinary filled paths on this frame and are all selected: "+
+        "recolour them, delete the ones you do not want, or Modify ▸ Convert "+
+        "to Symbol to make the lot reusable.");
+    }
+  });
+}
+
+/**
+ * Swap the image behind a placed bitmap, keeping its position and size — the
+ * bitmap counterpart of Swap Symbol, and the reason an asset is referenced by
+ * name rather than embedded in the object.
+ */
+function showSwapBitmapDialog(){
+  var obj=selectedBitmap();
+  if(!obj){
+    showMessage("Swap Bitmap","Select a bitmap on the stage first.");
+    return;
+  }
+  var names=Object.keys(doc.bitmaps||{});
+  if(names.length<2){
+    showMessage("Swap Bitmap",
+      "There is only one image in this document.\n\nImport another with "+
+      "File ▸ Import Image… first.");
+    return;
+  }
+  showDialog({
+    title:"Swap Bitmap",
+    message:"Replace the image behind this instance. Position and size are kept.",
+    okLabel:"Swap",
+    fields:[
+      {name:"asset",label:"Image",type:"select",value:obj.bitmapAsset,
+       options:names.map(function(n){
+         var a=doc.bitmaps[n];
+         return [n,n+(a&&a.width?"  ("+a.width+"×"+a.height+")":"")];
+       })},
+      {name:"resize",label:"Reset size",type:"checkbox",value:false,
+       hint:"Resize the instance to the new image's own dimensions instead of "+
+            "stretching it into the current box."}
+    ],
+    onOk:function(v){
+      var a=doc.bitmaps[v.asset];
+      if(!a)return;
+      pushUndo();
+      obj.bitmapAsset=v.asset;
+      if(v.resize&&a.width&&a.height){obj.width=a.width;obj.height=a.height;}
+      decodeBitmap(v.asset);
+      fullRefresh();
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -6125,6 +6972,26 @@ function reviveSounds(sounds){
   });
   return out;
 }
+/**
+ * Raster assets. Encoded bytes and natural size only — the decoded image is
+ * rebuilt by Flashy.Bitmaps on load, for the same reason sounds do not cache
+ * their waveform.
+ */
+function serializeBitmaps(bitmaps){
+  var out={};
+  Object.keys(bitmaps||{}).forEach(function(name){
+    var a=bitmaps[name];
+    if(!a||!a.data)return;
+    out[name]={name:name,mediaType:a.mediaType||"image/png",data:a.data,
+               width:a.width||0,height:a.height||0};
+  });
+  return out;
+}
+/* Reviving is the same normalise-and-drop-the-junk pass as serialising: a
+   bitmap asset is plain data with no prototype to restore, unlike a Layer or
+   an EditorObject. Sounds have the same shape and keep two identical copies of
+   it; one is enough. */
+function reviveBitmaps(bitmaps){return serializeBitmaps(bitmaps);}
 function serializeDoc(){
   return{
     width:doc.width,height:doc.height,fps:doc.fps,
@@ -6134,6 +7001,8 @@ function serializeDoc(){
     library:serializeLibrary(doc.library),
     // Audio travels inside the document, so a .flashy stays one file.
     sounds:serializeSounds(doc.sounds),
+    // …and so do images, for the same reason.
+    bitmaps:serializeBitmaps(doc.bitmaps),
     // Character rigs: the templates and pose libraries. The hierarchy and
     // current pose ride along on the keyframe objects themselves.
     characters:serializeCharacters(doc.characters)
@@ -6231,11 +7100,14 @@ function deserializeDoc(d){
   doc.totalFrames=d.totalFrames||60;
   doc.library=reviveLibrary(d.library);
   doc.sounds=reviveSounds(d.sounds);
+  doc.bitmaps=reviveBitmaps(d.bitmaps);
   doc.characters=reviveCharacters(d.characters);
   doc.layers=reviveLayers(d.layers);
   // Decoding is async; the timeline draws flat bars until the peaks land and
-  // redraws itself when they do.
+  // redraws itself when they do. Bitmaps are the same deal — a placed image
+  // draws a labelled frame until its pixels arrive.
   decodeAllAssets();
+  decodeAllBitmaps();
   if(!doc.layers.length)doc.layers=[new Layer("Layer 1")];
 }
 // Replace the open document with one parsed from a .flashy payload. Shared by
@@ -6604,6 +7476,17 @@ function exportRuntime(data, canvas, options) {
       tf.y = -hh;
       node = new Flashy.MovieClip();
       node.addChild(tf);
+    } else if (o.type === "bitmap") {
+      // Pixels are drawn from the shared asset cache, which the preload below
+      // fills. An asset that has not landed yet draws nothing and appears when
+      // it does, exactly as the soundtrack joins late.
+      node = new Flashy.Bitmap(o.bitmapAsset, {
+        width: o.width, height: o.height, smoothing: o.smoothing !== false
+      });
+      node.x = -hw; node.y = -hh;
+      var bwrap = new Flashy.MovieClip();
+      bwrap.addChild(node);
+      node = bwrap;
     } else {
       node = new Flashy.Shape();
       var g = node.graphics;
@@ -6611,7 +7494,37 @@ function exportRuntime(data, canvas, options) {
       var stroked = (o.strokeStyle || "solid") !== "none" && (o.strokeWidth || 0) > 0;
       var sa = o.strokeAlpha != null ? o.strokeAlpha : 1;
 
-      if (o.type === "pencil" || o.type === "brush") {
+      if (o.type === "path") {
+        /* A traced outline. The command stream is replayed inline rather than
+           through FlashyTrace, because this whole function is serialised into
+           the export and the tracer is not shipped with it — the encoding is
+           four opcodes, and duplicating the reader is cheaper than embedding
+           an authoring-time module in every exported cartoon.
+           0 moveTo x y · 1 lineTo x y · 2 quadTo cx cy x y · 3 closePath */
+        var cmds = o.path;
+        if (cmds && cmds.length) {
+          var psx = o.pathW ? (o.width / o.pathW) : 1;
+          var psy = o.pathH ? (o.height / o.pathH) : 1;
+          if (filled) {
+            // Even-odd: holes ride along as extra loops in the same path.
+            g.beginFill(hex(o.fillColor, "#000"), o.fillAlpha != null ? o.fillAlpha : 1, "evenodd");
+          }
+          if (stroked) g.lineStyle(o.strokeWidth, hex(o.strokeColor, "#000"), sa);
+          var X = function (v) { return v * psx - hw; };
+          var Y = function (v) { return v * psy - hh; };
+          for (var pi = 0; pi < cmds.length;) {
+            var op = cmds[pi];
+            if (op === 0) { g.moveTo(X(cmds[pi + 1]), Y(cmds[pi + 2])); pi += 3; }
+            else if (op === 1) { g.lineTo(X(cmds[pi + 1]), Y(cmds[pi + 2])); pi += 3; }
+            else if (op === 2) {
+              g.curveTo(X(cmds[pi + 1]), Y(cmds[pi + 2]), X(cmds[pi + 3]), Y(cmds[pi + 4]));
+              pi += 5;
+            } else if (op === 3) { g.closePath(); pi += 1; }
+            else break;
+          }
+          if (filled) g.endFill();
+        }
+      } else if (o.type === "pencil" || o.type === "brush") {
         var pts = o.points;
         if (pts && pts.length >= 4) {
           var wide = o.type === "brush";
@@ -6661,6 +7574,22 @@ function exportRuntime(data, canvas, options) {
   if (data.totalFrames > maxF) maxF = data.totalFrames;
   root.timeline.setTotalFrames(maxF);
   root.loop = options.loop !== false;
+
+  /* ---- bitmaps ------------------------------------------------------ *
+   * Decode every raster asset the document carries. Like the soundtrack this
+   * is async and nothing waits for it: the movie starts, and each image
+   * appears on the next repaint after it lands. Holding frame one until a 2MB
+   * photo decodes would be the wrong trade for a cartoon that mostly is not
+   * the photo.
+   * ------------------------------------------------------------------- */
+  if (data.bitmaps && Flashy.Bitmaps) {
+    Object.keys(data.bitmaps).forEach(function (bn) {
+      var ba = data.bitmaps[bn];
+      if (!ba || !ba.data) return;
+      Flashy.Bitmaps.load(bn, "data:" + (ba.mediaType || "image/png") + ";base64," + ba.data)
+        ["catch"](function () { /* one bad asset must not stop the movie */ });
+    });
+  }
 
   /* ---- soundtrack --------------------------------------------------- *
    * Sounds are attached to keyframes, exactly as in the editor, and a
@@ -7015,7 +7944,10 @@ function exportAsMP4() {
 function exportAsSVG() {
   var w = doc.width, h = doc.height;
   var frame = Math.min(curFrame, sceneMaxFrame());
-  var s = '<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">\n';
+  // xlink is declared unconditionally: embedded bitmaps carry both `href` and
+  // the xlink form, because SVG 1.1 renderers only understand the latter.
+  var s = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"'+
+          ' width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">\n';
   s += '<rect width="'+w+'" height="'+h+'" fill="'+xmlAttr(doc.backgroundColor||"#fff")+'"/>\n';
   frameObjects(doc.layers, frame).forEach(function (o) { s += _objToSVG(o, 0); });
   s += '</svg>';
@@ -7058,6 +7990,22 @@ function _objToSVG(o, depth) {
       var d = 'M'+(pp[0]-hw)+','+(pp[1]-hh);
       for (var i=2;i<pp.length;i+=2) d+=' L'+(pp[i]-hw)+','+(pp[i+1]-hh);
       return '<path'+a+' d="'+d+'" fill="none" stroke="'+(o.type==="brush"?fl:st)+'" stroke-width="'+(o.type==="brush"?(sw||1)*3:sw)+'" stroke-linecap="round" stroke-linejoin="round"/>\n';
+    case "path":
+      // fill-rule="evenodd" for the same reason the stage and the export use
+      // it: a traced region carries its holes as extra loops.
+      if (!o.path||!o.path.length||!window.FlashyTrace) return '';
+      var psx = o.pathW ? (o.width/o.pathW) : 1, psy = o.pathH ? (o.height/o.pathH) : 1;
+      var pd = FlashyTrace.pathToSVG(FlashyTrace.pathTransform(o.path, psx, psy, -hw, -hh));
+      return '<path'+a+' d="'+pd+'" fill="'+fl+'" fill-rule="evenodd" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
+    case "bitmap":
+      // Embedded as a data URI, so the SVG is as self-contained as the HTML
+      // export — a file that needs a sidecar PNG is not an export.
+      var burl = bitmapDataURL(o.bitmapAsset);
+      if (!burl) return '';
+      return '<image'+a+' x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+
+             '" height="'+Math.abs(o.height)+'" preserveAspectRatio="none"'+
+             (o.smoothing===false?' image-rendering="pixelated"':'')+
+             ' xlink:href="'+xmlAttr(burl)+'" href="'+xmlAttr(burl)+'"/>\n';
     case "text":
       var size = o.fontSize||24;
       var anchor = o.textAlign==="center" ? "middle" : (o.textAlign==="right" ? "end" : "start");
@@ -7679,6 +8627,27 @@ function init(){
     classify:function(feat,o){return smoothVisemes(classifyVisemes(feat,o),o);},
     assets:function(){return doc.sounds;}
   };
+  /* Bitmap and trace seam — what File ▸ Import Image, the drop handlers, the
+     Trace Bitmap dialog and the specs all go through. Kept separate from
+     _flashyAudio so each asset kind has one obvious entry point. */
+  window._flashyBitmap={
+    importImageFile:importImageFile,
+    deleteBitmapAsset:deleteBitmapAsset,
+    place:placeBitmap,
+    decode:decodeBitmap,
+    assets:function(){return doc.bitmaps;},
+    image:bitmapImage,
+    dataURL:bitmapDataURL,
+    /** The bitmap the trace commands would act on. */
+    selected:selectedBitmap,
+    /** Trace settings the dialog opens with. */
+    defaults:traceDefaults,
+    /** Trace without touching the document — what the live preview uses. */
+    preview:traceBitmapPixels,
+    /** Trace and write the shapes onto the timeline. The menu's entry point. */
+    trace:traceBitmapObject,
+    maxEdge:function(){return {bitmap:BITMAP_MAX_EDGE,trace:TRACE_MAX_EDGE};}
+  };
   initActionsPanel();
   initUnloadGuard();
   initAIPanel();
@@ -7732,6 +8701,8 @@ function init(){
     doc: doc,
     currentLayers: currentLayers,
     pushUndo: pushUndo,
+    /** An undo snapshot, so a spec can check what one does and does not hold. */
+    snapshot: snap,
     fullRefresh: fullRefresh,
     Layer: Layer,
     KeyFrame: KeyFrame,

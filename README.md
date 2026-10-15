@@ -13,6 +13,7 @@ A complete Flash-style display list and animation runtime:
 - **Graphics API** — moveTo, lineTo, curveTo, cubicCurveTo, beginFill, gradients, drawRect, drawCircle, drawStar, drawPolygon
 - **Display Objects** — Shape, TextField, MovieClip, DisplayObjectContainer with full transform stack (position, rotation, scale, alpha, blend modes)
 - **Timeline & Tweening** — Keyframe-based animation with 14 easing functions (bounceOut, elasticOut, sineInOut, backOut, etc.)
+- **Bitmaps** — `Flashy.Bitmap` display object and a `Flashy.Bitmaps` asset cache (decode once, draw scaled, nearest-neighbour or smoothed)
 - **Sound** — `Flashy.Sound` (WebAudio asset cache, decode, waveform peaks) and `Flashy.SoundTrack`, which keeps timeline sounds in agreement with the playhead. Stream sync drives the playhead *from the audio clock*, so the animation follows the sound instead of drifting against it
 - **Nested MovieClips** — Clips within clips, each with their own independent timeline
 - **Frame Scripts** — Attach JavaScript to any frame for interactive behavior.
@@ -27,6 +28,13 @@ Load legacy .swf files directly. Parses headers, DefineShape 1-3, DefineSprite, 
 
 ### flashy-fla.js — FLA/XFL Importer  
 Open Flash authoring files. Reads CS5+ ZIP-based .fla files and unzipped XFL directories. Parses DOMDocument.xml, edge strings, fill/stroke styles, and symbol libraries.
+
+### flashy-trace.js — Bitmap Tracer
+Raster → vector, with no DOM and no editor: hand it an `ImageData` and it
+returns filled path command streams. Quantises colours, finds connected
+regions, absorbs undersized ones into their neighbours, walks each region's
+boundary and fits quadratic curves to it. Holes come out as extra loops in the
+same path, filled even-odd.
 
 ### Flashy Studio — The Editor
 A browser-based authoring IDE inspired by Macromedia Flash MX2004:
@@ -49,6 +57,8 @@ A browser-based authoring IDE inspired by Macromedia Flash MX2004:
 - **Nested Editing** — Double-click a symbol to enter its timeline, breadcrumb navigation, edit at any depth
 - **Color Mixer** — Fill/stroke colors with swatch picker and alpha control
 - **AI Assistant** — Describe what you want and Claude builds it directly in your project: streamed as it writes, with a Stop button, and nothing applied until you press Apply. Runs on `claude-opus-5` with adaptive thinking. Add your own Anthropic API key under **Edit ▸ Preferences**, or from the button the panel shows when no key is set. Note that it works by running model-authored JavaScript inside the editor page — see [ROADMAP.md](ROADMAP.md) §31
+- **Bitmaps** — **File ▸ Import Image**, or drop a PNG/JPEG/GIF/WebP on the stage or the timeline. The image lands in the **Library** alongside your symbols, travels inside the `.flashy` as base64 (so a project stays one file), and comes out of every exporter. **Swap Bitmap** repoints an instance without disturbing its box
+- **Trace Bitmap** — **Modify ▸ Trace Bitmap…** converts a raster into editable vector shapes, with Flash's four settings: **Color Threshold** (1–500) for how far apart two colours must be to stay separate, **Minimum Area** (1–1000 px) for the smallest region that keeps its own colour, **Curve Fit** from Pixels to Very Smooth, and **Corner Threshold** for whether sharp corners survive or get rounded into the curve. The dialog **retraces as you type and shows the result beside the original** — nobody has an intuition for what "Minimum Area 8" looks like, and in Flash you guessed, pressed OK, looked, and undid. What lands is ordinary filled paths you can recolour, delete and convert to a symbol; holes stay holes
 - **Import** — Open .flashy projects, import from URL (inspect live Flashy animations), load .swf and .fla files
 - **Export** — Self-contained HTML with the full engine embedded inline (no server needed — just open the file), plus SVG, a JS module, an embed snippet, a sprite sheet, and WebM/MP4 video
 - **Pointer input** — mouse, pen and touch, so the editor works on a tablet
@@ -203,6 +213,7 @@ Flashy exists to bring it back:
 flashy.js          Core engine (Graphics, DisplayObject, MovieClip, Timeline, Stage)
 flashy-swf.js      SWF binary parser and importer
 flashy-fla.js      FLA/XFL (ZIP + XML) parser and importer
+flashy-trace.js    Raster -> vector tracer (pure: ImageData in, paths out)
 editor.html        Editor shell (layout)
 editor.css         Macromedia Flash MX2004-style dark chrome theme
 editor-app.js      Editor application (tools, timeline, properties, library, AI)
@@ -249,7 +260,9 @@ auto lip sync. Major areas that need work:
 
 - **Auto lip sync** — phoneme track from a dialogue layer; now unblocked by audio + puppet mechanics, and the biggest remaining time sink in 2D animation
 - **Onion skinning** and pressure-sensitive brushes
-- **Raster images** — no `Bitmap` display object yet, in the engine or the editor
+- **An eraser** — there is no eraser at all; erasing vector art means a real boolean subtraction
+- **Better tracing** — the tracer is a classic auto-trace, so it produces flat regions. Tapered ink lines from a scanned pencil test is the harder, more valuable problem (see [VISION.md](VISION.md) §Source)
+- **Bitmaps on import from URL** — `walkDisplayObject` skips them; recovering the bytes from a live `Bitmap` needs a same-origin canvas
 - **Authoring the engine's own features** — gradients, stars, polygons and rounded rects all exist in `flashy.js` with no editor UI to reach them
 - **Shape tweening** — interpolating between different vector shapes
 - **Filters** — blur, drop shadow, glow (canvas filter API)

@@ -126,10 +126,17 @@ of a clip, per-layer mute/solo, and a deterministic (non-real-time) video
 export — live audio capture needs a real-time clock, so frame-stepping plus
 sound would need WebCodecs and a muxer.
 
-### 2. Bitmap import ⬜
+### 2. Bitmap import ✅ (0.7.4)
 
-Backgrounds, textures, photo gags, scanned pencil tests. Plus **trace bitmap**
-and **swap bitmap**. Nothing in the document model can hold an image today.
+Backgrounds, textures, photo gags, scanned pencil tests — File ▸ Import Image,
+or drop one on the stage. **Swap Bitmap** repoints an instance without
+disturbing its box, and **Trace Bitmap** turns a raster into editable filled
+paths with Flash's four settings and a live preview. Images ride inside the
+`.flashy` and come out of every exporter.
+
+What is still missing is the *good* tracing described in §"Source" below:
+this is a classic auto-trace, so it gives you flat regions, not tapered
+ink lines.
 
 ### 3. Import from another project ⬜
 

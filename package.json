@@ -1,6 +1,6 @@
 {
   "name": "flashy",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "HTML5 Canvas vector animation engine \u2014 a modern Flash alternative with timeline, nested MovieClips, tweening, and a full authoring IDE. Runs in the browser and as an installed desktop app.",
   "// main": "Electron reads `main` to find its entry point, so it points at the desktop shell. Library consumers resolve through `exports` below, which takes precedence in Node and keeps `require(\"flashy\")` on the engine.",
   "main": "electron/main.cjs",
@@ -41,7 +41,8 @@
   "files": [
     "flashy.js",
     "flashy-swf.js",
-    "flashy-fla.js"
+    "flashy-fla.js",
+    "flashy-trace.js"
   ],
   "scripts": {
     "// serve": "Node rather than `python -m http.server`, so a checkout needs nothing but Node \u2014 same reason the CI job can skip Python entirely.",
@@ -85,6 +86,7 @@
       "flashy.js",
       "flashy-swf.js",
       "flashy-fla.js",
+      "flashy-trace.js",
       "feedback.js",
       "index.html",
       "examples/**",

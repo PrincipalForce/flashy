@@ -86,6 +86,9 @@
 
 <script src="splash.js"></script>
 <script src="flashy.js"></script>
+<!-- Raster → vector tracing. Pure, no DOM: it takes an ImageData and returns
+     path command streams, which is what makes it testable on its own. -->
+<script src="flashy-trace.js"></script>
 <script src="feedback.js"></script>
 <!-- Dockable panel layout. Loaded before editor-app.js so its DOMContentLoaded
      handler runs first and the docks exist before the editor fills them. -->

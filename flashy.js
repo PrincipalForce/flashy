@@ -5,6 +5,7 @@
  *   - DisplayObject   : transform, alpha, events
  *   - Shape           : a leaf with a Graphics
  *   - TextField       : simple text rendering
+ *   - Bitmap/Bitmaps  : raster images, cached by name and drawn scaled
  *   - MovieClip       : container + Graphics + its own Timeline, nestable
  *   - Timeline        : tweens, frame scripts, labels, looping
  *   - Stage           : the canvas-backed root with fixed-step ticking
@@ -91,8 +92,15 @@
       return this;
     }
 
-    beginFill(color, alpha) {
-      this._cmds.push([11, color == null ? 0 : color, alpha == null ? 1 : alpha]);
+    /**
+     * `rule` is the canvas fill rule, 'nonzero' (the default) or 'evenodd'.
+     * Even-odd is what a traced outline needs: its holes arrive as extra
+     * loops in the same path and their winding is whatever the boundary walk
+     * produced, so nonzero fills them in.
+     */
+    beginFill(color, alpha, rule) {
+      this._cmds.push([11, color == null ? 0 : color, alpha == null ? 1 : alpha,
+        rule === 'evenodd' ? 'evenodd' : 'nonzero']);
       return this;
     }
     beginGradientFill(type, colors, alphas, ratios, x0, y0, x1, y1) {
@@ -134,6 +142,7 @@
 
     render(ctx) {
       let fill = null;
+      let fillRule = 'nonzero';
       let stroke = null;
       let strokeWidth = 0;
       let caps = 'round', joins = 'round', miter = 3;
@@ -142,7 +151,7 @@
       const ensurePath = () => { if (!inPath) { ctx.beginPath(); inPath = true; } };
       const commit = () => {
         if (!inPath) return;
-        if (fill)   { ctx.fillStyle = fill;     ctx.fill(); }
+        if (fill)   { ctx.fillStyle = fill;     ctx.fill(fillRule); }
         if (stroke) {
           ctx.strokeStyle = stroke;
           ctx.lineWidth   = strokeWidth;
@@ -170,9 +179,10 @@
               caps = c[4]; joins = c[5]; miter = c[6];
             }
             break;
-          case 11: commit(); fill = toRGBA(c[1], c[2]); break;
+          case 11: commit(); fill = toRGBA(c[1], c[2]); fillRule = c[3] || 'nonzero'; break;
           case 12: {
             commit();
+            fillRule = 'nonzero';
             const type = c[1], colors = c[2], alphas = c[3], ratios = c[4];
             const x0 = c[5], y0 = c[6], x1 = c[7], y1 = c[8];
             let grad;
@@ -335,6 +345,110 @@
         ctx.fillStyle = toRGBA(this.color, 1);
         ctx.fillText(lines[i], 0, y);
       }
+    }
+  }
+
+  // -------------------- Bitmaps --------------------
+  //
+  // Raster assets, keyed by name, mirroring how `Sound` holds audio: the
+  // document carries encoded bytes, this holds the decoded image, and a
+  // `Bitmap` display object refers to one by name. Decoding is async and
+  // cached, so the same asset placed on forty frames decodes once.
+  //
+  // A Bitmap whose image has not arrived yet draws nothing rather than
+  // throwing, which is what lets an export start on frame one instead of
+  // holding the whole movie hostage to a 3MB photo.
+  const Bitmaps = {
+    _images: Object.create(null),
+    _loading: Object.create(null),
+
+    /** True once `name` has a decoded image ready to draw. */
+    has(name) { return !!this._images[name]; },
+
+    /** The decoded image for `name`, or null. */
+    get(name) { return this._images[name] || null; },
+
+    /** Every asset name currently decoded. */
+    names() { return Object.keys(this._images); },
+
+    /**
+     * Decode `src` (a data URI or URL) and cache it as `name`.
+     * Repeat calls for a name already loaded (or in flight) share the result.
+     */
+    load(name, src) {
+      if (this._images[name]) return Promise.resolve(this._images[name]);
+      if (this._loading[name]) return this._loading[name];
+      const p = new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          this._images[name] = img;
+          delete this._loading[name];
+          resolve(img);
+        };
+        img.onerror = () => {
+          delete this._loading[name];
+          reject(new Error('could not decode bitmap "' + name + '"'));
+        };
+        img.src = src;
+      });
+      this._loading[name] = p;
+      return p;
+    },
+
+    /** Adopt an already-decoded image (canvas, ImageBitmap, HTMLImageElement). */
+    put(name, image) { this._images[name] = image; return image; },
+
+    remove(name) { delete this._images[name]; delete this._loading[name]; },
+    clear() { this._images = Object.create(null); this._loading = Object.create(null); },
+
+    /** Natural size of an asset, or null if it is not decoded yet. */
+    sizeOf(name) {
+      const i = this._images[name];
+      if (!i) return null;
+      return { width: i.naturalWidth || i.width, height: i.naturalHeight || i.height };
+    }
+  };
+
+  // -------------------- Bitmap --------------------
+  class Bitmap extends DisplayObject {
+    /**
+     * `source` is either an asset name registered with `Flashy.Bitmaps` or an
+     * image-like object (HTMLImageElement, canvas, ImageBitmap) to draw
+     * directly. `width`/`height` default to the image's natural size.
+     */
+    constructor(source, opts) {
+      super();
+      opts = opts || {};
+      if (typeof source === 'string') { this.asset = source; this.image = null; }
+      else { this.asset = null; this.image = source || null; }
+      this.width = opts.width != null ? opts.width : 0;
+      this.height = opts.height != null ? opts.height : 0;
+      // Nearest-neighbour is what you want for pixel art, and for anything
+      // you are about to trace; smoothing is the sane default otherwise.
+      this.smoothing = opts.smoothing !== false;
+    }
+
+    /** The image to draw, resolving an asset name through the cache. */
+    source() { return this.image || (this.asset ? Bitmaps.get(this.asset) : null); }
+
+    getBounds() {
+      const img = this.source();
+      const nw = img ? (img.naturalWidth || img.width) : 0;
+      const nh = img ? (img.naturalHeight || img.height) : 0;
+      return { x: 0, y: 0, width: this.width || nw, height: this.height || nh };
+    }
+
+    render(ctx) {
+      const img = this.source();
+      if (!img) return;
+      const nw = img.naturalWidth || img.width;
+      const nh = img.naturalHeight || img.height;
+      if (!nw || !nh) return;
+      const w = this.width || nw, h = this.height || nh;
+      const prev = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = !!this.smoothing;
+      ctx.drawImage(img, 0, 0, nw, nh, 0, 0, w, h);
+      ctx.imageSmoothingEnabled = prev;
     }
   }
 
@@ -1070,11 +1184,11 @@
   const Flashy = {
     // Keep in step with package.json's "version" and the splash card in
     // editor.html; they had drifted to three different numbers.
-    version: '0.7.3',
+    version: '0.7.4',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
-    Shape, TextField, MovieClip, Timeline, Tween, Stage,
-    Sound, SoundTrack,
+    Shape, TextField, Bitmap, MovieClip, Timeline, Tween, Stage,
+    Sound, SoundTrack, Bitmaps,
     toRGBA
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Flashy;
