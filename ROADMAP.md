@@ -249,6 +249,42 @@ type, because nobody has an intuition for what "Minimum Area 8" looks like.
 have to recover the encoded bytes from a live `Bitmap`, and a cross-origin
 canvas will not give them up.
 
+### ✅ 11b. An eraser (0.7.5)
+
+**What.** An Eraser tool (E) that erases vector shapes and bitmaps with one
+gesture, plus `flashy-geom.js` — polygon outlines, boolean difference/union/
+intersection, and polyline cutting.
+
+**Vectors are subtracted as real geometry**, not rasterised and re-traced.
+Re-tracing would have been a fraction of the code, since the tracer was
+already there, but it degrades the *whole* shape on every stroke — including
+the edges you never touched — and ties the result to the zoom you happened to
+be at. A spec erases one edge twenty times and asserts the opposite edge is
+still on its original coordinate exactly.
+
+**Bitmaps are masked, not repainted.** The object carries the erased area as a
+path and the renderers clip to the box minus it. Erasing is therefore
+reversible, costs nothing in the document, and does not put a fresh copy of
+the PNG into every undo step.
+
+**Two traps worth recording.**
+
+- The swept area of a stroke is a contour of its *distance field*, not a union
+  of capsules. Equal-radius capsules laid end to end share exactly collinear
+  edges and drop vertices exactly on each other's boundaries — the degenerate
+  cases a boolean op gets wrong — and a plain horizontal drag produces them
+  every time. `boolOp` also perturbs one operand by 1e-5px for the same
+  reason.
+- The bitmap mask's loops are **unioned**, not concatenated. The clip is the
+  box plus each loop wound backwards, read nonzero; append two overlapping
+  strokes and the overlap totals -1, which is nonzero, so it comes back into
+  view. Two crossing strokes on a photo is the first thing anyone tries.
+
+**Known gaps.** Flash's Erase Fills / Erase Lines / Erase Inside modes and the
+faucet (click to delete a whole shape) are not implemented. Erasing a shape
+replaces it in the keyframe, so a motion tween across that keyframe loses its
+pairing — the same pre-existing fragility as adding or deleting any object.
+
 ### 🚧 12. Button symbols work; text still is not clickable
 
 **Buttons ✅ (0.5).** `symbolBehavior: 'button'` now builds Up/Over/Down/Hit

@@ -89,6 +89,9 @@
 <!-- Raster → vector tracing. Pure, no DOM: it takes an ImageData and returns
      path command streams, which is what makes it testable on its own. -->
 <script src="flashy-trace.js"></script>
+<!-- Polygon geometry for the eraser: outlines, boolean subtraction, polyline
+     cutting. Pure, like the tracer. -->
+<script src="flashy-geom.js"></script>
 <script src="feedback.js"></script>
 <!-- Dockable panel layout. Loaded before editor-app.js so its DOMContentLoaded
      handler runs first and the docks exist before the editor fills them. -->
