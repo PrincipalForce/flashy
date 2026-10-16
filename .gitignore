@@ -17,3 +17,11 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+
+# Scratch documents saved while testing the editor. Anchored to the repo root
+# on purpose: the demos in examples/ are real fixtures and must stay
+# committable, so never loosen this to a bare *.flashy.
+/*.flashy
+
+# Local product/planning metadata written by editor tooling, not project state.
+.product.yml
