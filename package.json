@@ -1,6 +1,6 @@
 {
   "name": "flashy",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "HTML5 Canvas vector animation engine \u2014 a modern Flash alternative with timeline, nested MovieClips, tweening, and a full authoring IDE. Runs in the browser and as an installed desktop app.",
   "// main": "Electron reads `main` to find its entry point, so it points at the desktop shell. Library consumers resolve through `exports` below, which takes precedence in Node and keeps `require(\"flashy\")` on the engine.",
   "main": "electron/main.cjs",
@@ -8,6 +8,9 @@
     ".": "./flashy.js",
     "./swf": "./flashy-swf.js",
     "./fla": "./flashy-fla.js",
+    "./avm1": "./flashy-avm1.js",
+    "./abc": "./flashy-abc.js",
+    "./import": "./flashy-import.js",
     "./*": "./*"
   },
   "engines": {
@@ -42,6 +45,9 @@
     "flashy.js",
     "flashy-swf.js",
     "flashy-fla.js",
+    "flashy-avm1.js",
+    "flashy-abc.js",
+    "flashy-import.js",
     "flashy-trace.js",
     "flashy-geom.js"
   ],
@@ -87,6 +93,9 @@
       "flashy.js",
       "flashy-swf.js",
       "flashy-fla.js",
+      "flashy-avm1.js",
+      "flashy-abc.js",
+      "flashy-import.js",
       "flashy-trace.js",
       "flashy-geom.js",
       "feedback.js",

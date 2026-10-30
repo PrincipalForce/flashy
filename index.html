@@ -138,10 +138,16 @@
   a nested title <code>MovieClip</code> with per-letter bounce tweens driven
   by a <code>Timeline</code>, and a clickable pause button wired through
   display-list hit testing. Drop a <code>.swf</code> or <code>.fla</code>
-  above to try the importers (simple vector SWFs; CS5+ FLAs / XFL folders).
+  above to play one here — shapes, sprites, text, bitmaps and the display
+  list, with the ActionScript decompiled but not run. To <em>edit</em> one
+  instead, use <strong>File ▸ Import Flash Movie</strong> in the
+  <a href="editor.html">editor</a>, which takes the movie apart into layers,
+  keyframes, tweens and library symbols.
 </div>
 
 <script src="flashy.js"></script>
+<script src="flashy-avm1.js"></script>
+<script src="flashy-abc.js"></script>
 <script src="flashy-swf.js"></script>
 <script src="flashy-fla.js"></script>
 <script src="feedback.js"></script>
@@ -387,6 +393,15 @@
 
   const status = document.getElementById('status');
   function setStatus(msg) { status.textContent = msg; }
+  /* The readers report what they could not handle rather than failing; a
+     viewer that says "loaded" while silently dropping half a movie is worse
+     than one that says which half. */
+  function warningSuffix(warnings) {
+    if (!warnings || !warnings.length) return '';
+    console.warn('Flashy import warnings:', warnings);
+    return ' — ' + warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') +
+           ' (see the console)';
+  }
 
   document.getElementById('swfInput').addEventListener('change', async (e) => {
     const file = e.target.files[0];
@@ -408,7 +423,8 @@
       }
       stage.root.addChild(mc);
       setStatus('SWF loaded: ' + (info.width|0) + '×' + (info.height|0) +
-                ' @ ' + (info.fps||'?') + 'fps, ' + (info.frameCount||'?') + ' frames, v' + info.version);
+                ' @ ' + (info.fps||'?') + 'fps, ' + (info.frameCount||'?') + ' frames, v' + info.version +
+                warningSuffix(info.warnings));
     } catch (err) {
       console.error(err);
       setStatus('SWF load failed: ' + err.message);
@@ -432,7 +448,8 @@
         mc.y = (stage.height - info.height * scale) / 2;
       }
       stage.root.addChild(mc);
-      setStatus('FLA loaded: ' + (info.width|0) + '×' + (info.height|0) + ' @ ' + (info.fps||24) + 'fps');
+      setStatus('FLA loaded: ' + (info.width|0) + '×' + (info.height|0) + ' @ ' + (info.fps||24) + 'fps' +
+                warningSuffix(info.warnings));
     } catch (err) {
       console.error(err);
       setStatus('FLA load failed: ' + err.message);
@@ -456,7 +473,8 @@
         mc.y = (stage.height - info.height * scale) / 2;
       }
       stage.root.addChild(mc);
-      setStatus('XFL loaded: ' + (info.width|0) + '×' + (info.height|0) + ' @ ' + (info.fps||24) + 'fps');
+      setStatus('XFL loaded: ' + (info.width|0) + '×' + (info.height|0) + ' @ ' + (info.fps||24) + 'fps' +
+                warningSuffix(info.warnings));
     } catch (err) {
       console.error(err);
       setStatus('XFL load failed: ' + err.message);

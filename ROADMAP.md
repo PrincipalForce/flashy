@@ -336,6 +336,76 @@ sound cannot both come from `MediaRecorder`. A deterministic export with audio
 needs WebCodecs plus a muxer, which is a larger piece of work than
 `captureStream(0)` alone.
 
+### ✅ 17a. Flash import is a document, not a viewer (0.7.6)
+
+**What.** `.swf` and `.fla` are read into a shared document model
+(`flashy-swf.js`, `flashy-fla.js`), their ActionScript decompiled
+(`flashy-avm1.js`), and the result back-engineered into an editable Flashy
+document (`flashy-import.js`): depths → layers, placements → keyframes, baked
+per-frame motion → motion tweens, sprites and reused shapes → library symbols,
+scripts → an Actions layer.
+
+**Why this and not a player.** Playing a SWF is Ruffle's job and it is better
+at it. The thing nobody has is a way to *open* one and keep working — which is
+what preservation actually needs, and what an editor is for.
+
+**What it cost to get right.** Two things dominated:
+
+- A SWF shape is not a list of drawing commands. Every edge names the fill on
+  its left and its right, and a filled region only exists once the edges that
+  share a style are **stitched into closed loops**. Emitting them in file order
+  — which this repo did until now — draws every shape as an unterminated
+  scribble. The XFL `edges` attribute is the same model written as text, so one
+  stitcher serves both readers.
+- The editor places an object as `translate · rotate · scale` about its centre;
+  Flash places it with a 2×3 matrix. Solving one for the other is the
+  difference between a rotated import landing exactly and drifting by half a
+  bounding box. Where the matrix is **skewed** — about one placement in six of
+  a real cartoon — and the artwork is a path, the matrix is baked into the
+  points instead, so it is exact rather than approximate.
+
+**Gradients came with it.** They were going to be the biggest thing an import
+lost, so the document fill model grew `linear` and `radial` — stops as a flat
+array, geometry in bounding-box fractions — and the stage painter, the
+exported engine and the SVG export were all taught to read it. On the test
+movie that single change took the difference against the engine's own render
+of the same file from 35% of pixels to 11%.
+
+**Measured parity.** Rendering the parsed movie through the engine and the
+imported document through the editor, frame for frame: **11% of pixels differ
+at all, 3% differ visibly**, and what remains is antialiasing plus the gaps
+below. The same harness found a real bug worth more than the number did —
+`gotoAndStop(40)` on a built movie showed only what frame 40 itself placed,
+because the SWF timeline is a stream of deltas and the builder was replaying
+deltas. Frames now carry their cumulative state, so any frame can be jumped to.
+
+**Two things the first version got wrong**, both found by importing a real
+movie and looking at it rather than at the numbers:
+
+- *Everything landed on the main timeline.* One display depth became one
+  layer, which is faithful and useless: a publisher cycles through depths, so
+  a cartoon arrives as two hundred layers holding one object each. Depths
+  that never share a frame are now packed back together, and past a dozen
+  layers neighbours are combined outright — a layer holds a list of objects,
+  which is what a Flash layer always did. 222 layers became 52, with the
+  render pixel-for-pixel unchanged (the packing is only allowed to move
+  artwork past something it never touches while both are on screen).
+- *The code looked missing.* It was all there, but 873 of the movie's 1 085
+  scripts live **inside symbols**, and the main timeline's Actions layer was
+  not the visible tab. The report now says where every script went, and the
+  Actions panel is brought forward when there is something on it.
+
+**ActionScript 3** is read too, by `flashy-abc.js`: the ABC container, a
+class outline, and the frame scripts an AS3 timeline registers through
+`addFrameScript`. Method bodies decompile as far as calls, assignments and
+literals; branches are reported rather than reconstructed. Before this, every
+post-2007 SWF imported with no code at all, which is the single most common
+case in the wild.
+
+**Known gaps**, each reported in the import dialog rather than dropped
+silently: masks (the editor has no mask layer), filters, AS3 control flow,
+and LZMA-compressed SWFs (browsers have no LZMA decoder).
+
 ### 🚧 17. Engine features Flash users expect
 
 **Sound ✅** — `Flashy.Sound` + `Flashy.SoundTrack` shipped in 0.4: WebAudio
@@ -343,7 +413,13 @@ asset cache, waveform peaks, Stream/Event sync, and a playhead driven from the
 audio clock. See [VISION.md](VISION.md) §1.
 
 ⬜ Masks, filters (blur / glow / drop shadow), and true shape tweening remain.
-All three are additive and none of them block anything else.
+All three are additive and none of them block anything else. Flash import
+(§17a) gives them a second constituency: they are what a real imported movie
+loses on the way in, so each closes a gap that is visible rather than
+theoretical. **Gradients are now done** — the document carries `linear` and
+`radial` fills and the stage, the exported engine and the SVG export all draw
+them — though there is still no stop editor, so they can be imported and
+flattened but not authored.
 
 ---
 

@@ -23,11 +23,69 @@ A complete Flash-style display list and animation runtime:
 - **Event System** — enterFrame, click, mouseDown, mouseMove, mouseUp with display-list hit testing
 - **Stage** — Fixed-step game loop with configurable FPS and HiDPI support
 
-### flashy-swf.js — SWF Importer
-Load legacy .swf files directly. Parses headers, DefineShape 1-3, DefineSprite, PlaceObject2, SetBackgroundColor. Bring old Flash content back to life.
+### flashy-swf.js — SWF Reader
+Reads a compiled Flash movie back into a **document model**: characters, a
+timeline, exported names, scripts. FWS and CWS headers; DefineShape 1-4 with
+edges **stitched into real closed paths** per fill style (which is what a SWF
+shape actually is); solid, gradient and bitmap fills; strokes with caps and
+joins; sprites; the whole display list (PlaceObject 1/2/3, RemoveObject 1/2)
+with matrices, colour transforms and clip handlers; JPEG and lossless
+bitmaps; DefineFont 1/2/3 glyph outlines **and code tables**, so static text
+comes back as readable strings; edit text; buttons; morph shapes (as their
+start shape); and MP3/PCM sound. `Flashy.SWFLoader` builds a live MovieClip
+from the same model.
 
-### flashy-fla.js — FLA/XFL Importer  
-Open Flash authoring files. Reads CS5+ ZIP-based .fla files and unzipped XFL directories. Parses DOMDocument.xml, edge strings, fill/stroke styles, and symbol libraries.
+### flashy-abc.js — ActionScript 3 Reader
+AS3 is a different virtual machine (AVM2) and lives in `DoABC` tags. This
+reads the ABC container — constant pool, classes, methods, bodies — and gives
+back an **outline of every class** plus the **frame scripts**, which an AS3
+timeline registers from its constructor with `addFrameScript(0, frame1)`.
+Method bodies are decompiled far enough to read calls, assignments, literals
+and `new`; control flow is reported, not reconstructed. Not a full AS3
+decompiler — but an imported movie says what its code was instead of
+pretending it had none.
+
+### flashy-avm1.js — ActionScript Decompiler
+Turns the AVM1 bytecode a SWF carries back into source. A stack machine run
+for its *expressions* rather than its values, so `push "x", 5 · setVariable`
+comes back as `x = 5;` — with if/else, while, do-while, `with`, try/catch,
+nested functions, and `&&`/`||` recovered from the jumps a compiler emits.
+What it cannot structure becomes an honest comment rather than an exception.
+
+### flashy-fla.js — FLA/XFL Reader
+Reads CS5+ ZIP-based `.fla` files and unzipped XFL folders into that *same*
+model: the library with its symbol types, layers with their names and order,
+keyframes, labels, frame scripts, motion tweens (sampled per frame),
+gradients, bitmap fills, text runs, groups, and colour effects.
+
+### flashy-import.js — Flash → Flashy document
+Back-engineers a parsed movie into an editable document: **depths become
+layers**, placements become keyframes, baked per-frame motion is folded back
+into **motion tweens**, sprites and reused shapes become **library symbols**,
+shapes become `path` objects with their real curves, and the decompiled
+ActionScript lands on an **Actions layer** at the frame it ran on.
+**Depths are packed back into layers** — a publisher cycles through display
+depths, so a cartoon arrives as two hundred one-object layers; those that
+never share a frame are merged back together, and where that is not enough,
+neighbouring layers are combined the way a Flash layer holds several objects
+(the test movie goes from 222 layers to 52, pixel for pixel identical).
+**Gradients come across as gradients** and **skewed artwork is baked into its
+points** (the editor has rotation and scale, not a full matrix, so a skew that
+cannot be expressed goes into the geometry instead and lands exactly). What it
+cannot keep — masks, filters — it reports rather than dropping silently.
+
+Measured against the engine's own render of the same movie, a 7MB feature-
+length Flash game imports with **97% of its pixels within a hair** and 89%
+exact; the rest is antialiasing and the handful of things listed above.
+`toDocument(model, { textAsOutlines: true })` trades editable text for the
+movie's own embedded glyph outlines when preservation matters more than
+editing, and `{ layerTarget: n }` sets how tall a timeline may stay before
+neighbouring layers are combined.
+
+Most of a movie's code usually lives **inside its symbols** — 1 085 scripts
+in the test movie: 212 on the main timeline, 873 inside symbols — so the
+import report says where each one went rather than only how many there
+were.
 
 ### flashy-geom.js — Polygon Geometry
 Outlines, boolean operations and polyline cutting — what the eraser is built
@@ -66,7 +124,8 @@ A browser-based authoring IDE inspired by Macromedia Flash MX2004:
 - **Bitmaps** — **File ▸ Import Image**, or drop a PNG/JPEG/GIF/WebP on the stage or the timeline. The image lands in the **Library** alongside your symbols, travels inside the `.flashy` as base64 (so a project stays one file), and comes out of every exporter. **Swap Bitmap** repoints an instance without disturbing its box
 - **Trace Bitmap** — **Modify ▸ Trace Bitmap…** converts a raster into editable vector shapes, with Flash's four settings: **Color Threshold** (1–500) for how far apart two colours must be to stay separate, **Minimum Area** (1–1000 px) for the smallest region that keeps its own colour, **Curve Fit** from Pixels to Very Smooth, and **Corner Threshold** for whether sharp corners survive or get rounded into the curve. The dialog **retraces as you type and shows the result beside the original** — nobody has an intuition for what "Minimum Area 8" looks like, and in Flash you guessed, pressed OK, looked, and undid. What lands is ordinary filled paths you can recolour, delete and convert to a symbol; holes stay holes
 - **Eraser (E)** — Drag to erase, with a size (the `[` and `]` keys, or the slider under the tools) and a round or square tip. It works on **vector art and bitmaps alike**. A shape is subtracted as real geometry: erase a corner and you get an editable filled path, erase through the middle and you get **two objects you can move apart**, erase the inside and you get a genuine hole. Because it is geometry and not a re-rasterise, an edge the brush never touched stays exactly where it was no matter how many strokes you make. A drawn line is **cut rather than outlined**, so the pieces are still lines you can restyle. A bitmap is **masked, not repainted** — the pixels are kept, so erasing costs nothing in the document and *Restore Erased Areas* in the Properties panel takes it all back. Symbols and text are left alone, the way Flash leaves a group alone
-- **Import** — Open .flashy projects, import from URL (inspect live Flashy animations), load .swf and .fla files
+- **Flash import** — **File ▸ Import Flash Movie (.swf/.fla)…**, or drop one on the stage or the timeline. A compiled `.swf` or an authoring `.fla`/XFL folder is taken apart into a document you can *edit*: the stage size, frame rate and background; one **layer per display depth** (or per FLA layer, by name); keyframes where things actually change; **motion tweens recovered** from the per-frame placements a publisher bakes out; sprites, buttons and reused shapes as **library symbols**; artwork as editable paths with their real curves; bitmaps and sounds as assets; and the **ActionScript decompiled** onto an Actions layer. The import dialog says what came across and what did not
+- **Import** — Open .flashy projects, import from URL (inspect live Flashy animations)
 - **Export** — Self-contained HTML with the full engine embedded inline (no server needed — just open the file), plus SVG, a JS module, an embed snippet, a sprite sheet, and WebM/MP4 video
 - **Pointer input** — mouse, pen and touch, so the editor works on a tablet
 
@@ -218,8 +277,11 @@ Flashy exists to bring it back:
 
 ```
 flashy.js          Core engine (Graphics, DisplayObject, MovieClip, Timeline, Stage)
-flashy-swf.js      SWF binary parser and importer
-flashy-fla.js      FLA/XFL (ZIP + XML) parser and importer
+flashy-swf.js      SWF binary reader -> Flash document model (+ MovieClip builder)
+flashy-fla.js      FLA/XFL (ZIP + XML) reader -> the same document model
+flashy-avm1.js     AVM1 (ActionScript 1/2) bytecode -> readable source
+flashy-abc.js      AVM2 (ActionScript 3) ABC -> class outline + frame scripts
+flashy-import.js   Flash document model -> an editable Flashy document
 flashy-trace.js    Raster -> vector tracer (pure: ImageData in, paths out)
 flashy-geom.js     Polygon geometry for the eraser: outlines, booleans, cutting
 editor.html        Editor shell (layout)
@@ -275,8 +337,10 @@ auto lip sync. Major areas that need work:
 - **Filters** — blur, drop shadow, glow (canvas filter API)
 - **Masks** — clipping masks using display objects
 - **Hit testing** — selection is bbox-only and single-layer; text is not clickable
-- **More SWF tags** — DefineShape4, DefineMorphShape, DefineText, ActionScript bytecode
-- **Better FLA parsing** — gradient fills, bitmap fills, tweens from XFL
+- **Masks on import** — clip depths are read out of a SWF/FLA in full and then dropped, because the editor's document has no mask layer. The layer is named `… (mask)` so it can be found. Closing this is an editor feature, not a parser one
+- **Gradient authoring** — imported gradients draw on the stage and in every export, but there is no stop editor yet: the inspector can turn one into a flat colour, not the other way round
+- **AS3 method bodies** — classes, members and frame scripts come across (`flashy-abc.js`); a method with real control flow comes back as readable statements plus comments where its branches were, rather than as reconstructed `if`/`for`
+- **LZMA-compressed SWF (ZWS)** — browsers have no LZMA decoder
 - **Editor polish** — onion skinning, snap to objects, rulers, align & distribute
 - **Flashy Hub** — community sharing platform
 

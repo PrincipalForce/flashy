@@ -25,3 +25,9 @@ blob-report/
 
 # Local product/planning metadata written by editor tooling, not project state.
 .product.yml
+
+# Flash movies kept locally to test the importer against real content. They
+# are somebody else's work — the specs build their own fixtures in
+# tests/flash-fixtures.js precisely so nothing copyrighted has to be
+# committed to run them.
+/swf/

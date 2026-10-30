@@ -14,7 +14,7 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;}
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
@@ -400,6 +400,8 @@ var menus=[
     // never actually been bound for the same reason.)
     {label:"Import Image...",action:"importImage"},
     {label:"Import Sound...",action:"importSound",shortcut:"Ctrl+R"},
+    {label:"Import Flash Movie (.swf/.fla)...",action:"importFlash"},
+    {label:"Import XFL Folder...",action:"importXFL"},
     {label:"Import from URL...",action:"importURL"}
   ]},
   {label:"Edit",items:[
@@ -2812,6 +2814,60 @@ function emitRigChange(){
 
 
 
+/* ------------------------------------------------------------------ *
+ * Gradient fills
+ *
+ * `fillType` is "solid" | "none" | "linear" | "radial". A gradient carries
+ * two flat arrays, because `EditorObject.clone()` copies arrays with a
+ * shallow `.slice()` and anything nested would be shared between an object
+ * and its copy:
+ *
+ *   fillStops  [ratio, colour, alpha, ratio, colour, alpha, …]
+ *              ratio 0..1, colour as a 24-bit integer
+ *   fillGrad   [x0, y0, x1, y1] as FRACTIONS of the object's box
+ *
+ * Fractions rather than pixels so the gradient scales with the shape, which
+ * is also exactly what SVG's `objectBoundingBox` units mean — so the stage,
+ * the exported engine and the SVG export can all be fed from one definition.
+ * A radial gradient reads (x0,y0) as its centre and (x1,y1) as a point on
+ * its edge.
+ * ------------------------------------------------------------------ */
+function isGradient(o){
+  var t=o&&o.fillType;
+  return (t==="linear"||t==="radial")&&o.fillStops&&o.fillStops.length>=3;
+}
+function gradStopColor(c,a,alphaMul){
+  var n=c|0;
+  return "rgba("+((n>>16)&255)+","+((n>>8)&255)+","+(n&255)+","+
+         Math.max(0,Math.min(1,(a==null?1:a)*(alphaMul==null?1:alphaMul)))+")";
+}
+/**
+ * Build the canvas gradient for `o` in the coordinate space the caller is
+ * about to draw in. `map(fx, fy)` turns a box fraction into that space —
+ * the centre-origin shapes and the path renderer sit in different ones.
+ */
+function gradientFill(cx,o,map,alphaMul){
+  var g=o.fillGrad&&o.fillGrad.length>=4?o.fillGrad:[0,0,1,0];
+  var p0=map(g[0],g[1]),p1=map(g[2],g[3]);
+  var grad;
+  if(o.fillType==="radial"){
+    var r=Math.hypot(p1[0]-p0[0],p1[1]-p0[1])||1;
+    grad=cx.createRadialGradient(p0[0],p0[1],0,p0[0],p0[1],r);
+  }else{
+    if(p0[0]===p1[0]&&p0[1]===p1[1])p1=[p0[0]+1,p0[1]];
+    grad=cx.createLinearGradient(p0[0],p0[1],p1[0],p1[1]);
+  }
+  var st=o.fillStops;
+  for(var i=0;i+2<st.length;i+=3){
+    grad.addColorStop(Math.max(0,Math.min(1,st[i])),gradStopColor(st[i+1],st[i+2],alphaMul));
+  }
+  return grad;
+}
+/** The fill style for a shape: a gradient if it has one, else its colour. */
+function fillStyleFor(cx,o,map,alphaMul){
+  return isGradient(o)?gradientFill(cx,o,map,alphaMul):o.fillColor;
+}
+
 function paintObj(cx,o,opts){
   opts=opts||{};
   var chrome=!!opts.chrome;
@@ -2845,15 +2901,18 @@ function paintObj(cx,o,opts){
     else cx.setLineDash([]);
   };
 
+  /* Box fractions -> the centre-origin space the shapes draw in. */
+  var boxMap=function(fx,fy){return [(-hw)+fx*(o.width||0),(-hh)+fy*(o.height||0)];};
+
   if(o.type==="rect"){
-    if(fillOn){cx.fillStyle=o.fillColor;cx.globalAlpha=fillA;cx.fillRect(-hw,-hh,o.width,o.height);}
+    if(fillOn){cx.fillStyle=fillStyleFor(cx,o,boxMap,fillA);cx.globalAlpha=fillA;cx.fillRect(-hw,-hh,o.width,o.height);}
     if(strokeOn){
       cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth;
       cx.globalAlpha=strokeA;applyStroke();cx.strokeRect(-hw,-hh,o.width,o.height);
     }
   }else if(o.type==="oval"){
     cx.beginPath();cx.ellipse(0,0,Math.abs(hw),Math.abs(hh),0,0,Math.PI*2);
-    if(fillOn){cx.fillStyle=o.fillColor;cx.globalAlpha=fillA;cx.fill();}
+    if(fillOn){cx.fillStyle=fillStyleFor(cx,o,boxMap,fillA);cx.globalAlpha=fillA;cx.fill();}
     if(strokeOn){
       cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth;
       cx.globalAlpha=strokeA;applyStroke();cx.stroke();
@@ -2928,7 +2987,13 @@ function paintObj(cx,o,opts){
       cx.beginPath();
       FlashyTrace.pathToContext(o.path,cx);
       if(fillOn){
-        cx.fillStyle=o.fillColor;cx.globalAlpha=fillA;
+        /* The context is already translated to the box's top-left and scaled
+           to pathW/pathH, so a fraction maps straight onto the stored path's
+           own units. */
+        cx.fillStyle=fillStyleFor(cx,o,function(fx,fy){
+          return [fx*(o.pathW||Math.abs(o.width)||1),fy*(o.pathH||Math.abs(o.height)||1)];
+        },fillA);
+        cx.globalAlpha=fillA;
         // Even-odd, because a traced region carries its holes as extra loops
         // in the same path and their winding is whatever the boundary walk
         // produced. Nonzero would fill the holes in.
@@ -3266,9 +3331,12 @@ function initMouse(){
     e.preventDefault();
     if(String(files[0].type).indexOf("image/")!==0){
       // An audio file dropped here is a near miss, not a mistake worth a
-      // dialog — send it where it was going to go.
-      if(String(files[0].type).indexOf("audio/")===0)importSoundFile(files[0]);
-      else showMessage("Drop","Drop an image to place it, or an audio file to add it to the timeline.");
+      // dialog — send it where it was going to go. A .swf or .fla is a whole
+      // document, so it goes through the import confirmation.
+      if(isFlashFile(files[0]))importFlashFile(files[0]);
+      else if(String(files[0].type).indexOf("audio/")===0)importSoundFile(files[0]);
+      else showMessage("Drop","Drop an image to place it, an audio file to add it to "+
+        "the timeline, or a .swf/.fla to import the whole movie.");
       return;
     }
     var p=getStagePos(e);
@@ -4094,7 +4162,8 @@ function initTLClicks(){
     var layers=currentLayers();
     if(li>=0&&li<layers.length)curLayer=li;
     curFrame=f;
-    if(String(files[0].type).indexOf("image/")===0)importImageFile(files[0]);
+    if(isFlashFile(files[0]))importFlashFile(files[0]);
+    else if(String(files[0].type).indexOf("image/")===0)importImageFile(files[0]);
     else importSoundFile(files[0]);
   });
   // Right-click context menu on timeline
@@ -4494,7 +4563,17 @@ function updateProps(){
     if(o.type!=="symbol"&&o.type!=="bitmap"){
     // ── Fill ──
     sect("Fill");
-    row("Type",o.fillType||"solid",function(v){pushUndo();o.fillType=v;render();updateProps();},{type:"select",width:"80px",options:[["solid","Solid"],["none","None"]]});
+    /* Linear and Radial are here because an imported movie brings them; there
+       is no stop editor yet, so switching away from one is a one-way trip —
+       it keeps the first stop's colour as the flat fill. */
+    row("Type",o.fillType||"solid",function(v){
+      pushUndo();
+      if(isGradient(o)&&v!=="linear"&&v!=="radial"){
+        o.fillColor="#"+("000000"+((o.fillStops[1]|0)&0xffffff).toString(16)).slice(-6);
+        o.fillStops=null;o.fillGrad=null;
+      }
+      o.fillType=v;render();updateProps();
+    },{type:"select",width:"80px",options:[["solid","Solid"],["none","None"],["linear","Linear"],["radial","Radial"]]});
     if((o.fillType||"solid")!=="none"){
       colorRow("Color",o.fillColor,function(nc){pushUndo();o.fillColor=nc;render();});
       sliderRow("Alpha",o.fillAlpha!=null?o.fillAlpha:1,0,1,0.01,function(v){pushUndo();o.fillAlpha=v;render();},{percent:true,unit:"%"});
@@ -5127,8 +5206,6 @@ function doAction(a){
         doc.fps=Math.max(1,Math.min(120,parseInt(v.fps,10)));
         var bg=String(v.bg).trim();
         doc.backgroundColor=bg[0]==="#"?bg:"#"+bg;
-        var fi=document.getElementById("fpsInput");
-        if(fi)fi.value=doc.fps;
         centerStage();fullRefresh();
       }
     });
@@ -5438,6 +5515,27 @@ function doAction(a){
       if(sinp.files&&sinp.files[0])importSoundFile(sinp.files[0]);
     });
     sinp.click();
+    break;
+  case "importFlash":
+    var finp=document.createElement("input");
+    finp.type="file";
+    finp.accept=".swf,.fla,application/x-shockwave-flash";
+    finp.addEventListener("change",function(){
+      if(finp.files&&finp.files[0])importFlashFile(finp.files[0]);
+    });
+    finp.click();
+    break;
+  case "importXFL":
+    var xinp=document.createElement("input");
+    xinp.type="file";
+    // An XFL "file" is a folder of XML; webkitdirectory is the only way to
+    // hand one to a web page.
+    xinp.webkitdirectory=true;
+    xinp.setAttribute("webkitdirectory","");
+    xinp.addEventListener("change",function(){
+      if(xinp.files&&xinp.files.length)importXFLDirectory(xinp.files);
+    });
+    xinp.click();
     break;
   case "importURL":
     askFor("Import from URL","URL","http://localhost:8000/examples/solar-system.html",function(importUrl){
@@ -7956,6 +8054,27 @@ function exportRuntime(data, canvas, options) {
 
   // Geometry is drawn around (0,0) and the node is placed at the object's
   // centre, so rotation and scale pivot where the editor shows them pivoting.
+  /* A gradient fill, if the object has one. `map` turns a box fraction into
+     the node's own coordinates, the same contract the editor's painter uses —
+     the two have to agree or an export looks different from the stage it was
+     authored on. Returns false for a plain colour, so the caller falls
+     through to beginFill. */
+  function gradFill(g, o, map) {
+    var t = o.fillType;
+    if ((t !== "linear" && t !== "radial") || !o.fillStops || o.fillStops.length < 3) return false;
+    var gd = o.fillGrad && o.fillGrad.length >= 4 ? o.fillGrad : [0, 0, 1, 0];
+    var p0 = map(gd[0], gd[1]), p1 = map(gd[2], gd[3]);
+    var colors = [], alphas = [], ratios = [];
+    var mul = o.fillAlpha != null ? o.fillAlpha : 1;
+    for (var i = 0; i + 2 < o.fillStops.length; i += 3) {
+      ratios.push(Math.max(0, Math.min(1, o.fillStops[i])));
+      colors.push(o.fillStops[i + 1] | 0);
+      alphas.push((o.fillStops[i + 2] == null ? 1 : o.fillStops[i + 2]) * mul);
+    }
+    g.beginGradientFill(t, colors, alphas, ratios, p0[0], p0[1], p1[0], p1[1]);
+    return true;
+  }
+
   function buildObj(o, depth, parentFrame, startFrame, key) {
     depth = depth || 0;
     var hw = (o.width || 0) / 2, hh = (o.height || 0) / 2;
@@ -8033,7 +8152,12 @@ function exportRuntime(data, canvas, options) {
           var psy = o.pathH ? (o.height / o.pathH) : 1;
           if (filled) {
             // Even-odd: holes ride along as extra loops in the same path.
-            g.beginFill(hex(o.fillColor, "#000"), o.fillAlpha != null ? o.fillAlpha : 1, "evenodd");
+            if (!gradFill(g, o, function (fx, fy) {
+              return [fx * (o.pathW || Math.abs(o.width) || 1) * psx - hw,
+                      fy * (o.pathH || Math.abs(o.height) || 1) * psy - hh];
+            })) {
+              g.beginFill(hex(o.fillColor, "#000"), o.fillAlpha != null ? o.fillAlpha : 1, "evenodd");
+            }
           }
           if (stroked) g.lineStyle(o.strokeWidth, hex(o.strokeColor, "#000"), sa);
           var X = function (v) { return v * psx - hw; };
@@ -8065,7 +8189,11 @@ function exportRuntime(data, canvas, options) {
         g.lineStyle(o.strokeWidth || 1, hex(o.strokeColor, "#000"), sa);
         g.moveTo(-hw, -hh); g.lineTo(hw, hh);
       } else {
-        if (filled) g.beginFill(hex(o.fillColor, "#000"), o.fillAlpha != null ? o.fillAlpha : 1);
+        if (filled && !gradFill(g, o, function (fx, fy) {
+          return [-hw + fx * (o.width || 0), -hh + fy * (o.height || 0)];
+        })) {
+          g.beginFill(hex(o.fillColor, "#000"), o.fillAlpha != null ? o.fillAlpha : 1);
+        }
         if (stroked) g.lineStyle(o.strokeWidth, hex(o.strokeColor, "#000"), sa);
         if (o.type === "rect") g.drawRect(-hw, -hh, o.width, o.height);
         else if (o.type === "oval") g.drawEllipse(-hw, -hh, o.width, o.height);
@@ -8488,6 +8616,36 @@ function xmlAttr(v) {
   return xmlText(v).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+/* A gradient as SVG defs, in objectBoundingBox units — which is the unit the
+   document already stores, so nothing has to be converted. Returns
+   `{defs, ref}`, or null when the object has no gradient. */
+var _svgGradSeq = 0;
+function _svgGradient(o) {
+  var t = o.fillType;
+  if ((t !== "linear" && t !== "radial") || !o.fillStops || o.fillStops.length < 3) return null;
+  var g = o.fillGrad && o.fillGrad.length >= 4 ? o.fillGrad : [0, 0, 1, 0];
+  var id = "fy-grad-" + (++_svgGradSeq);
+  var stops = "";
+  var mul = o.fillAlpha != null ? o.fillAlpha : 1;
+  for (var i = 0; i + 2 < o.fillStops.length; i += 3) {
+    var c = o.fillStops[i + 1] | 0;
+    var hexc = "#" + ("000000" + (c & 0xffffff).toString(16)).slice(-6);
+    var a = (o.fillStops[i + 2] == null ? 1 : o.fillStops[i + 2]) * mul;
+    stops += '<stop offset="' + Math.max(0, Math.min(1, o.fillStops[i])) +
+             '" stop-color="' + hexc + '" stop-opacity="' + a + '"/>';
+  }
+  var body;
+  if (t === "radial") {
+    var r = Math.hypot(g[2] - g[0], g[3] - g[1]) || 0.5;
+    body = '<radialGradient id="' + id + '" cx="' + g[0] + '" cy="' + g[1] +
+           '" r="' + r + '">' + stops + '</radialGradient>';
+  } else {
+    body = '<linearGradient id="' + id + '" x1="' + g[0] + '" y1="' + g[1] +
+           '" x2="' + g[2] + '" y2="' + g[3] + '">' + stops + '</linearGradient>';
+  }
+  return { defs: '<defs>' + body + '</defs>', ref: 'url(#' + id + ')' };
+}
+
 function _objToSVG(o, depth) {
   depth = depth || 0;
   var hw = (o.width||0)/2, hh = (o.height||0)/2;
@@ -8500,14 +8658,17 @@ function _objToSVG(o, depth) {
   }
   var a = ' transform="'+xmlAttr(tf)+'"';
   if (o.alpha!=null&&o.alpha<1) a += ' opacity="'+o.alpha+'"';
-  var fl = (o.fillType||"solid")==="none" ? "none" : xmlAttr(o.fillColor||"#000");
+  var grad = _svgGradient(o);
+  var fl = (o.fillType||"solid")==="none" ? "none"
+         : grad ? grad.ref : xmlAttr(o.fillColor||"#000");
+  var gdefs = grad ? grad.defs : "";
   var st = (!o.strokeWidth||(o.strokeStyle||"solid")==="none") ? "none" : xmlAttr(o.strokeColor||"#000");
   var sw = o.strokeWidth||0;
   switch (o.type) {
     case "rect":
-      return '<rect'+a+' x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+'" height="'+Math.abs(o.height)+'" fill="'+fl+'" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
+      return gdefs+'<rect'+a+' x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+'" height="'+Math.abs(o.height)+'" fill="'+fl+'" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
     case "oval":
-      return '<ellipse'+a+' cx="0" cy="0" rx="'+Math.abs(hw)+'" ry="'+Math.abs(hh)+'" fill="'+fl+'" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
+      return gdefs+'<ellipse'+a+' cx="0" cy="0" rx="'+Math.abs(hw)+'" ry="'+Math.abs(hh)+'" fill="'+fl+'" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
     case "line":
       return '<path'+a+' d="M'+(-hw)+','+(-hh)+' L'+hw+','+hh+'" fill="none" stroke="'+st+'" stroke-width="'+(sw||1)+'" stroke-linecap="round"/>\n';
     case "pencil": case "brush":
@@ -8522,7 +8683,7 @@ function _objToSVG(o, depth) {
       if (!o.path||!o.path.length||!window.FlashyTrace) return '';
       var psx = o.pathW ? (o.width/o.pathW) : 1, psy = o.pathH ? (o.height/o.pathH) : 1;
       var pd = FlashyTrace.pathToSVG(FlashyTrace.pathTransform(o.path, psx, psy, -hw, -hh));
-      return '<path'+a+' d="'+pd+'" fill="'+fl+'" fill-rule="evenodd" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
+      return gdefs+'<path'+a+' d="'+pd+'" fill="'+fl+'" fill-rule="evenodd" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
     case "bitmap":
       // Embedded as a data URI, so the SVG is as self-contained as the HTML
       // export — a file that needs a sidecar PNG is not an export.
@@ -8619,6 +8780,182 @@ function exportAsModule() {
   s += "  return createStage(sceneData, canvas, options);\n";
   s += "}\n";
   dlFile(s, "animation.js", "application/javascript");
+}
+
+/* ------------------------------------------------------------------ *
+ * Flash import (.swf / .fla / XFL folder)
+ *
+ * The reading is all in `flashy-swf.js`, `flashy-fla.js`, `flashy-avm1.js`
+ * and `flashy-import.js` — none of which know this editor exists. What is
+ * here is the seam: pick a file, hand it to the right parser, convert the
+ * model into a document, replace the open one, and say what came across and
+ * what did not.
+ *
+ * An import REPLACES the document rather than merging into it. A SWF carries
+ * its own stage size, frame rate and background, and a 823-frame movie
+ * dropped on top of someone's drawing is not a merge anyone wants; the
+ * confirmation below is the one guard.
+ * ------------------------------------------------------------------ */
+var lastFlashReport=null;
+
+/** True for the file types File ▸ Import Flash Movie accepts. */
+function isFlashFile(file){
+  return !!file&&/\.(swf|fla)$/i.test(file.name||"");
+}
+
+/** Parse a .swf or .fla File into the shared Flash document model. */
+function parseFlashFile(file){
+  var name=(file&&file.name)||"";
+  if(/\.fla$/i.test(name)){
+    if(!Flashy.FLALoader)return Promise.reject(new Error("This build has no FLA support."));
+    return new Flashy.FLALoader().parseFile(file);
+  }
+  if(!Flashy.SWF)return Promise.reject(new Error("This build has no SWF support."));
+  return file.arrayBuffer().then(function(buf){return Flashy.SWF.parse(buf);});
+}
+
+/** Replace the open document with an imported one. */
+function installImportedDoc(d){
+  if(audioTrack)audioTrack.stopAll();
+  deserializeDoc(d);
+  curFrame=1;curLayer=0;selection=[];
+  undoStack=[];redoStack=[];editStack=[];
+  // The imported stage is rarely the size of the one that was open.
+  centerStage();
+  // An import has never been written to disk, so it starts dirty — unlike
+  // File ▸ Open, which starts clean.
+  touchDoc();
+  updateBreadcrumb();fullRefresh();
+}
+
+function flashReportText(report){
+  var lines=[
+    "Stage: "+report.stage,
+    "Frames: "+report.frames+"   Layers: "+report.layers+"   Keyframes: "+report.keyframes,
+    "Library symbols: "+report.symbols+"   Motion tweens: "+report.tweens,
+    "Artwork: "+report.shapes+" shapes, "+report.texts+" text objects, "+
+      (report.gradients||0)+" gradients",
+    "Sounds: "+report.sounds+"   Bitmaps: "+report.bitmaps
+  ];
+  /* Where the code went, in as many words. Most of a movie's ActionScript
+     usually lives inside its symbols, so a bare count reads as "no code"
+     to anyone looking at the main timeline. */
+  if(report.scripts){
+    lines.push("");
+    lines.push("ActionScript: "+report.scripts+" scripts, decompiled onto Actions layers.");
+    if(report.scriptsOnStage){
+      lines.push("  • "+report.scriptsOnStage+" on the main timeline — the “Actions” layer, "+
+        "shown in the Actions panel.");
+    }
+    if(report.scriptsInSymbols){
+      lines.push("  • "+report.scriptsInSymbols+" inside symbols. Double-click a symbol to "+
+        "open it; its scripts are on its own Actions layer.");
+      var where=(report.scriptLocations||[]).filter(function(l){return l.where!=="Scene";});
+      var names=[];
+      where.forEach(function(l){if(names.indexOf(l.where)<0&&names.length<5)names.push(l.where);});
+      if(names.length)lines.push("    e.g. "+names.join(", "));
+    }
+  }else{
+    lines.push("");
+    lines.push("ActionScript: none found"+(report.as3?" that this build can read — the movie "+
+      "is ActionScript 3.":"."));
+  }
+  if(report.warnings&&report.warnings.length){
+    lines.push("");
+    lines.push("What did not come across:");
+    report.warnings.slice(0,8).forEach(function(w){lines.push("  • "+w);});
+    if(report.warnings.length>8){
+      lines.push("  • …and "+(report.warnings.length-8)+" more.");
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Import a Flash file, replacing the open document.
+ *
+ * Resolves with the report, or null if the user cancelled or it failed —
+ * failure is reported in a dialog, not thrown, because every caller here is
+ * a menu item or a file drop.
+ */
+function importFlashFile(file,opts){
+  opts=opts||{};
+  if(!window.FlashyImport||!Flashy.SWF){
+    showMessage("Import Flash","This build has no Flash import support.");
+    return Promise.resolve(null);
+  }
+  if(!isFlashFile(file)){
+    showMessage("Import Flash","That is not a .swf or .fla file: "+
+      ((file&&file.name)||"(none)"));
+    return Promise.resolve(null);
+  }
+  var go=function(){return runFlashImport(file,opts);};
+  if(opts.force||!isDirty())return go();
+  return new Promise(function(resolve){
+    showDialog({
+      title:"Import Flash",
+      message:"Importing “"+file.name+"” replaces the document you have open, "+
+        "and the current one has unsaved changes.",
+      fields:[],
+      okLabel:"Import",
+      onOk:function(){go().then(resolve);},
+      onCancel:function(){resolve(null);}
+    });
+  });
+}
+
+function runFlashImport(file,opts){
+  return parseFlashFile(file).then(function(model){
+    var result=FlashyImport.toDocument(model,opts.convert||{});
+    installImportedDoc(result.doc);
+    lastFlashReport=result.report;
+    revealImportedScripts(result.report);
+    if(opts.quiet!==true){
+      showMessage("Imported "+file.name,flashReportText(result.report));
+    }
+    return result.report;
+  })["catch"](function(err){
+    showMessage("Import Flash","Could not read "+((file&&file.name)||"the file")+":\n"+
+      ((err&&err.message)||err));
+    return null;
+  });
+}
+
+/**
+ * Put the cursor on the imported code.
+ *
+ * The Actions layer is layer 0 and `installImportedDoc` already selects it,
+ * but the Actions panel may not be the visible tab in its dock — so an
+ * import with a `stop();` on frame 1 can look like an import with no code at
+ * all. Bring the panel forward when there is something to see.
+ */
+function revealImportedScripts(report){
+  if(!report||!report.scriptsOnStage)return;
+  try{
+    if(window._flashyWorkspace&&window._flashyWorkspace.show){
+      window._flashyWorkspace.show("actions");
+    }
+  }catch(e){/* a closed or re-docked panel is not worth failing an import over */}
+}
+
+/** An unzipped XFL folder, which is how Animate saves for source control. */
+function importXFLDirectory(fileList,opts){
+  opts=opts||{};
+  if(!window.FlashyImport||!Flashy.FLALoader){
+    showMessage("Import Flash","This build has no Flash import support.");
+    return Promise.resolve(null);
+  }
+  return new Flashy.FLALoader().parseDirectory(fileList).then(function(model){
+    var result=FlashyImport.toDocument(model,opts.convert||{});
+    installImportedDoc(result.doc);
+    lastFlashReport=result.report;
+    revealImportedScripts(result.report);
+    if(opts.quiet!==true)showMessage("Imported XFL folder",flashReportText(result.report));
+    return result.report;
+  })["catch"](function(err){
+    showMessage("Import Flash","Could not read that folder:\n"+((err&&err.message)||err));
+    return null;
+  });
 }
 
 // === Scene Inspector: Import from running Flashy stage ===
@@ -9112,8 +9449,17 @@ function initWorkspaceSync(){
 /** Window-menu verbs. Absent in a page without workspace.js (e.g. a test harness). */
 function workspace(){return window._flashyWorkspace||null;}
 
+/* The toolbar's frame-rate box is a view of `doc.fps`, so it has to follow a
+   document swap. It used to be written only at init and by Document Settings,
+   which meant File ▸ Open — and now Import Flash, where the rate almost
+   always differs — left the old number sitting in the toolbar. */
+function syncDocFields(){
+  var fi=document.getElementById("fpsInput");
+  if(fi&&String(doc.fps)!==fi.value)fi.value=doc.fps;
+}
 function fullRefresh(){
   render();
+  syncDocFields();
   updateTL();
   updateProps();
   updateActionsPanel();
@@ -9195,6 +9541,19 @@ function init(){
     /** Trace and write the shapes onto the timeline. The menu's entry point. */
     trace:traceBitmapObject,
     maxEdge:function(){return {bitmap:BITMAP_MAX_EDGE,trace:TRACE_MAX_EDGE};}
+  };
+  /* Flash import seam — File ▸ Import Flash Movie, the drop handlers and the
+     specs all go through it. `parse` and `toDocument` are separate from
+     `importFile` on purpose: a spec (and the assistant) can look at what a
+     movie contains without replacing the open document. */
+  window._flashyFlash={
+    importFile:importFlashFile,
+    importDirectory:importXFLDirectory,
+    parse:parseFlashFile,
+    toDocument:function(model,o){return FlashyImport.toDocument(model,o||{});},
+    install:installImportedDoc,
+    isFlashFile:isFlashFile,
+    report:function(){return lastFlashReport;}
   };
   /* Eraser seam. `stroke` is the same entry point a drag uses, so a spec
      exercises the real path rather than a parallel one. */

@@ -286,6 +286,71 @@ Drive the app through its published seams, not its internals:
   every document coordinate afterwards is off by half the difference. Call
   `_flashyAI.centerStage()` after `setViewportSize`, or the pointer events you
   synthesise land somewhere else entirely.
+- **Flash import** lives behind `window._flashyFlash`: `importFile(file, opts)`
+  (`force` skips the "this replaces your document" confirmation, `quiet` skips
+  the report dialog), `importDirectory(fileList)` for an unzipped XFL folder,
+  `parse(file)` for the document model alone, `toDocument(model)` for the
+  conversion alone, and `report()` for the last result. Keeping `parse` and
+  `toDocument` separate from `importFile` is what lets a spec look at a movie
+  without replacing the open document.
+- The Flash specs **write their fixtures** (`tests/flash-fixtures.js`): a real
+  uncompressed SWF with bit-packed shape records, and a real ZIP of XFL XML.
+  Two things that bit while writing them, and will again:
+  **a partial byte in a bit-packed structure pads on the right** (flush
+  `bitBuf << (8 - bitCount)`, not `bitBuf`) — get it wrong and every structure
+  is correct up to its last byte and quietly wrong after it, which reads back
+  as coordinates that are nearly right; and **XFL `edges` coordinates are
+  twips**, decimals included, so reading them as pixels scales every shape by
+  twenty.
+- A SWF shape is **edges that name the fill on either side of them**, not a
+  list of drawing commands. `F.SWF.buildItems` stitches them into closed loops
+  per fill style, and `flashy-fla.js` uses the same function because the XFL
+  `edges` attribute is the same model as text. Never go back to emitting edges
+  in file order: it draws every shape as an unterminated scribble and fills
+  whatever the canvas happens to close.
+- `FlashyImport.placeFields()` is the one place the editor's
+  `translate · rotate · scale`-about-the-centre convention meets Flash's 2×3
+  matrix. Change it and rotated imports drift by half a bounding box. Where the
+  matrix is skewed and the artwork is a `path`, the matrix is **baked into the
+  points** instead — exact, and the reason `tests/flash-import.spec.js` asserts
+  `rotation === 0` on a sheared box.
+- **Gradient fills** are `fillType: "linear" | "radial"` plus two FLAT number
+  arrays — `fillStops` (`ratio, colour, alpha, …`) and `fillGrad`
+  (`x0, y0, x1, y1` as fractions of the object's box). Flat, because
+  `EditorObject.clone()` copies arrays with a shallow `.slice()`. Fractions,
+  because that is simultaneously what scales with the shape and what SVG's
+  `objectBoundingBox` units mean — so `fillStyleFor()` on the stage,
+  `gradFill()` in the exported runtime and `_svgGradient()` in the SVG export
+  are three readings of one definition and must agree. There is no stop
+  editor: the inspector can flatten a gradient, not build one.
+- **Layer packing is the part that can silently change a render.**
+  `coalesceLayers()` merges depths that never share a frame, then — only past
+  `LAYER_TARGET` (12) layers — merges neighbours outright so one keyframe
+  holds several objects. Both are z-safe for one reason each: the first only
+  moves a layer past others it never touches while both are visible
+  (`spansCollide`), the second only merges adjacent layers and keeps the
+  lower one's objects first. A layer carrying a tween is never merged — a
+  motion tween pairs objects with the next keyframe BY INDEX, so changing the
+  object list breaks it. `tests/flash-import.spec.js` pins this with a pixel
+  probe on overlapping boxes, not just a layer count.
+- **AS3 lives in `flashy-abc.js`.** `FlashyABC.read(bytes, start, end)` gives
+  `{classes, outline, frameScripts}`; the SWF reader calls it per DoABC tag
+  and leaves `doc.abc` and `doc.as3FrameScripts` on the model. Frame scripts
+  are found by looking for `addFrameScript(0, frame1)` in a class's
+  constructor, which is how the Flash compiler registers them. The ABC
+  fixture in `tests/abc-fixture.js` is hand-assembled bytecode, so it is
+  readable and says what it tests.
+- **Most imported code is inside symbols**, not on the root — 873 of 1 085
+  in the test movie. `report.scriptsOnStage` / `scriptsInSymbols` exist so
+  the dialog can say so; `revealImportedScripts()` brings the Actions panel
+  forward. "No code was imported" has twice meant "the code is one
+  double-click away".
+- **Imports replace the document and start dirty.** `installImportedDoc` is
+  `loadDocFromObject` minus `markSaved()`, because an imported movie has never
+  been written to disk.
+- `syncDocFields()` pushes `doc.fps` into the toolbar box on every
+  `fullRefresh()`. Before it, File ▸ Open and Import left the previous
+  document's frame rate on display.
 - `showDialog()` grew two things for Trace Bitmap: `opts.build(body, inputs)`
   for custom content inside the standard chrome (so a dialog gets Escape/Enter
   and validation for free), and `type: "checkbox"` fields, which read through
