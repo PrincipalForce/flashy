@@ -35,6 +35,19 @@ comes back as readable strings; edit text; buttons; morph shapes (as their
 start shape); and MP3/PCM sound. `Flashy.SWFLoader` builds a live MovieClip
 from the same model.
 
+### flashy-as2.js — Object Handlers
+Flash let you select a clip and write `onClipEvent(load) { … }` on it; that is
+how a decade of eyes-follow-the-mouse was made, and imported movies are full
+of it. Those blocks now **run**. Each body is compiled once and executed with
+an AS2-shaped scope: `_x`/`_y` are the clip's position *measured from its
+registration point* as Flash measured it, `_alpha` is percent, `_rotation` is
+degrees, `_xmouse` is the pointer in the clip's own space, `_parent` and
+`_root` are other clips, a child is reachable by its instance name, and
+anything else you assign to is a variable on the clip. `load`, `enterFrame`,
+`mouseMove`/`Down`/`Up` (anywhere, as in Flash), `press`/`release`/`rollOver`/
+`rollOut` (hit-tested), and `keyDown`/`keyUp` are wired. A handler that throws
+is reported once and switched off, so one bad script cannot take a movie down.
+
 ### flashy-abc.js — ActionScript 3 Reader
 AS3 is a different virtual machine (AVM2) and lives in `DoABC` tags. This
 reads the ABC container — constant pool, classes, methods, bodies — and gives
@@ -63,7 +76,9 @@ Back-engineers a parsed movie into an editable document: **depths become
 layers**, placements become keyframes, baked per-frame motion is folded back
 into **motion tweens**, sprites and reused shapes become **library symbols**,
 shapes become `path` objects with their real curves, and the decompiled
-ActionScript lands on an **Actions layer** at the frame it ran on.
+ActionScript lands on an **Actions layer** at the frame it ran on, and a
+clip's or button's own handlers land **on the object**, where the Actions
+panel shows them when it is selected — and where `flashy-as2.js` runs them.
 **Depths are packed back into layers** — a publisher cycles through display
 depths, so a cartoon arrives as two hundred one-object layers; those that
 never share a frame are merged back together, and where that is not enough,
@@ -118,6 +133,7 @@ A browser-based authoring IDE inspired by Macromedia Flash MX2004:
 - **Poses and movement** — Save a pose, apply it, or mirror it left-to-right (which is how the second half of a walk cycle gets made). **Animate Poses** writes a sequence onto the timeline as keyframes with tweens between them, optionally looping back to the first pose so a cycle repeats cleanly. What lands is ordinary keyframes: drag a limb on any of them and the tween follows
 - **Set up mouth shapes** — **Modify ▸ Set Up Mouth Shapes…** turns a symbol you already have into one lip sync can drive: it gives the symbol one frame per mouth shape (seeded with a copy of your existing drawing, so you edit rather than start over), points the mouth chart at those frames, and optionally opens the symbol so you can draw them. It can also tighten shapes drawn on long keyframes down to one frame each — the usual reason a synced mouth doesn't move. Existing artwork is never discarded
 - **Auto lip sync** — **Modify ▸ Auto Lip Sync…** reads a voice track already on the timeline and writes the mouth keyframes for it. Pick the voice, the mouth symbol and the layer; it detects six shapes (rest, M B P, F V/S, A, E, O/U) frame by frame and lays one keyframe per shape across the range the sound occupies. A per-symbol **Mouth Chart** maps each shape to a frame of your symbol and is saved with it, so the next line reuses it. **Min hold** stops the mouth chattering; **Silence** is a percentage of the loudest moment, so quiet recordings still find their pauses. What lands is ordinary single-frame Graphic keyframes — fix a wrong mouth by selecting it and changing `First`, and re-run to replace the range when a line is re-recorded
+- **Object handlers** — Select an object and the Actions panel switches from the keyframe's script to that object's `onClipEvent` / `on` handlers, as in Flash. They run in Test Movie and in exported files (never on the authoring stage, like frame scripts), with Flash's own property names and units — so an imported clip that follows the mouse still follows the mouse
 - **Nested Editing** — Double-click a symbol to enter its timeline, breadcrumb navigation, edit at any depth
 - **Color Mixer** — Fill/stroke colors with swatch picker and alpha control
 - **AI Assistant** — Describe what you want and Claude builds it directly in your project: streamed as it writes, with a Stop button, and nothing applied until you press Apply. Runs on `claude-opus-5` with adaptive thinking. Add your own Anthropic API key under **Edit ▸ Preferences**, or from the button the panel shows when no key is set. Note that it works by running model-authored JavaScript inside the editor page — see [ROADMAP.md](ROADMAP.md) §31
@@ -281,6 +297,7 @@ flashy-swf.js      SWF binary reader -> Flash document model (+ MovieClip builde
 flashy-fla.js      FLA/XFL (ZIP + XML) reader -> the same document model
 flashy-avm1.js     AVM1 (ActionScript 1/2) bytecode -> readable source
 flashy-abc.js      AVM2 (ActionScript 3) ABC -> class outline + frame scripts
+flashy-as2.js      onClipEvent/on handlers, run with an AS2-shaped scope
 flashy-import.js   Flash document model -> an editable Flashy document
 flashy-trace.js    Raster -> vector tracer (pure: ImageData in, paths out)
 flashy-geom.js     Polygon geometry for the eraser: outlines, booleans, cutting

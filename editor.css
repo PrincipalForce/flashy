@@ -328,6 +328,11 @@ body.dock-dragging .dock-zone { outline: 1px dashed #5a5a5a; outline-offset: -2p
   background: #353535;
 }
 .panel-body.actions-body, .panel-body.ai-body { padding: 0; overflow: hidden; display: flex; }
+.panel-body.actions-body { flex-direction: column; }
+.actions-target { flex: 0 0 auto; padding: 3px 8px; font-size: 10px; color: #9BD;
+  background: #2A2A2A; border-bottom: 1px solid #1A1A1A; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.actions-target.object { color: #FC8; }
 .panel-body.actions-body > textarea { flex: 1; min-height: 0; }
 .panel-body.ai-body > #aiPanel { flex: 1; min-height: 0; }
 

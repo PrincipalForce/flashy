@@ -14,6 +14,7 @@ import { test, expect } from "@playwright/test";
 import { openEditor, downloadFromAction, runExportedHTML } from "./helpers.js";
 import {
   makeSWF, makeFLA, makeSkewSWF, makeGradientSWF, makeAS3SWF, makeLayeringSWF,
+  makeClipHandlerSWF,
 } from "./flash-fixtures.js";
 
 const SWF_B64 = makeSWF().toString("base64");
@@ -22,6 +23,8 @@ const SKEW_B64 = makeSkewSWF().toString("base64");
 const GRAD_B64 = makeGradientSWF().toString("base64");
 const AS3_B64 = makeAS3SWF().toString("base64");
 const LAYERS_B64 = makeLayeringSWF().toString("base64");
+const CLIP_B64 = makeClipHandlerSWF().toString("base64");
+const CLIP_ABS_B64 = makeClipHandlerSWF({ absolute: true }).toString("base64");
 
 async function open(page) {
   const errors = await openEditor(page);
@@ -402,6 +405,129 @@ test("importing a file that is not Flash reports it rather than throwing", async
   await expect(page.locator("#fy-dialog")).toBeVisible();
 });
 
+
+
+// ─────────────────────────── object handlers ───────────────────────────
+
+test("onClipEvent handlers import as handlers, not as a comment", async ({ page }) => {
+  const errors = await open(page);
+  const out = await page.evaluate(async (b64) => {
+    const model = await window.__parseSWF(b64);
+    const { doc, report } = FlashyImport.toDocument(model, {});
+    const o = doc.layers[0].keyframes[0].objects[0];
+    return { script: o.clipScript, handlers: report.handlers };
+  }, CLIP_B64);
+
+  expect(out.handlers).toBe(1);
+  // The author's own form, decompiled out of AVM1 clip actions.
+  expect(out.script).toBe(
+    "onClipEvent(load) {" + "\n" + "  startX = _x;" + "\n" + "}" + "\n" +
+    "onClipEvent(enterFrame) {" + "\n" + "  _x = startX + 40;" + "\n" + "}");
+  expect(errors).toEqual([]);
+});
+
+test("the AS2 scope speaks Flash's property names and units", async ({ page }) => {
+  await open(page);
+  const out = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    const stage = new Flashy.Stage(canvas, { width: 200, height: 200, pixelRatio: 1 });
+    const clip = new Flashy.MovieClip();
+    clip.x = 10; clip.y = 20; clip.alpha = 0.5; clip.rotation = Math.PI / 2;
+    stage.root.addChild(clip);
+    const ctl = Flashy.AS2.attach(clip, `
+      onClipEvent(load) {
+        readX = _x;
+        readAlpha = _alpha;
+        readRotation = _rotation;
+        _x = 100;
+        _alpha = 25;
+        _rotation = 180;
+        made = {a: 1, b: 2};
+      }
+    `, { stage: stage });
+    return {
+      readX: ctl.scope.readX,
+      readAlpha: ctl.scope.readAlpha,
+      readRotation: Math.round(ctl.scope.readRotation),
+      nodeX: clip.x,
+      nodeAlpha: clip.alpha,
+      nodeRotation: Math.round(clip.rotation * 180 / Math.PI),
+      made: ctl.scope.made,
+    };
+  });
+
+  expect(out.readX).toBe(10);
+  // Flash counts alpha in percent and angles in degrees; the engine does not.
+  expect(out.readAlpha).toBe(50);
+  expect(out.readRotation).toBe(90);
+  expect(out.nodeX).toBe(100);
+  expect(out.nodeAlpha).toBe(0.25);
+  expect(out.nodeRotation).toBe(180);
+  // An object literal in a handler body is the thing a brace-counting parser
+  // has to survive — a regex-matched block ends inside it.
+  expect(out.made).toEqual({ a: 1, b: 2 });
+});
+
+test("an imported handler actually runs in the export", async ({ page, context }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "handlers.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, CLIP_B64);
+
+  const html = await downloadFromAction(page, "export");
+  // The handler runtime rides along only because this document uses it.
+  expect(html).toContain("flashy-as2.js");
+
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  // onClipEvent(load) read _x, onClipEvent(enterFrame) set it 40 to the
+  // right — so the red box ends up 40px along from where it was placed.
+  await out.waitForFunction(() => {
+    const c = document.getElementById("stage");
+    const d = c.getContext("2d", { willReadFrequently: true }).getImageData(70, 40, 1, 1).data;
+    return d[0] > 200 && d[1] < 60;
+  }, null, { timeout: 5000 });
+  const px = await out.evaluate(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => Array.from(d.getImageData(x, y, 1, 1).data).slice(0, 3);
+    return { moved: at(70, 40), vacated: at(30, 40) };
+  });
+  expect(px.moved[0]).toBeGreaterThan(200);     // red, 40px along
+  expect(px.vacated).toEqual([255, 255, 255]);  // and gone from where it was
+  expect(errors).toEqual([]);
+  await out.close();
+});
+
+test("a handler with a baked-in coordinate lands where Flash put it", async ({ page, context }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "absolute.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, CLIP_ABS_B64);
+
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  await out.waitForFunction(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    return d.getImageData(120, 40, 1, 1).data[0] > 200;
+  }, null, { timeout: 5000 });
+
+  const px = await out.evaluate(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => Array.from(d.getImageData(x, y, 1, 1).data).slice(0, 3);
+    return { inside: at(120, 40), justLeft: at(98, 40), farRight: at(142, 40) };
+  });
+  // `_x = 100` means the box's registration point — its top-left, as Flash
+  // placed it — is at 100, so the 40px box covers 100..140 exactly. Measured
+  // from the centre instead it would sit at 80..120 and this would be white.
+  expect(px.inside[0]).toBeGreaterThan(200);
+  expect(px.justLeft).toEqual([255, 255, 255]);
+  expect(px.farRight).toEqual([255, 255, 255]);
+  expect(errors).toEqual([]);
+  await out.close();
+});
 
 // ───────────────────────────── layers ─────────────────────────────
 

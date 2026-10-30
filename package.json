@@ -10,6 +10,7 @@
     "./fla": "./flashy-fla.js",
     "./avm1": "./flashy-avm1.js",
     "./abc": "./flashy-abc.js",
+    "./as2": "./flashy-as2.js",
     "./import": "./flashy-import.js",
     "./*": "./*"
   },
@@ -47,6 +48,7 @@
     "flashy-fla.js",
     "flashy-avm1.js",
     "flashy-abc.js",
+    "flashy-as2.js",
     "flashy-import.js",
     "flashy-trace.js",
     "flashy-geom.js"
@@ -95,6 +97,7 @@
       "flashy-fla.js",
       "flashy-avm1.js",
       "flashy-abc.js",
+      "flashy-as2.js",
       "flashy-import.js",
       "flashy-trace.js",
       "flashy-geom.js",

@@ -76,6 +76,10 @@
   <div class="panel-content" data-panel="character"><div class="panel-body" id="charPanel"></div></div>
   <div class="panel-content" data-panel="actions">
     <div class="panel-body actions-body">
+      <!-- Which script is being edited: the keyframe's, or the selected
+           object's handlers. Flash showed one Actions panel for both, and
+           which one you were looking at was never obvious — so it says. -->
+      <div id="actions-target" class="actions-target">Frame script</div>
       <textarea id="frame-script" placeholder="// Frame script (JavaScript)"></textarea>
     </div>
   </div>
@@ -95,6 +99,10 @@
      matters: flashy-fla.js shares the SWF reader's shape stitching. -->
 <script src="flashy-avm1.js"></script>
 <script src="flashy-abc.js"></script>
+<!-- Object handlers: onClipEvent/on blocks, run with an AS2-shaped scope.
+     Loaded here so the editor can parse and validate them; exports embed a
+     copy only when the document actually carries handlers. -->
+<script src="flashy-as2.js"></script>
 <script src="flashy-swf.js"></script>
 <script src="flashy-fla.js"></script>
 <script src="flashy-import.js"></script>

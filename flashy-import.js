@@ -246,6 +246,10 @@
       width: w, height: h,
       /* Where the content's own origin sat, which bakeGradient needs. */
       originX: originX, originY: originY,
+      /* How far Flash's registration point is from the centre this editor
+         transforms about — what an imported `onClipEvent` needs to agree
+         with the coordinates baked into it. */
+      regX: r2(cx), regY: r2(cy),
       scaleX: scaleX || 1e-6,
       scaleY: scaleY || 1e-6,
       rotation: rotation * 180 / Math.PI,
@@ -308,7 +312,8 @@
     this.building = {};            // cycle guard
     this.stats = {
       layers: 0, keyframes: 0, objects: 0, symbols: 0, shapes: 0,
-      scripts: 0, sounds: 0, bitmaps: 0, texts: 0, tweens: 0, gradients: 0
+      scripts: 0, sounds: 0, bitmaps: 0, texts: 0, tweens: 0, gradients: 0,
+      handlers: 0
     };
     this.said = {};                // one warning per kind, not per placement
     /* Where every imported script ended up. A movie can put most of its code
@@ -777,30 +782,40 @@
     if (!layers.length) {
       layers = [{ name: 'Layer 1', visible: true, locked: false, keyframes: [keyframe(1)] }];
     }
+    var entry = { layers: layers, totalFrames: 4 };
+    /* A button's handlers belong to the instance that gets clicked, not to
+       the symbol's own timeline, so they are carried out to each placement. */
     if (c.handlers && c.handlers.length) {
-      layers.unshift({
-        name: 'Actions', visible: true, locked: false,
-        keyframes: [keyframe(1, { duration: 4, script: this.handlerComment(c.handlers, 'on', 1) })]
-      });
+      entry.handlerSource = this.handlerSource(c.handlers, 'on', 1);
     }
-    return { layers: layers, totalFrames: 4 };
+    return entry;
   };
 
-  /** Handlers that cannot run here, kept verbatim as a comment. */
-  Converter.prototype.handlerComment = function (handlers, kind, frame) {
-    var lines = ['/* Imported ' + (kind === 'on' ? 'button' : 'clip') +
-      ' handlers. Flashy has no event handlers on objects yet, so these are',
-      '   kept here rather than discarded. */'];
+  /**
+   * Clip and button handlers, as source an object can actually run.
+   *
+   * These used to be imported commented out, because nothing could execute
+   * them. `flashy-as2.js` now does, so they come across as the author wrote
+   * them: `onClipEvent(load) { … }` blocks on the object itself, which is
+   * where Flash kept them and where the Actions panel shows them.
+   */
+  Converter.prototype.handlerSource = function (handlers, kind, frame) {
+    var lines = [];
     for (var i = 0; i < handlers.length; i++) {
       var h = handlers[i];
-      var head = (kind === 'on' ? 'on(' : 'onClipEvent(') +
-        ((h.conditions || h.events || []).join(', ') || 'unknown') + ') {';
-      lines.push('// ' + head);
+      var events = (h.conditions || h.events || []).filter(function (e) {
+        /* A keyPress condition carries a key code this runtime cannot bind
+           yet; the handler still runs on whatever else it listens for. */
+        return e && e.indexOf('keyPress') !== 0;
+      });
+      if (!events.length) events = [kind === 'on' ? 'release' : 'load'];
+      lines.push((kind === 'on' ? 'on(' : 'onClipEvent(') + events.join(', ') + ') {');
       var body = (h.source || '').split('\n');
-      for (var j = 0; j < body.length; j++) lines.push('//   ' + body[j]);
-      lines.push('// }');
+      for (var j = 0; j < body.length; j++) lines.push('  ' + body[j]);
+      lines.push('}');
     }
     this.stats.scripts++;
+    this.stats.handlers++;
     this.note(frame || 1, 'handler');
     return lines.join('\n');
   };
@@ -836,6 +851,16 @@
         alpha: alpha
       });
       if (state.blend && state.blend !== 'normal') inst.blendMode = canvasBlend(state.blend);
+      /* A button's `on(press)` handlers belong to the instance, and a clip's
+         `onClipEvent` handlers to this placement of it. */
+      var entry = this.library[name];
+      var scripts = [];
+      if (entry && entry.handlerSource) scripts.push(entry.handlerSource);
+      if (state.clipActions) scripts.push(this.handlerSource(state.clipActions, 'clip', 1));
+      if (scripts.length) {
+        inst.clipScript = scripts.join('\n');
+        inst.regX = f.regX; inst.regY = f.regY;
+      }
       this.noteSkew(f);
       out = [inst];
     } else {
@@ -867,6 +892,10 @@
         }
         a.alpha = alpha;
         if (state.name && i === 0) { a.name = state.name; a.instanceName = state.name; }
+        if (state.clipActions && i === 0) {
+          a.clipScript = this.handlerSource(state.clipActions, 'clip', 1);
+          a.regX = pf.regX; a.regY = pf.regY;
+        }
         if (state.colorTransform && !isIdentityCx(state.colorTransform)) {
           if (a.fillType !== 'none') a.fillColor = hexColor(cxColor(parseInt(a.fillColor.slice(1), 16), state.colorTransform));
           if (a.strokeWidth) a.strokeColor = hexColor(cxColor(parseInt(a.strokeColor.slice(1), 16), state.colorTransform));
@@ -1459,18 +1488,6 @@
         };
       });
     });
-    // Clip handlers belong to the frame that placed them.
-    states.forEach(function (snap, i) {
-      for (var d in snap) {
-        var st = snap[d];
-        if (!st.clipActions) continue;
-        var prev = i > 0 ? states[i - 1][d] : null;
-        if (prev && prev.clipActions === st.clipActions) continue;
-        at(i + 1).script.push('// instance "' + (st.name || 'depth ' + d) + '"\n' +
-          self.handlerComment(st.clipActions, 'clip', i + 1));
-      }
-    });
-
     var marks = Object.keys(entries).map(Number).sort(function (a, b) { return a - b; });
     if (!marks.length) return null;
 
@@ -1538,6 +1555,7 @@
         tweens: this.stats.tweens,
         texts: this.stats.texts,
         gradients: this.stats.gradients,
+        handlers: this.stats.handlers,
         scripts: this.stats.scripts,
         scriptsOnStage: this.scriptsOnStage,
         scriptsInSymbols: this.scriptsInSymbols,

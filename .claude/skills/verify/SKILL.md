@@ -345,6 +345,23 @@ Drive the app through its published seams, not its internals:
   the dialog can say so; `revealImportedScripts()` brings the Actions panel
   forward. "No code was imported" has twice meant "the code is one
   double-click away".
+- **Object handlers** are `o.clipScript`, a string of `onClipEvent(…) { … }`
+  and `on(…) { … }` blocks, run by `flashy-as2.js` in exports and Test Movie
+  — never on the authoring stage, like frame scripts. The Actions panel
+  edits the selected object's handlers when exactly one object is selected
+  and the keyframe's script otherwise (`actionsTarget()`), and says which.
+  Three things that will bite:
+  - The block parser counts braces, because every eye-tracking script
+    contains `origin = {x: …}` and a regex-matched block ends inside it.
+  - Bodies run under `with (scopeProxy)`, which needs sloppy mode — that is
+    why they are built with `new Function` rather than inline.
+  - `_x` is measured from Flash's **registration point**, not the node's
+    centre; `node.__as2Reg` carries the offset and the importer fills it per
+    object. A spec exports a handler that sets `_x = 100` and probes both
+    edges of the box, because a half-box error still looks plausible.
+  - Only a MovieClip dispatches its own `enterFrame`; a Shape's handler has
+    to ride the stage's, or a handler on a piece of artwork silently does
+    nothing.
 - **Imports replace the document and start dirty.** `installImportedDoc` is
   `loadDocFromObject` minus `markSaved()`, because an imported movie has never
   been written to disk.

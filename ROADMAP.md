@@ -402,9 +402,21 @@ literals; branches are reported rather than reconstructed. Before this, every
 post-2007 SWF imported with no code at all, which is the single most common
 case in the wild.
 
+**Object handlers run.** `onClipEvent(load) { … }` and `on(release) { … }`
+were imported commented out, with a note saying Flashy had no event handlers
+on objects — which is most of what a Flash movie's behaviour actually was.
+`flashy-as2.js` compiles each block and runs it against a scope where `_x`,
+`_alpha`, `_rotation`, `_xmouse`, `_parent` and `_root` mean what AS2 meant.
+The subtle half is the registration point: Flash measures a clip from its
+origin and this engine draws it around the centre of its box, so a handler
+with `origin = {x: 39.1}` baked into it lands half a bounding box out unless
+the importer records the offset — which it now does, per object.
+
 **Known gaps**, each reported in the import dialog rather than dropped
 silently: masks (the editor has no mask layer), filters, AS3 control flow,
-and LZMA-compressed SWFs (browsers have no LZMA decoder).
+`attachMovie`/`duplicateMovieClip` (reported once by the handler runtime
+rather than thrown), and LZMA-compressed SWFs (browsers have no LZMA
+decoder).
 
 ### 🚧 17. Engine features Flash users expect
 

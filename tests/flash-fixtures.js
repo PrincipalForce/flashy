@@ -197,6 +197,30 @@ function defineGradientRect(id, x, y, w, h, from, to) {
   return tag(32, w2);
 }
 
+/**
+ * A PlaceObject2 carrying clip event handlers — the `onClipEvent` blocks
+ * Flash attached to an instance. `handlers` is a list of
+ * `{ flags, actions }`, where `actions` is raw AVM1.
+ */
+function placeWithClipActions(depth, charId, tx, ty, handlers) {
+  const w = new SWFWriter();
+  w.u8(0x02 | 0x04 | 0x80);              // character, matrix, clip actions
+  w.u16(depth);
+  w.u16(charId);
+  w.matrix(tx * 20, ty * 20);
+  w.u16(0);                              // reserved
+  let all = 0;
+  for (const h of handlers) all |= h.flags;
+  w.u32(all);                            // all event flags (SWF 6+: 32 bits)
+  for (const h of handlers) {
+    w.u32(h.flags);
+    w.u32(h.actions.length);
+    for (const b of h.actions) w.u8(b);
+  }
+  w.u32(0);                              // end of the handler list
+  return tag(26, w);
+}
+
 function placeObject2(depth, charId, tx, ty, opts) {
   opts = opts || {};
   const w = new SWFWriter();
@@ -567,7 +591,75 @@ function makeLayeringSWF() {
   return Buffer.concat([head, size, payload]);
 }
 
+/**
+ * A movie whose clip has handlers that actually do something:
+ *
+ *   onClipEvent(load)       { startX = _x; }
+ *   onClipEvent(enterFrame) { _x = startX + 40; }
+ *
+ * Written as the AVM1 those compile to, so the import runs through the real
+ * decompiler and the real handler runtime rather than a convenient shortcut.
+ */
+function makeClipHandlerSWF(opts) {
+  opts = opts || {};
+  const pushStr = (str) => {
+    const d = [0];
+    for (const ch of str) d.push(ch.charCodeAt(0));
+    d.push(0);
+    return [0x96, d.length & 0xff, d.length >> 8, ...d];
+  };
+  const pushInt = (n) => {
+    const dv = new DataView(new ArrayBuffer(4));
+    dv.setInt32(0, n, true);
+    return [0x96, 5, 0, 7, dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)];
+  };
+  // startX = _x;   →  push "startX", push "" , push 0, getProperty, setVariable
+  const load = [
+    ...pushStr("startX"),
+    ...pushStr(""), ...pushInt(0), 0x22,  // getProperty(_x) of this
+    0x1d,                                 // setVariable
+    0x00
+  ];
+  // _x = startX + 40;  →  push "", 0, then startX + 40, setProperty
+  const enterFrame = [
+    ...pushStr(""), ...pushInt(0),
+    ...pushStr("startX"), 0x1c,           // getVariable startX
+    ...pushInt(40), 0x47,                 // add
+    0x23,                                 // setProperty
+    0x00
+  ];
+
+  /* `_x = 100;` — an absolute coordinate, the way a published handler bakes
+     one in. Flash measures it from the instance's registration point, so an
+     import that measures from the centre of the box puts it 20px out. */
+  const absolute = [
+    ...pushStr(""), ...pushInt(0), ...pushInt(100), 0x23,
+    0x00
+  ];
+  const handlers = opts.absolute
+    ? [{ flags: 0x0001, actions: absolute }]
+    : [{ flags: 0x0001, actions: load }, { flags: 0x0002, actions: enterFrame }];
+
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 40, 40, 0xff0000, 1),
+    placeWithClipActions(1, 1, 20, 20, handlers),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(24 * 256);
+  body.u16(1);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x08]);   // SWF 8: 32-bit clip flags
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
 export {
   makeSWF, makeFLA, makeSkewSWF, makeGradientSWF, makeAS3SWF, makeLayeringSWF,
+  makeClipHandlerSWF,
   makeZip, SWFWriter, tag
 };

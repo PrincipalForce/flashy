@@ -14,7 +14,7 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;}
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
@@ -7786,6 +7786,33 @@ function getEngineSource(callback){
     callback("/* flashy.js could not be loaded — export may not work standalone */");
   });
 }
+var _cachedAS2Source=null;
+/** True if anything in the document carries object handlers. */
+function docHasClipScripts(d){
+  var found=false;
+  var scan=function(layers){
+    (layers||[]).forEach(function(l){
+      (l.keyframes||[]).forEach(function(k){
+        (k.objects||[]).forEach(function(o){ if(o.clipScript&&o.clipScript.trim())found=true; });
+      });
+    });
+  };
+  scan(d.layers);
+  Object.keys(d.library||{}).forEach(function(n){ scan(d.library[n].layers); });
+  return found;
+}
+/* The AS2 handler runtime rides along only when the document uses it — most
+   cartoons have no object handlers, and an export should not carry a
+   scripting engine it never calls. */
+function getAS2Source(need,callback){
+  if(!need){callback("");return;}
+  if(_cachedAS2Source){callback(_cachedAS2Source);return;}
+  fetch("flashy-as2.js").then(function(r){return r.text();}).then(function(src){
+    _cachedAS2Source=src;callback(src);
+  }).catch(function(){
+    callback("/* flashy-as2.js could not be loaded — object handlers will not run */");
+  });
+}
 /* ------------------------------------------------------------------ *
  * exportRuntime — the player that every code export ships
  *
@@ -8218,6 +8245,21 @@ function exportRuntime(data, canvas, options) {
     node.alpha = o.alpha != null ? o.alpha : 1;
     if (o.blendMode && o.blendMode !== "source-over") node.blendMode = o.blendMode;
     if (o.instanceName) node.name = o.instanceName;
+    /* Object handlers — `onClipEvent(load) { … }` and `on(release) { … }`,
+       which is where Flash kept a clip's own behaviour and where an import
+       puts it. They run here and in Test Movie, never on the authoring
+       stage, exactly like frame scripts. */
+    if (o.clipScript && Flashy.AS2) {
+      /* Flash measures a clip from its registration point and this engine
+         from the centre of its box; the importer records the gap so a
+         handler with coordinates baked into it still lands. */
+      node.__as2Reg = {
+        x: o.regX != null ? o.regX : hw, y: o.regY != null ? o.regY : hh,
+        hw: hw, hh: hh
+      };
+      var attached = Flashy.AS2.attach(node, o.clipScript, { stage: stage });
+      if (attached) node.__as2 = attached;
+    }
     return node;
   }
 
@@ -8406,6 +8448,8 @@ function exportRuntime(data, canvas, options) {
 function genHTML(callback){
   getEngineSource(function(engineSrc){
     var d=serializeDoc();
+    getAS2Source(docHasClipScripts(d),function(as2Src){
+    if(as2Src)engineSrc=engineSrc+"\n"+as2Src;
     var sc="<"+"script>",sce="</"+"script>";
     var s="<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n";
     s+="<title>Flashy Animation</title>\n";
@@ -8452,6 +8496,7 @@ function genHTML(callback){
     }
     s+=sce+"\n</body>\n</html>";
     callback(s);
+    });
   });
 }
 
@@ -9396,27 +9441,75 @@ function testMovie(){
 function initActionsPanel(){
   var ta=document.getElementById("frame-script");
   if(!ta)return;
-  ta.placeholder="// Frame script (JavaScript) — runs on entering this keyframe\n"+
-                 "// in Test Movie and in exported files. Available: stop(), play(),\n"+
-                 "// gotoAndPlay(f), gotoAndStop(f), root, stage, Flashy\n"+
-                 "// e.g.  stop();";
   ta.addEventListener("change",function(){
-    var kf=CKF();
-    if(!kf){ta.value="";return;}
-    if(kf.script===ta.value)return;
+    var target=actionsTarget();
+    if(!target.kf&&!target.obj){ta.value="";return;}
+    if(target.obj){
+      if((target.obj.clipScript||"")===ta.value)return;
+      pushUndo();
+      target.obj.clipScript=ta.value;
+      render();
+      return;
+    }
+    if(target.kf.script===ta.value)return;
     pushUndo();
-    kf.script=ta.value;
+    target.kf.script=ta.value;
     updateTL();      // the timeline draws an 'a' marker on scripted keyframes
   });
 }
+
+/**
+ * What the Actions panel is pointed at.
+ *
+ * Flash had one Actions panel for two things: the current keyframe, and the
+ * handlers on whatever single object is selected. Selecting an object
+ * switches to its handlers, which is where an imported `onClipEvent` lives.
+ */
+function actionsTarget(){
+  if(selection&&selection.length===1)return {obj:selection[0],kf:null};
+  return {obj:null,kf:CKF()};
+}
+
+var FRAME_SCRIPT_HINT=
+  "// Frame script (JavaScript) — runs on entering this keyframe\n"+
+  "// in Test Movie and in exported files. Available: stop(), play(),\n"+
+  "// gotoAndPlay(f), gotoAndStop(f), root, stage, Flashy\n"+
+  "// e.g.  stop();";
+var OBJECT_SCRIPT_HINT=
+  "// Handlers for this object, in Flash's own form:\n"+
+  "//   onClipEvent(load)      { origin = {x: _x, y: _y}; }\n"+
+  "//   onClipEvent(mouseMove) { _x = origin.x + _parent._xmouse / 8; }\n"+
+  "//   on(release)            { gotoAndPlay(2); }\n"+
+  "// They run in Test Movie and in exported files, not on this stage.";
+
 function updateActionsPanel(){
   var ta=document.getElementById("frame-script");
   if(!ta)return;
+  var label=document.getElementById("actions-target");
   // Never overwrite what the user is in the middle of typing.
   if(document.activeElement===ta)return;
-  var kf=CKF();
-  ta.disabled=!kf;
-  ta.value=kf?(kf.script||""):"";
+  var target=actionsTarget();
+  if(target.obj){
+    ta.disabled=false;
+    ta.placeholder=OBJECT_SCRIPT_HINT;
+    ta.value=target.obj.clipScript||"";
+    if(label){
+      label.textContent="Object: "+
+        (target.obj.instanceName||target.obj.name||target.obj.type)+
+        "  —  onClipEvent / on handlers";
+      label.className="actions-target object";
+    }
+    return;
+  }
+  ta.disabled=!target.kf;
+  ta.placeholder=FRAME_SCRIPT_HINT;
+  ta.value=target.kf?(target.kf.script||""):"";
+  if(label){
+    label.textContent="Frame script — layer “"+
+      ((currentLayers()[curLayer]&&currentLayers()[curLayer].name)||"?")+
+      "”, frame "+curFrame;
+    label.className="actions-target";
+  }
 }
 
 /**
