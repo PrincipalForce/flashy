@@ -41,7 +41,9 @@
   var PANELS = [
     { id: "props", title: "Properties", home: "right" },
     { id: "color", title: "Color Mixer", home: "right" },
-    { id: "library", title: "Library", home: "right" },
+    /* The Library is a list you browse, with a preview above it, so an even
+       third of the right-hand column leaves it showing neither. */
+    { id: "library", title: "Library", home: "right", weight: 2 },
     // Shares Library's tab group: both answer "what is this document made of",
     // and a fourth stacked group would leave every one of them too short.
     { id: "character", title: "Character", home: "right", with: "library" },
@@ -97,7 +99,7 @@
       if (p.home === "bottom" && zone.groups.length) {
         zone.groups[0].panels.push(p.id);
       } else {
-        zone.groups.push({ panels: [p.id], active: p.id, weight: 1 });
+        zone.groups.push({ panels: [p.id], active: p.id, weight: p.weight || 1 });
       }
     });
     return {

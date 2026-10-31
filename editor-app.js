@@ -3449,6 +3449,16 @@ function initMouse(){
   canvas.addEventListener("dragleave",function(){canvas.classList.remove("drop-image");});
   canvas.addEventListener("drop",function(e){
     canvas.classList.remove("drop-image");
+    /* A Library item dragged out of the panel: place it where it was dropped,
+       which is the whole point of dragging it rather than pressing Place. */
+    var lib=e.dataTransfer&&e.dataTransfer.getData(LIB_DRAG);
+    if(lib){
+      e.preventDefault();
+      var cut=lib.indexOf(":");
+      var p0=getStagePos(e);
+      placeLibItem(lib.slice(0,cut),lib.slice(cut+1),{dropX:p0.x,dropY:p0.y});
+      return;
+    }
     var files=e.dataTransfer&&e.dataTransfer.files;
     if(!files||!files.length)return;
     e.preventDefault();
@@ -5010,10 +5020,39 @@ function closeCPOnClick(e){
 }
 
 // === Library Panel ===
+/*
+ * The Library is for browsing at least as much as for placing, and it used to
+ * be only the latter: one click on an item dropped an instance on the stage.
+ * Looking through what an imported movie brought in — a thousand symbols, in
+ * the case of a real Flash game — meant littering the timeline with every one
+ * you glanced at, and then undoing it.
+ *
+ * So a click now selects, and the panel shows the thing: a preview of the
+ * symbol's first frame, or of the bitmap, with its size. Placing is a
+ * deliberate act — drag the item onto the stage where you want it, or press
+ * Place on Stage. Opening it (double-click, Open, or the context menu) goes
+ * into the item itself: a symbol opens for editing, a bitmap opens its own
+ * window, where it can be traced.
+ */
+var libSel = null;         // {kind:"symbol"|"bitmap", name:string} — the browsed item
+var libRows = [];          // rendered rows, so re-selecting one does not rebuild the panel
+var libPreviewEls = null;  // the preview canvas, its caption and buttons
+var LIB_DRAG = "application/x-flashy-lib";
+
+/** The selection, if it still exists — a delete or an undo can strand it. */
+function libSelected(){
+  if(!libSel)return null;
+  var live=libSel.kind==="symbol"?!!doc.library[libSel.name]
+                                :!!(doc.bitmaps&&doc.bitmaps[libSel.name]);
+  if(!live)libSel=null;
+  return libSel;
+}
+
 function updateLib(){
   var lp=document.getElementById("libPanel");
   if(!lp)return;
   lp.textContent="";
+  libRows=[];libPreviewEls=null;
   var title=document.createElement("div");
   title.className="lib-title";
   title.textContent="Library";
@@ -5025,32 +5064,26 @@ function updateLib(){
     empty.textContent="No symbols or bitmaps";lp.appendChild(empty);
     return;
   }
-  keys.forEach(function(k){
-    var row=document.createElement("div");row.className="lib-item";
-    var icon=document.createElement("span");icon.className="lib-icon";icon.textContent="▣";
-    row.appendChild(icon);
-    var name=document.createElement("span");name.textContent=k;
-    row.appendChild(name);
-    row.addEventListener("click",function(){
-      pushUndo();
-      var kf=CKF();if(!kf){var l=CL();if(l){kf=l.insertKeyframe(curFrame);}}
-      if(kf){
-        var obj=new EditorObject("symbol");
-        obj.symbolName=k;obj.x=doc.width/2-25;obj.y=doc.height/2-25;
-        obj.width=50;obj.height=50;
-        kf.objects.push(obj);selection=[obj];fullRefresh();
-      }
+
+  lp.appendChild(libPreviewBox());
+
+  if(keys.length){
+    var st=document.createElement("div");
+    st.className="lib-title lib-subtitle";
+    st.textContent="Symbols";
+    lp.appendChild(st);
+    keys.forEach(function(k){
+      var sym=doc.library[k];
+      lp.appendChild(libRow("symbol",k,{
+        icon:"\u25A3",
+        dim:(sym&&sym.behavior&&sym.behavior!=="movieclip")?sym.behavior:"",
+        title:k+"\nDrag onto the stage to place it. Double-click to open it."
+      }));
     });
-    row.addEventListener("dblclick",function(e){
-      e.stopPropagation();
-      enterSymbol(k);
-    });
-    lp.appendChild(row);
-  });
+  }
 
   /* Bitmaps share the Library, because that is what they are: reusable assets
-     referenced by name. Click places an instance; double-click goes straight
-     to tracing it, which is the thing you most often imported it to do. */
+     referenced by name. */
   if(bkeys.length){
     var bt=document.createElement("div");
     bt.className="lib-title lib-subtitle";
@@ -5058,48 +5091,437 @@ function updateLib(){
     lp.appendChild(bt);
     bkeys.forEach(function(k){
       var a=doc.bitmaps[k];
-      var row=document.createElement("div");row.className="lib-item";
-      var icon=document.createElement("span");icon.className="lib-icon";icon.textContent="▦";
-      row.appendChild(icon);
-      var name=document.createElement("span");
-      name.textContent=k;
-      row.appendChild(name);
-      var dim=document.createElement("span");
-      dim.className="lib-dim";
-      dim.textContent=a&&a.width?a.width+"×"+a.height:"";
-      row.appendChild(dim);
-      row.title=k+(a&&a.width?" — "+a.width+"×"+a.height+" px":"")+
-        "\nClick to place, double-click to trace, right-click to delete.";
-      row.addEventListener("click",function(){
-        pushUndo();
-        var placed=placeBitmap(k,{});
-        if(placed)selection=[placed];
-        fullRefresh();
-      });
-      row.addEventListener("dblclick",function(e){
-        e.stopPropagation();
-        var placed=selectedBitmap();
-        if(!placed||placed.bitmapAsset!==k){
-          pushUndo();
-          placed=placeBitmap(k,{});
-          if(placed)selection=[placed];
-          fullRefresh();
-        }
-        if(placed)showTraceBitmapDialog();
-      });
-      row.addEventListener("contextmenu",function(e){
-        e.preventDefault();e.stopPropagation();
-        showDialog({
-          title:"Delete Bitmap",
-          message:"Delete “"+k+"” from the library?\n\n"+
-                  "Every instance of it on the timeline goes too. This can be undone.",
-          fields:[],okLabel:"Delete",
-          onOk:function(){deleteBitmapAsset(k);}
-        });
-      });
-      lp.appendChild(row);
+      lp.appendChild(libRow("bitmap",k,{
+        icon:"\u25A6",
+        dim:a&&a.width?a.width+"\u00D7"+a.height:"",
+        title:k+(a&&a.width?" \u2014 "+a.width+"\u00D7"+a.height+" px":"")+
+          "\nDrag onto the stage to place it. Double-click to open it."
+      }));
     });
   }
+
+  var hint=document.createElement("div");
+  hint.className="lib-hint";
+  hint.textContent="Drag an item onto the stage, or select it and press Place.";
+  lp.appendChild(hint);
+
+  paintLibPreview();
+}
+
+function libRow(kind,name,opts){
+  var row=document.createElement("div");
+  row.className="lib-item";
+  row.draggable=true;
+  row.dataset.libKind=kind;
+  row.dataset.libName=name;
+  var icon=document.createElement("span");
+  icon.className="lib-icon";icon.textContent=opts.icon;
+  row.appendChild(icon);
+  var label=document.createElement("span");
+  label.className="lib-name";
+  label.textContent=name;
+  row.appendChild(label);
+  if(opts.dim){
+    var dim=document.createElement("span");
+    dim.className="lib-dim";dim.textContent=opts.dim;
+    row.appendChild(dim);
+  }
+  row.title=opts.title;
+
+  row.addEventListener("click",function(){selectLibItem(kind,name);});
+  row.addEventListener("dblclick",function(e){
+    e.stopPropagation();
+    openLibItem(kind,name);
+  });
+  row.addEventListener("dragstart",function(e){
+    selectLibItem(kind,name);
+    if(!e.dataTransfer)return;
+    e.dataTransfer.effectAllowed="copy";
+    /* A type of its own, because the stage has to recognise the drag while it
+       is still in flight — and a browser will not reveal a payload before the
+       drop, only the list of types. */
+    try{
+      e.dataTransfer.setData(LIB_DRAG,kind+":"+name);
+      e.dataTransfer.setData("text/plain",name);
+    }catch(err){/* a browser that refuses custom types still has the type list */}
+  });
+  row.addEventListener("contextmenu",function(e){
+    e.preventDefault();e.stopPropagation();
+    selectLibItem(kind,name);
+    showLibMenu(e,kind,name);
+  });
+  if(libSel&&libSel.kind===kind&&libSel.name===name)row.classList.add("sel");
+  libRows.push({el:row,kind:kind,name:name});
+  return row;
+}
+
+function selectLibItem(kind,name){
+  libSel={kind:kind,name:name};
+  libRows.forEach(function(r){
+    r.el.classList.toggle("sel",r.kind===kind&&r.name===name);
+  });
+  paintLibPreview();
+}
+
+function libPreviewBox(){
+  var wrap=document.createElement("div");
+  wrap.className="lib-preview";
+  var cv=document.createElement("canvas");
+  cv.className="lib-preview-canvas";
+  /* The buffer is sized to the box the panel gives it rather than scaled to
+     fit: a fixed buffer stretched by CSS distorts everything drawn in it, and
+     the Library panel is resizable. */
+  cv.width=168;cv.height=LIB_PREVIEW_H;
+  wrap.appendChild(cv);
+  var meta=document.createElement("div");
+  meta.className="lib-preview-meta";
+  wrap.appendChild(meta);
+  var btns=document.createElement("div");
+  btns.className="lib-preview-btns";
+  var place=document.createElement("button");
+  place.className="lib-btn";place.type="button";place.textContent="Place on Stage";
+  place.addEventListener("click",function(){
+    var sel=libSelected();
+    if(sel)placeLibItem(sel.kind,sel.name,{});
+  });
+  var open=document.createElement("button");
+  open.className="lib-btn";open.type="button";open.textContent="Open";
+  open.addEventListener("click",function(){
+    var sel=libSelected();
+    if(sel)openLibItem(sel.kind,sel.name);
+  });
+  btns.appendChild(place);btns.appendChild(open);
+  wrap.appendChild(btns);
+  libPreviewEls={wrap:wrap,canvas:cv,meta:meta,place:place,open:open};
+  fitLibPreview();
+  /* updateLib runs on every refresh, so the observer is replaced rather than
+     added to — a few hundred refreshes with a thousand symbols in the library
+     is a lot of observers watching elements that are no longer in the page. */
+  if(typeof ResizeObserver!=="undefined"){
+    if(libPreviewRO)libPreviewRO.disconnect();
+    libPreviewRO=new ResizeObserver(function(){fitLibPreview();});
+    libPreviewRO.observe(wrap);
+    var panel=document.getElementById("libPanel");
+    if(panel)libPreviewRO.observe(panel);
+  }
+  return wrap;
+}
+
+var LIB_PREVIEW_H=96;
+var LIB_STICKY_MIN=220;   // below this the preview would cover the list
+var libPreviewRO=null;
+
+/**
+ * Fit the preview to the panel.
+ *
+ * Three things have to hold however the Library is docked. Its buffer matches
+ * its laid-out width, so nothing drawn in it is stretched. Its height is a
+ * share of the panel, so a Library in a short space is still a list with a
+ * preview on it rather than a preview with the list pushed out of sight — and
+ * below the height where that share is worth anything, the picture goes and
+ * the caption and buttons stay. And it only sticks to the top while the panel
+ * is tall enough to scroll usefully underneath it; in a short one a sticky
+ * preview would simply cover the rows it is meant to be describing.
+ */
+function fitLibPreview(){
+  if(!libPreviewEls)return;
+  var cv=libPreviewEls.canvas;
+  var panel=document.getElementById("libPanel");
+  var avail=panel?panel.clientHeight:0;
+  libPreviewEls.wrap.classList.toggle("stuck",avail>=LIB_STICKY_MIN);
+  var h=avail?Math.min(LIB_PREVIEW_H,Math.round(avail*0.42)):LIB_PREVIEW_H;
+  var show=h>=40;
+  cv.style.display=show?"":"none";
+  if(!show)return;
+  var w=Math.max(60,Math.round(cv.clientWidth||cv.width));
+  cv.style.height=h+"px";
+  if(cv.width===w&&cv.height===h)return;
+  cv.width=w;cv.height=h;
+  paintLibPreview();
+}
+
+/** Scale `w`x`h` of content to fit the preview, then draw it through `body`. */
+function libFit(cx,cv,w,h,body){
+  if(!(w>0)||!(h>0))return;
+  var pad=8;
+  var k=Math.min((cv.width-pad*2)/w,(cv.height-pad*2)/h,4);
+  cx.save();
+  cx.translate(cv.width/2-(w*k)/2,cv.height/2-(h*k)/2);
+  cx.scale(k,k);
+  body();
+  cx.restore();
+}
+
+function paintLibPreview(){
+  if(!libPreviewEls)return;
+  var cv=libPreviewEls.canvas,cx=cv.getContext("2d");
+  cx.clearRect(0,0,cv.width,cv.height);
+  /* A chequer, so artwork with transparency reads as transparent instead of
+     as whatever colour the panel happens to be. */
+  var s=8;
+  for(var y=0;y<cv.height;y+=s)for(var x=0;x<cv.width;x+=s){
+    cx.fillStyle=((x/s+y/s)%2)?"#2f2f2f":"#383838";
+    cx.fillRect(x,y,s,s);
+  }
+  var sel=libSelected();
+  libPreviewEls.place.disabled=!sel;
+  libPreviewEls.open.disabled=!sel;
+  if(!sel){
+    libPreviewEls.meta.textContent="Select an item to see it here.";
+    libPreviewEls.open.textContent="Open";
+    return;
+  }
+  if(sel.kind==="bitmap"){
+    var a=doc.bitmaps[sel.name]||{};
+    libPreviewEls.open.textContent="Open Bitmap";
+    libPreviewEls.meta.textContent=sel.name+
+      (a.width?" \u2014 "+a.width+"\u00D7"+a.height+" px":"");
+    var img=bitmapImage(sel.name);
+    if(!img){
+      // Not decoded yet: decode it, then come back and draw it.
+      decodeBitmap(sel.name).then(function(){paintLibPreview();});
+      return;
+    }
+    var iw=img.naturalWidth||img.width||1,ih=img.naturalHeight||img.height||1;
+    libFit(cx,cv,iw,ih,function(){cx.drawImage(img,0,0);});
+    return;
+  }
+  var sym=doc.library[sel.name];
+  libPreviewEls.open.textContent="Edit Symbol";
+  var box=symbolContentBox(sym);
+  libPreviewEls.meta.textContent=sel.name+" \u2014 "+box.w+"\u00D7"+box.h+
+    ((sym&&sym.behavior)?" \u00B7 "+sym.behavior:"");
+  libFit(cx,cv,box.w,box.h,function(){
+    cx.translate(-box.x,-box.y);
+    box.objects.forEach(function(o){paintObj(cx,o,{chrome:false});});
+  });
+}
+
+/**
+ * A symbol's first frame, and the box around it.
+ *
+ * Deliberately does not call ensureSymbolLayers: looking at a symbol must not
+ * rewrite it, or browsing the Library would quietly edit the document.
+ */
+function symbolContentBox(sym){
+  var objs=[];
+  if(sym&&sym.layers&&sym.layers.length){
+    for(var i=sym.layers.length-1;i>=0;i--){
+      var l=sym.layers[i];
+      if(!l||l.visible===false)continue;
+      var kf=(typeof l.getKeyframeAt==="function")?l.getKeyframeAt(1):(l.keyframes||[])[0];
+      if(kf)objs=objs.concat(kf.objects||[]);
+    }
+  }else if(sym)objs=(sym.objects||[]).slice();
+  objs=objs.map(function(o){
+    return (o&&typeof o.clone==="function")?o:reviveObject(o);
+  });
+  if(!objs.length)return {objects:[],x:0,y:0,w:80,h:80};
+  var b=getBounds(objs);
+  return {objects:objs,x:b.x,y:b.y,
+          w:Math.max(1,Math.round(b.w)),h:Math.max(1,Math.round(b.h))};
+}
+
+/** Put an instance of a library item on the current frame. */
+function placeLibItem(kind,name,opts){
+  pushUndo();
+  var placed=(kind==="bitmap")?placeBitmap(name,opts||{})
+                              :placeSymbolInstance(name,opts||{});
+  if(placed)selection=[placed];
+  fullRefresh();
+  return placed;
+}
+
+/**
+ * An instance of a library symbol, at the size of its own artwork.
+ *
+ * It used to arrive as a 50x50 box whatever it contained, so every symbol
+ * placed from the Library had to be resized by hand before it looked like
+ * itself.
+ */
+function placeSymbolInstance(name,opts){
+  opts=opts||{};
+  var sym=doc.library[name];
+  if(!sym)return null;
+  var kf=CKF();
+  if(!kf){var l=CL();if(l)kf=l.insertKeyframe(curFrame);}
+  if(!kf)return null;
+  var size=symbolBounds(sym);
+  var o=new EditorObject("symbol");
+  o.symbolName=name;
+  o.width=size.width;o.height=size.height;
+  if(opts.x!=null&&opts.y!=null){o.x=opts.x;o.y=opts.y;}
+  else if(opts.dropX!=null&&opts.dropY!=null){
+    o.x=Math.round(opts.dropX-size.width/2);
+    o.y=Math.round(opts.dropY-size.height/2);
+  }else{
+    o.x=Math.round((doc.width-size.width)/2);
+    o.y=Math.round((doc.height-size.height)/2);
+  }
+  kf.objects.push(o);
+  return o;
+}
+
+/** Open the item itself: a symbol for editing, a bitmap in its own window. */
+function openLibItem(kind,name){
+  if(kind==="symbol"){
+    if(doc.library[name])enterSymbol(name);
+    return;
+  }
+  showBitmapWindow(name);
+}
+
+/**
+ * Examine a bitmap: the image, what it is, and what can be done with it.
+ * Double-clicking a bitmap used to place an instance and open the tracer on
+ * it, which is a lot to happen to a document because somebody wanted to look
+ * at the picture.
+ */
+function showBitmapWindow(name){
+  var a=(doc.bitmaps||{})[name];
+  if(!a)return;
+  showDialog({
+    title:name,
+    message:(a.width?a.width+" \u00D7 "+a.height+" px":"")+
+      (a.mediaType?"  \u00B7  "+a.mediaType:""),
+    fields:[],
+    okLabel:"Close",
+    noCancel:true,
+    build:function(body){
+      var holder=document.createElement("div");
+      holder.className="fy-bitmap-view";
+      var img=document.createElement("img");
+      img.alt=name;
+      img.src=bitmapDataURL(name);
+      holder.appendChild(img);
+      body.appendChild(holder);
+    },
+    extraButtons:[
+      {label:"Place on Stage",onClick:function(_v,close){
+        close();
+        placeLibItem("bitmap",name,{});
+      }},
+      {label:"Trace Bitmap...",onClick:function(_v,close){
+        close();
+        traceLibBitmap(name);
+      }}
+    ]
+  });
+}
+
+/* The tracer works on a placed bitmap, so trace what is selected if it is
+   this asset, and place one to work on if it is not. */
+function traceLibBitmap(name){
+  var placed=selectedBitmap();
+  if(!placed||placed.bitmapAsset!==name)placed=placeLibItem("bitmap",name,{});
+  if(placed)showTraceBitmapDialog();
+}
+
+function showLibMenu(e,kind,name){
+  var items=[
+    {label:"Place on Stage",onClick:function(){placeLibItem(kind,name,{});}},
+    {label:kind==="symbol"?"Edit Symbol":"Open Bitmap",
+     onClick:function(){openLibItem(kind,name);}}
+  ];
+  if(kind==="bitmap"){
+    items.push({label:"Trace Bitmap...",onClick:function(){traceLibBitmap(name);}});
+  }
+  items.push({type:"sep"});
+  items.push({label:"Rename...",onClick:function(){renameLibItem(kind,name);}});
+  items.push({label:"Delete",onClick:function(){confirmDeleteLibItem(kind,name);}});
+  showMenuAt(e.clientX,e.clientY,items);
+}
+
+function renameLibItem(kind,name){
+  var taken=kind==="symbol"?doc.library:(doc.bitmaps||{});
+  askFor("Rename","Name",name,function(v){
+    v=String(v||"").trim();
+    if(!v||v===name)return;
+    pushUndo();
+    if(kind==="symbol")renameSymbolAsset(name,v);
+    else renameBitmapAsset(name,v);
+    libSel={kind:kind,name:v};
+    fullRefresh();
+  },{validate:function(v){
+    v=String(v||"").trim();
+    if(!v)return "Give it a name.";
+    if(v!==name&&taken[v])return "\u201C"+v+"\u201D is already taken.";
+    return null;
+  }});
+}
+
+function confirmDeleteLibItem(kind,name){
+  showDialog({
+    title:kind==="symbol"?"Delete Symbol":"Delete Bitmap",
+    message:"Delete \u201C"+name+"\u201D from the library?\n\n"+
+            "Every instance of it on the timeline goes too. This can be undone.",
+    fields:[],okLabel:"Delete",
+    onOk:function(){
+      if(kind==="symbol")deleteSymbolAsset(name);
+      else deleteBitmapAsset(name);
+    }
+  });
+}
+
+/** Every keyframe in the document, including the ones inside symbols. */
+function eachKeyframe(fn){
+  var visit=function(layers){
+    (layers||[]).forEach(function(l){(l.keyframes||[]).forEach(fn);});
+  };
+  visit(doc.layers);
+  Object.keys(doc.library).forEach(function(k){
+    if(doc.library[k]&&doc.library[k].layers)visit(doc.library[k].layers);
+  });
+}
+
+function renameSymbolAsset(from,to){
+  doc.library[to]=doc.library[from];
+  delete doc.library[from];
+  eachKeyframe(function(kf){
+    (kf.objects||[]).forEach(function(o){
+      if(o.type==="symbol"&&o.symbolName===from)o.symbolName=to;
+    });
+  });
+  /* A symbol keeps a flat `objects` copy as well as its layers (that is what
+     exitSymbol writes back), and instances hide in there too. */
+  Object.keys(doc.library).forEach(function(k){
+    (doc.library[k].objects||[]).forEach(function(o){
+      if(o.type==="symbol"&&o.symbolName===from)o.symbolName=to;
+    });
+  });
+  editStack.forEach(function(ctx){if(ctx.name===from)ctx.name=to;});
+}
+
+function renameBitmapAsset(from,to){
+  doc.bitmaps[to]=doc.bitmaps[from];
+  delete doc.bitmaps[from];
+  eachKeyframe(function(kf){
+    (kf.objects||[]).forEach(function(o){
+      if(o.type==="bitmap"&&o.bitmapAsset===from)o.bitmapAsset=to;
+    });
+  });
+  // The decoded image is cached under the old name; decode it under the new.
+  if(typeof Flashy!=="undefined"&&Flashy.Bitmaps){
+    Flashy.Bitmaps.remove(from);
+    decodeBitmap(to);
+  }
+}
+
+function deleteSymbolAsset(name){
+  pushUndo();
+  /* Leave the symbol first: editing the inside of something that no longer
+     exists is a stack that cannot be unwound. */
+  while(editStack.length&&editStack.some(function(c){return c.name===name;}))exitSymbol();
+  delete doc.library[name];
+  eachKeyframe(function(kf){
+    kf.objects=(kf.objects||[]).filter(function(o){
+      return !(o.type==="symbol"&&o.symbolName===name);
+    });
+  });
+  selection=selection.filter(function(o){
+    return !(o.type==="symbol"&&o.symbolName===name);
+  });
+  fullRefresh();
 }
 
 // === Symbol Editing ===
@@ -5187,11 +5609,6 @@ function updateBreadcrumb(){
 
 // === Context Menu ===
 function showCtx(e){
-  var old=document.getElementById("ctxMenu");
-  if(old)old.parentNode.removeChild(old);
-  var menu=document.createElement("div");
-  menu.id="ctxMenu";menu.className="ctx-menu";
-  menu.style.left=e.clientX+"px";menu.style.top=e.clientY+"px";
   var items=[];
   if(selection.length>0){
     items=[
@@ -5222,21 +5639,43 @@ function showCtx(e){
       {label:"Document Settings...",action:"docSettings"}
     ];
   }
-  items.forEach(function(it){
+  showMenuAt(e.clientX,e.clientY,items);
+}
+
+/**
+ * A context menu at a point on screen.
+ *
+ * Entries are `{label, action}` for one of doAction's names, `{label,
+ * onClick}` for anything else, or `{type:"sep"}`. The stage menu is all
+ * actions; the Library's are callbacks, because "place this symbol" is about
+ * a particular item rather than about the selection.
+ */
+function showMenuAt(x,y,items){
+  var old=document.getElementById("ctxMenu");
+  if(old)old.parentNode.removeChild(old);
+  var menu=document.createElement("div");
+  menu.id="ctxMenu";menu.className="ctx-menu";
+  menu.style.left=x+"px";menu.style.top=y+"px";
+  (items||[]).forEach(function(it){
     if(it.type==="sep"){
       var sep=document.createElement("div");sep.className="ctx-sep";
       menu.appendChild(sep);
-    }else{
-      var entry=document.createElement("div");entry.className="ctx-entry";
-      entry.textContent=it.label;
-      entry.addEventListener("click",function(){
-        menu.parentNode.removeChild(menu);
-        doAction(it.action);
-      });
-      menu.appendChild(entry);
+      return;
     }
+    var entry=document.createElement("div");entry.className="ctx-entry";
+    entry.textContent=it.label;
+    entry.addEventListener("click",function(){
+      if(menu.parentNode)menu.parentNode.removeChild(menu);
+      if(it.onClick)it.onClick();
+      else if(it.action)doAction(it.action);
+    });
+    menu.appendChild(entry);
   });
   document.body.appendChild(menu);
+  // Off the edge of the window is no use; pull it back on.
+  var r=menu.getBoundingClientRect();
+  if(r.right>window.innerWidth)menu.style.left=Math.max(0,window.innerWidth-r.width-4)+"px";
+  if(r.bottom>window.innerHeight)menu.style.top=Math.max(0,window.innerHeight-r.height-4)+"px";
   setTimeout(function(){
     document.addEventListener("click",function closeCtx(){
       var m=document.getElementById("ctxMenu");
@@ -10475,7 +10914,13 @@ function updateAIKeyNotice(){
   btn.textContent="Add API key";
   btn.addEventListener("click",function(){showApiKeyDialog();});
   notice.appendChild(btn);
-  panel.insertBefore(notice,panel.firstChild);
+  /* Into the chat log rather than above it: as a sibling it was a fixed band
+     that, in a short dock, pushed the input box out of the panel entirely —
+     so the assistant asked for a key and hid the way to carry on. In the log
+     it scrolls like any other message. */
+  var chat=document.getElementById("ai-chat");
+  if(chat)chat.insertBefore(notice,chat.firstChild);
+  else panel.insertBefore(notice,panel.firstChild);
 }
 
 function initAIPanel() {

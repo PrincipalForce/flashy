@@ -742,7 +742,7 @@ test("Swap Bitmap repoints an instance and keeps its box", async ({ page }) => {
   expect(await stagePixel(page, 255, 200)).toBe("#00ff00");
 });
 
-test("the Library panel lists bitmaps and placing one from it works", async ({ page }) => {
+test("the Library lists bitmaps, and browsing one does not place it", async ({ page }) => {
   await open(page);
   await page.evaluate((d) => window.__importImage(40, 40, d, "Pic", { place: false }), HALVES);
   await page.evaluate(() => window._flashyWorkspace.show("library"));
@@ -752,11 +752,39 @@ test("the Library panel lists bitmaps and placing one from it works", async ({ p
   await expect(item).toHaveCount(1);
   await expect(item.locator(".lib-dim")).toHaveText("40×40");
 
+  /* A click used to drop an instance on the stage, which made browsing a
+     library impossible: everything you looked at landed on the timeline. */
   expect((await objects(page)).length).toBe(0);
   await item.click();
+  expect((await objects(page)).length).toBe(0);
+  await expect(item).toHaveClass(/sel/);
+  // Selecting it shows it instead: what it is, and how big.
+  await expect(lib.locator(".lib-preview-meta")).toContainText("40×40 px");
+
+  // Placing is a separate, deliberate act.
+  await lib.locator(".lib-btn", { hasText: "Place on Stage" }).click();
   const objs = await objects(page);
   expect(objs.length).toBe(1);
   expect(objs[0].bitmapAsset).toBe("Pic");
+});
+
+test("a bitmap opens in its own window, and traces from there", async ({ page }) => {
+  await open(page);
+  await page.evaluate((d) => window.__importImage(40, 40, d, "Pic", { place: false }), HALVES);
+  await page.evaluate(() => window._flashyWorkspace.show("library"));
+
+  await page.locator("#libPanel .lib-item", { hasText: "Pic" }).dblclick();
+  // Double-click used to place an instance AND open the tracer on it — a lot
+  // to happen to a document because somebody wanted to look at the picture.
+  await expect(page.locator("#fy-dialog .fy-dialog-title")).toHaveText("Pic");
+  await expect(page.locator("#fy-dialog .fy-dialog-msg")).toContainText("40 × 40 px");
+  await expect(page.locator("#fy-dialog .fy-bitmap-view img")).toHaveCount(1);
+  expect((await objects(page)).length).toBe(0);
+
+  // Tracing is reachable from there, and does place one to work on.
+  await page.locator("#fy-dialog .fy-dialog-btn", { hasText: "Trace Bitmap..." }).click();
+  await expect(page.locator("#fy-dialog .fy-dialog-title")).toHaveText("Trace Bitmap");
+  expect((await objects(page)).length).toBe(1);
 });
 
 test("the Properties inspector shows a bitmap's source and offers to trace it", async ({ page }) => {
