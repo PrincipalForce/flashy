@@ -715,10 +715,17 @@
           ticks++;
         }
         if (this._acc > frameMs) this._acc = frameMs;
-        // If no tick yet (just started), prime the root so frame 1 state renders.
+        /* If no tick yet (just started), prime the root so frame 1 state
+           renders — INCLUDING its frame script. Priming without it marks
+           the root as primed, so the first real tick takes the "advance"
+           branch and frame 1's script is never run at all: a `stop()` on
+           frame 1 does nothing, and an imported movie loses the frame where
+           it sets everything up. */
         if (!this.root._primed) {
           this.root._primed = true;
           this.root.timeline.update(this.root.currentFrame);
+          const first = this.root.timeline.frameScripts[this.root.currentFrame];
+          if (first) first.call(this.root);
         }
         this._render();
         this._raf = requestAnimationFrame(loop);

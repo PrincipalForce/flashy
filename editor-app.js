@@ -18,8 +18,8 @@ function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
-function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.sound=null;}
-KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.sound=this.sound?cloneSound(this.sound):null;return c;};
+function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.sound=null;}
+KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.sound=this.sound?cloneSound(this.sound):null;return c;};
 function cloneSound(s){return {asset:s.asset,sync:s.sync||"stream",volume:s.volume!=null?s.volume:1,loop:!!s.loop,offset:s.offset||0};}
 function Layer(n){this.name=n;this.visible=true;this.locked=false;this.keyframes=[new KeyFrame(1)];}
 Layer.prototype.getKeyframeAt=function(f){for(var i=this.keyframes.length-1;i>=0;i--){var k=this.keyframes[i];if(f>=k.index&&f<k.index+k.duration)return k;}return null;};
@@ -813,10 +813,22 @@ function render(){
     ctx.strokeRect(0,0,doc.width,doc.height);
     ctx.setLineDash([]);
   }
-  // render layers bottom to top, rigs composed through their hierarchy
-  rigDrawPlan(frameObjects(currentLayers(),curFrame)).forEach(function(e){
-    paintPlanned(ctx,e,{chrome:true});
-  });
+  // Render layers bottom to top, rigs composed through their hierarchy, and
+  // each masked run clipped to the silhouette of the mask above it.
+  var groups=maskGroups(currentLayers());
+  for(var gi=groups.length-1;gi>=0;gi--){
+    var group=groups[gi];
+    if(!group.layers.length)continue;
+    var clipped=!!group.mask;
+    if(clipped){
+      ctx.save();
+      applyMaskClip(ctx,frameObjects([group.mask],curFrame));
+    }
+    rigDrawPlan(frameObjects(group.layers,curFrame)).forEach(function(e){
+      paintPlanned(ctx,e,{chrome:true});
+    });
+    if(clipped)ctx.restore();
+  }
   // Rig overlay sits above the artwork but inside the stage transform, so the
   // handles track the drawing at any zoom.
   if(curTool==="pose"||(selection.length===1&&isRigPart(selection[0])))drawRigOverlay(ctx);
@@ -975,6 +987,39 @@ function symbolFrameObjects(sym,frame){
   return out;
 }
 
+/**
+ * A symbol's content at a frame, grouped by mask.
+ *
+ * Masks live inside symbols far more often than on the root — in the test
+ * movie, all 43 of them do — so flattening a symbol's layers draws every
+ * mask's own artwork as if it were a drawing, which is how a masked scene
+ * ends up as flat coloured blobs over the top of itself.
+ */
+function symbolFrameGroups(sym,frame){
+  if(!sym)return [];
+  if(!sym.layers)return (sym.objects&&sym.objects.length)?[{mask:null,objects:sym.objects}]:[];
+  var objectsAt=function(layer){
+    if(!layer||layer.visible===false)return [];
+    var kf=typeof layer.getKeyframeAt==="function"?layer.getKeyframeAt(frame):null;
+    return kf?kf.objects:[];
+  };
+  var groups=maskGroups(sym.layers);
+  var out=[];
+  for(var gi=groups.length-1;gi>=0;gi--){            // bottom layer first
+    var g=groups[gi];
+    var objs=[];
+    for(var i=g.layers.length-1;i>=0;i--)objs=objs.concat(objectsAt(g.layers[i]));
+    if(!objs.length)continue;
+    var maskObjs=null;
+    if(g.mask){
+      maskObjs=objectsAt(g.mask);
+      if(!maskObjs.length)continue;                  // nothing shows through
+    }
+    out.push({mask:maskObjs,objects:objs});
+  }
+  return out;
+}
+
 /* ---- Frame clipboard ---------------------------------------------- *
  * Copy, cut and paste a block of the timeline — any number of layers, any
  * span of frames.
@@ -1035,7 +1080,7 @@ var frameClipboard=null;
 function plainKeyframe(kf){
   return {
     index:kf.index,duration:kf.duration,
-    tweenType:kf.tweenType,easing:kf.easing,script:kf.script,
+    tweenType:kf.tweenType,easing:kf.easing,script:kf.script,label:kf.label||"",
     sound:kf.sound?cloneSound(kf.sound):null,
     objects:(kf.objects||[]).map(plainObj)
   };
@@ -2868,6 +2913,73 @@ function fillStyleFor(cx,o,map,alphaMul){
   return isGradient(o)?gradientFill(cx,o,map,alphaMul):o.fillColor;
 }
 
+/* ------------------------------------------------------------------ *
+ * Mask layers
+ *
+ * Flash's model, and the one the document already had a field for: a layer
+ * marked `mask` clips the layers beneath it that are marked `masked`, and
+ * the mask's own artwork is never drawn — only its silhouette.
+ *
+ * Grouping is by position: a mask layer takes the run of `masked` layers
+ * immediately below it. A `masked` layer with no mask above it is drawn
+ * normally, because a half-applied mask is worse than none.
+ * ------------------------------------------------------------------ */
+function maskGroups(layers){
+  var groups=[],i=0;
+  while(i<layers.length){
+    if((layers[i].layerType||"normal")==="mask"){
+      var mask=layers[i],run=[],j=i+1;
+      while(j<layers.length&&(layers[j].layerType||"normal")==="masked"){run.push(layers[j]);j++;}
+      groups.push({mask:mask,layers:run});
+      i=j;
+    }else{
+      var plain=[];
+      while(i<layers.length&&(layers[i].layerType||"normal")!=="mask"){plain.push(layers[i]);i++;}
+      groups.push({mask:null,layers:plain});
+    }
+  }
+  return groups;
+}
+
+/**
+ * Add one object's outline to the current path, in stage coordinates.
+ *
+ * Only the silhouette matters, so fills, strokes and colours are ignored —
+ * and anything without an outline of its own (text, a bitmap, a symbol
+ * instance) contributes its box, which is what Flash's own mask does with
+ * a grouped object.
+ */
+function addObjectOutline(cx,o){
+  var hw=(o.width||0)/2,hh=(o.height||0)/2;
+  cx.save();
+  cx.translate((o.x||0)+hw,(o.y||0)+hh);
+  if(o.rotation)cx.rotate(o.rotation*Math.PI/180);
+  cx.scale(o.scaleX||1,o.scaleY||1);
+  if(o.type==="oval"){
+    cx.moveTo(Math.abs(hw),0);
+    cx.ellipse(0,0,Math.abs(hw),Math.abs(hh),0,0,Math.PI*2);
+  }else if(o.type==="path"&&o.path&&o.path.length&&window.FlashyTrace){
+    var psx=o.pathW?(o.width/o.pathW):1,psy=o.pathH?(o.height/o.pathH):1;
+    cx.translate(-hw,-hh);
+    if(psx!==1||psy!==1)cx.scale(psx,psy);
+    FlashyTrace.pathToContext(o.path,cx);
+  }else if((o.type==="pencil"||o.type==="brush")&&o.points&&o.points.length>3){
+    cx.moveTo(o.points[0]-hw,o.points[1]-hh);
+    for(var pi=2;pi<o.points.length;pi+=2)cx.lineTo(o.points[pi]-hw,o.points[pi+1]-hh);
+    cx.closePath();
+  }else{
+    cx.rect(-hw,-hh,o.width,o.height);
+  }
+  cx.restore();
+}
+
+/** Clip to the silhouette of a mask layer's objects. */
+function applyMaskClip(cx,objects){
+  cx.beginPath();
+  for(var i=0;i<objects.length;i++)addObjectOutline(cx,objects[i]);
+  cx.clip();
+}
+
 function paintObj(cx,o,opts){
   opts=opts||{};
   var chrome=!!opts.chrome;
@@ -3033,7 +3145,9 @@ function paintObj(cx,o,opts){
     if(sym&&depth<SYMBOL_MAX_DEPTH){
       // A Graphic instance tracks the parent playhead; frameObjects() stamps
       // the timing context onto the view object it hands us.
-      var symObjs=symbolFrameObjects(sym,symbolDisplayFrame(o,sym,o._parentFrame||1,o._startFrame||1));
+      var symGroups=symbolFrameGroups(sym,symbolDisplayFrame(o,sym,o._parentFrame||1,o._startFrame||1));
+      var symObjs=[];
+      for(var gq=0;gq<symGroups.length;gq++)symObjs=symObjs.concat(symGroups[gq].objects);
       if(symObjs.length){
         // Children are positioned in symbol space, whose origin is the
         // instance's top-left — shift there from the centre.
@@ -3042,12 +3156,21 @@ function paintObj(cx,o,opts){
         // Through the rig plan, so a character rig nested inside a symbol
         // composes its hierarchy here exactly as addPlanned() does in the
         // export. Painting the flat list would drop every ancestor transform.
-        var symPlan=rigDrawPlan(symObjs);
-        for(var si=0;si<symPlan.length;si++){
-          paintPlanned(cx,symPlan[si],{chrome:chrome,depth:depth+1});
+        for(var gp=0;gp<symGroups.length;gp++){
+          var grp=symGroups[gp];
+          if(grp.mask){
+            cx.save();
+            applyMaskClip(cx,grp.mask);
+          }
+          var gplan=rigDrawPlan(grp.objects);
+          for(var gq2=0;gq2<gplan.length;gq2++){
+            paintPlanned(cx,gplan[gq2],{chrome:false,depth:depth+1});
+          }
+          if(grp.mask)cx.restore();
         }
         cx.restore();
-      }else if(chrome){
+      }
+      if(!symObjs.length&&chrome){
         cx.fillStyle="#CCCCFF";cx.globalAlpha=alpha*0.3;
         cx.fillRect(-hw,-hh,o.width,o.height);
         cx.strokeStyle="#6666CC";cx.lineWidth=1;cx.globalAlpha=alpha;
@@ -4731,7 +4854,11 @@ function updateProps(){
       row("Name",curLayerObj.name,function(v){pushUndo();curLayerObj.name=v;fullRefresh();},{width:"90px"});
       row("Visible",curLayerObj.visible,function(v){pushUndo();curLayerObj.visible=v;fullRefresh();},{type:"checkbox"});
       row("Locked",curLayerObj.locked,function(v){pushUndo();curLayerObj.locked=v;fullRefresh();},{type:"checkbox"});
-      row("Type",curLayerObj.layerType||"normal",function(v){pushUndo();curLayerObj.layerType=v;},{type:"select",width:"80px",options:[["normal","Normal"],["guide","Guide"],["mask","Mask"]]});
+      /* "Masked" is the other half of a mask: the layer being clipped. Flash
+         linked them by indentation; here the pair is a mask layer and the
+         run of masked layers directly beneath it. */
+      row("Type",curLayerObj.layerType||"normal",function(v){pushUndo();curLayerObj.layerType=v;fullRefresh();},
+        {type:"select",width:"80px",options:[["normal","Normal"],["guide","Guide"],["mask","Mask"],["masked","Masked"]]});
 
       // Outline color
       colorRow("Outline",curLayerObj.outlineColor||"#4488CC",function(nc){pushUndo();curLayerObj.outlineColor=nc;});
@@ -7542,7 +7669,7 @@ function serializeLayers(layers){
         return{
           index:kf.index,duration:kf.duration,
           tweenType:kf.tweenType,easing:kf.easing,
-          script:kf.script,
+          script:kf.script,label:kf.label||"",
           sound:kf.sound?cloneSound(kf.sound):null,
           objects:kf.objects.map(plainObj)
         };
@@ -7623,6 +7750,10 @@ function serializeDoc(){
     sounds:serializeSounds(doc.sounds),
     // …and so do images, for the same reason.
     bitmaps:serializeBitmaps(doc.bitmaps),
+    /* "as2" marks a document that came from a .swf or .fla: its scripts are
+       ActionScript and the exported player compiles them against the AS2
+       scope rather than running them as plain JavaScript. */
+    scriptDialect:doc.scriptDialect||"js",
     // Character rigs: the templates and pose libraries. The hierarchy and
     // current pose ride along on the keyframe objects themselves.
     characters:serializeCharacters(doc.characters)
@@ -7666,6 +7797,7 @@ function reviveKeyframe(kd){
   kf.tweenType=kd.tweenType||"none";
   kf.easing=kd.easing||"linear";
   kf.script=kd.script||"";
+  kf.label=kd.label||"";
   kf.sound=(kd.sound&&kd.sound.asset)?cloneSound(kd.sound):null;
   kf.objects=(kd.objects||[]).map(reviveObject);
   return kf;
@@ -7721,6 +7853,7 @@ function deserializeDoc(d){
   doc.library=reviveLibrary(d.library);
   doc.sounds=reviveSounds(d.sounds);
   doc.bitmaps=reviveBitmaps(d.bitmaps);
+  doc.scriptDialect=d.scriptDialect==="as2"?"as2":"js";
   doc.characters=reviveCharacters(d.characters);
   doc.layers=reviveLayers(d.layers);
   // Decoding is async; the timeline draws flat bars until the peaks land and
@@ -7787,8 +7920,9 @@ function getEngineSource(callback){
   });
 }
 var _cachedAS2Source=null;
-/** True if anything in the document carries object handlers. */
+/** True if the export needs the AS2 runtime: handlers, or imported scripts. */
 function docHasClipScripts(d){
+  if(d.scriptDialect==="as2")return true;
   var found=false;
   var scan=function(layers){
     (layers||[]).forEach(function(l){
@@ -7954,6 +8088,56 @@ function exportRuntime(data, canvas, options) {
   }
 
   /** What a library symbol shows on its own `frame`, bottom layer first. */
+  /**
+   * A symbol's content at a frame, grouped by mask — the runtime's twin of
+   * the editor's symbolFrameGroups(). Masks live inside symbols far more
+   * often than on the root, and a flattened symbol draws every mask's own
+   * artwork over the scene it was supposed to be clipping.
+   */
+  function symbolGroups(sym, frame) {
+    if (!sym) return [];
+    if (!sym.layers) {
+      return (sym.objects && sym.objects.length) ? [{ mask: null, objects: sym.objects }] : [];
+    }
+    var objectsAt = function (layer) {
+      if (!layer || layer.visible === false) return [];
+      for (var k = layer.keyframes.length - 1; k >= 0; k--) {
+        var kf = layer.keyframes[k];
+        if (frame >= kf.index && frame < kf.index + kf.duration) return kf.objects;
+      }
+      return [];
+    };
+    var groups = layerGroups(sym.layers);
+    var out = [];
+    for (var gi = groups.length - 1; gi >= 0; gi--) {
+      var g = groups[gi];
+      var objs = [];
+      for (var i = g.layers.length - 1; i >= 0; i--) objs = objs.concat(objectsAt(g.layers[i]));
+      if (!objs.length) continue;
+      var maskObjs = null;
+      if (g.mask) {
+        maskObjs = objectsAt(g.mask);
+        if (!maskObjs.length) continue;
+      }
+      out.push({ mask: maskObjs, objects: objs });
+    }
+    return out;
+  }
+
+  /** Build a symbol's frame into `host`, clipping each masked run. */
+  function addSymbolFrame(host, sym, frame, depth, startFrame, keyPrefix) {
+    var groups = symbolGroups(sym, frame);
+    for (var gi = 0; gi < groups.length; gi++) {
+      var target = host;
+      if (groups[gi].mask) {
+        target = maskedContainer(groups[gi].mask);
+        host.addChild(target);
+      }
+      addPlanned(target, groups[gi].objects, depth, frame, startFrame,
+        keyPrefix == null ? null : keyPrefix + ":g" + gi);
+    }
+  }
+
   function symbolObjects(sym, frame) {
     if (!sym) return [];
     if (!sym.layers) return sym.objects || [];
@@ -8002,7 +8186,17 @@ function exportRuntime(data, canvas, options) {
    * hover the moment you moved the mouse. Those two are therefore built
    * once, cached by position in the document, and re-used.
    * -------------------------------------------------------------------- */
+  /* Every built clip gets an id, so the things inside it can be cached by a
+     key that is stable for as long as that clip is. Without it a symbol
+     rebuilds its contents on every tick: a button inside one never keeps
+     its hover, and a scripted object inside one is replaced the instant
+     after its handler moves it — which looks exactly like the handler not
+     working. */
+  var clipSeq = 0;
   var instanceCache = Object.create(null);
+  /* Objects with handlers, kept for the same reason and keyed the same way,
+     but separately: a scripted shape is not a symbol instance. */
+  var scriptedCache = Object.create(null);
   function cachedInstance(key, symbolName, behavior, make) {
     var hit = instanceCache[key];
     if (hit && hit.symbolName === symbolName && hit.behavior === behavior) return hit.node;
@@ -8014,20 +8208,68 @@ function exportRuntime(data, canvas, options) {
   /** A MovieClip with the symbol's own timeline, running independently. */
   function buildMovieClip(sym, o, depth) {
     var mc = new Flashy.MovieClip();
+    var clipKey = "c" + (++clipSeq);
     var total = symFrames(sym);
     mc.timeline.setTotalFrames(total);
     mc.loop = (o.loopMode || "loop") !== "once";
+    /* A symbol's own labels and scripts, which is where most of an imported
+       movie's behaviour lives — the root is usually three frames of menu. */
+    var symScripts = {};
+    (sym.layers || []).forEach(function (la) {
+      (la.keyframes || []).forEach(function (k) {
+        if (k.label) mc.timeline.addLabel(k.label, k.index);
+        if (k.script && k.script.trim()) {
+          (symScripts[k.index] = symScripts[k.index] || []).push(k.script);
+        }
+      });
+    });
+    var symCompiled = {};
     for (var f = 1; f <= total; f++) {
       (function (fr) {
         mc.timeline.addFrameScript(fr, function () {
           this.removeAllChildren();
-          var kids = symbolObjects(sym, fr);
-          addPlanned(this, kids, depth + 1, fr, 1, null);
+          addSymbolFrame(this, sym, fr, depth + 1, 1, clipKey + ":" + fr);
+          var list = symScripts[fr];
+          if (!list) return;
+          for (var i = 0; i < list.length; i++) {
+            var ck = fr + ":" + i;
+            try {
+              if (!(ck in symCompiled)) {
+                symCompiled[ck] = as2
+                  ? Flashy.AS2.frameScript(this, list[i], { stage: stage })
+                  : new Function("stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root", "Flashy", list[i]);
+              }
+              var run = symCompiled[ck];
+              if (!run) continue;
+              if (as2) run();
+              else {
+                var self = this;
+                run.call(self,
+                  function () { self.stop(); },
+                  function () { self.play(); },
+                  function (fv) { self.gotoAndPlay(fv); },
+                  function (fv) { self.gotoAndStop(fv); },
+                  stage, root, Flashy);
+              }
+            } catch (e) {
+              if (typeof console !== "undefined") console.error("Flashy: symbol frame script failed", e);
+            }
+          }
         });
       })(f);
     }
     if ((o.loopMode || "loop") === "single") mc.gotoAndStop(Math.max(1, o.firstFrame || 1));
     else if (o.firstFrame > 1) mc.gotoAndPlay(o.firstFrame);
+    else if (!mc._primed) {
+      /* Build its first frame now rather than on its first tick. A clip
+         created this frame should be drawn this frame — otherwise every
+         nested symbol flashes in a frame late, which on a cartoon where
+         clips are created constantly is a permanent one-frame lag. */
+      mc._primed = true;
+      mc.timeline.update(mc.currentFrame);
+      var firstScript = mc.timeline.frameScripts[mc.currentFrame];
+      if (firstScript) firstScript.call(mc);
+    }
     return mc;
   }
 
@@ -8046,15 +8288,19 @@ function exportRuntime(data, canvas, options) {
    */
   function buildButton(sym, o, depth) {
     var btn = new Flashy.MovieClip();
+    var btnKey = "b" + (++clipSeq);
     var total = symFrames(sym);
     var states = {};
     BTN_ORDER.forEach(function (name, i) {
       var fr = Math.min(i + 1, total);
       var holder = new Flashy.MovieClip();
-      var kids = symbolObjects(sym, fr);
-      addPlanned(holder, kids, depth + 1, fr, 1, null);
-      // The hit frame defines the clickable area but is never drawn.
-      holder.visible = (name === "up");
+      addSymbolFrame(holder, sym, fr, depth + 1, 1, btnKey + ":" + name);
+      /* The hit frame defines the clickable area but is never drawn, so it
+         is visible (hit testing skips invisible children) at alpha 0. It
+         has to start that way rather than wait for the first refresh, or a
+         button is unclickable for the frame after it appears — which on a
+         menu that has just faded in is exactly when it gets clicked. */
+      holder.visible = (name === "up" || name === "hit");
       if (name === "hit") holder.alpha = 0;
       states[name] = holder;
       btn.addChild(holder);
@@ -8107,29 +8353,59 @@ function exportRuntime(data, canvas, options) {
     var hw = (o.width || 0) / 2, hh = (o.height || 0) / 2;
     var node;
 
+    /* An object whose handlers move it owns its own position from then on.
+       The root rebuilds its display list every frame, so without this the
+       node a handler just moved is thrown away and rebuilt where the
+       document says — which looks exactly like the handler never ran. */
+    if (o.clipScript && key) {
+      var scripted = scriptedCache[key];
+      if (scripted && scripted.script === o.clipScript) return scripted.node;
+    }
+
+    /* Whether the timeline may overwrite this node's transform this frame.
+       Flash applies a keyframe's values when it places an object, not on
+       every tick it sits there — so a clip that a script has moved, hidden
+       or faded stays that way until the timeline actually changes. This
+       runtime rebuilds the display list every tick, so without the
+       distinction every `_visible = false` is undone a sixtieth of a second
+       later. A tween is the timeline driving the object on purpose, so it
+       always wins. */
+    var sticky = false;
+
     if (o.type === "symbol") {
-      node = new Flashy.MovieClip();
       var sym = data.library && data.library[o.symbolName];
-      if (sym && depth < SYM_MAX_DEPTH) {
+      var behavior = behaviorOf(o, sym);
+      var stateful = behavior === "movieclip" || behavior === "button";
+      /* A stateful instance is cached WHOLE — wrapper and contents — not
+         just its contents. Caching only the inside and rebuilding the
+         wrapper around it every frame loses the wrapper's transform, which is
+         where the instance's position lives. */
+      var hit = (key && stateful) ? instanceCache[key] : null;
+      if (hit && hit.symbolName === o.symbolName && hit.behavior === behavior) {
+        node = hit.node;
+        if (!o.__tween && hit.placedAt === startFrame) return node;
+        hit.placedAt = startFrame;
+        if (node.__inner) { node.__inner.x = -hw; node.__inner.y = -hh; }
+      }
+      if (!node) node = new Flashy.MovieClip();
+      if (!hit && sym && depth < SYM_MAX_DEPTH) {
         // Symbol space has its origin at the instance's top-left corner.
         var inner;
-        var behavior = behaviorOf(o, sym);
-        if (behavior === "movieclip" || behavior === "button") {
-          // Stateful: built once and reused, or its timeline/hover resets
-          // every frame. Without a key (nested inside another symbol) it is
-          // rebuilt, which is correct — the parent owns its lifetime.
-          var make = behavior === "button"
-            ? function () { return buildButton(sym, o, depth); }
-            : function () { return buildMovieClip(sym, o, depth); };
-          inner = key ? cachedInstance(key, o.symbolName, behavior, make) : make();
+        if (stateful) {
+          inner = behavior === "button" ? buildButton(sym, o, depth) : buildMovieClip(sym, o, depth);
+          if (key) {
+            instanceCache[key] = {
+              node: node, symbolName: o.symbolName, behavior: behavior, placedAt: startFrame
+            };
+          }
         } else {
           // Graphic: parent-driven, so rebuilding each frame is the point.
           inner = new Flashy.MovieClip();
           var gf = graphicFrame(o, sym, parentFrame, startFrame);
-          var kids = symbolObjects(sym, gf);
-          addPlanned(inner, kids, depth + 1, gf, 1, null);
+          addSymbolFrame(inner, sym, gf, depth + 1, 1, (key || "g" + (++clipSeq)) + ":f" + gf);
         }
         inner.x = -hw; inner.y = -hh;
+        node.__inner = inner;
         node.addChild(inner);
       }
     } else if (o.type === "text") {
@@ -8228,6 +8504,13 @@ function exportRuntime(data, canvas, options) {
       }
     }
 
+    if (sticky && node.__placed) {
+      /* Reused, unchanged, and not tweening: leave it exactly as the movie
+         left it. Returning the same node keeps its children, its playhead
+         and whatever its scripts have done. */
+      return node;
+    }
+    node.__placed = true;
     node.x = (o.x || 0) + hw;
     node.y = (o.y || 0) + hh;
     if (isRigPart(o)) {
@@ -8259,6 +8542,14 @@ function exportRuntime(data, canvas, options) {
       };
       var attached = Flashy.AS2.attach(node, o.clipScript, { stage: stage });
       if (attached) node.__as2 = attached;
+      if (key) {
+        /* Handlers listen on the stage, so a node that is being replaced has
+           to take its listeners with it — otherwise every rebuild leaves a
+           set behind, firing at an object nobody can see. */
+        var prior = scriptedCache[key];
+        if (prior && prior.node !== node && prior.node.__as2) prior.node.__as2.detach();
+        scriptedCache[key] = { node: node, script: o.clipScript };
+      }
     }
     return node;
   }
@@ -8343,6 +8634,22 @@ function exportRuntime(data, canvas, options) {
       if (k.script && k.script.trim()) (frameScripts[k.index] = frameScripts[k.index] || []).push(k.script);
     });
   });
+  /* Frame labels, so `gotoAndPlay("menuLabel")` goes somewhere. An imported
+     movie navigates by label almost exclusively — the frame numbers in its
+     scripts are the exception. */
+  data.layers.forEach(function (la) {
+    (la.keyframes || []).forEach(function (k) {
+      if (k.label) root.timeline.addLabel(k.label, k.index);
+    });
+  });
+
+  /* A document that came from a .swf or .fla carries ActionScript, not the
+     editor's own JavaScript: it expects `_root`, `_parent`, `_quality`,
+     `Mouse`, and variables that live on the timeline. Those scripts are
+     compiled against the AS2 scope; anything authored here keeps the plain
+     JavaScript it was written in. */
+  var as2 = data.scriptDialect === "as2" && !!Flashy.AS2;
+
   var compiled = {}, lastScriptFrame = 0;
   function runFrameScripts(fr) {
     // Flash runs a frame script when the playhead ENTERS the frame, not on
@@ -8355,14 +8662,20 @@ function exportRuntime(data, canvas, options) {
       var key = fr + ":" + i;
       try {
         if (!compiled[key]) {
-          compiled[key] = new Function("stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root", "Flashy", list[i]);
+          compiled[key] = as2
+            ? Flashy.AS2.frameScript(root, list[i], { stage: stage })
+            : new Function("stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root", "Flashy", list[i]);
         }
-        compiled[key].call(root,
-          function () { root.stop(); },
-          function () { root.play(); },
-          function (f) { root.gotoAndPlay(f); },
-          function (f) { root.gotoAndStop(f); },
-          stage, root, Flashy);
+        if (!compiled[key]) continue;
+        if (as2) compiled[key]();
+        else {
+          compiled[key].call(root,
+            function () { root.stop(); },
+            function () { root.play(); },
+            function (f) { root.gotoAndPlay(f); },
+            function (f) { root.gotoAndStop(f); },
+            stage, root, Flashy);
+        }
       } catch (e) {
         if (typeof console !== "undefined") console.error("Flashy: frame " + fr + " script failed", e);
       }
@@ -8374,57 +8687,153 @@ function exportRuntime(data, canvas, options) {
     return ef(Math.min(1, Math.max(0, t)));
   }
 
+  /* ---- mask layers --------------------------------------------------- *
+   * A layer marked `mask` clips the run of `masked` layers beneath it, and
+   * its own artwork is never drawn. The clip is a canvas path built from
+   * the mask objects' outlines, applied by a container that wraps the
+   * layers it masks — the same silhouette the editor's stage uses, so an
+   * export looks like what was authored.
+   * -------------------------------------------------------------------- */
+  function objectOutline(ctx2, o) {
+    var hw = (o.width || 0) / 2, hh = (o.height || 0) / 2;
+    ctx2.save();
+    ctx2.translate((o.x || 0) + hw, (o.y || 0) + hh);
+    if (o.rotation) ctx2.rotate(o.rotation * Math.PI / 180);
+    ctx2.scale(o.scaleX || 1, o.scaleY || 1);
+    if (o.type === "oval") {
+      ctx2.moveTo(Math.abs(hw), 0);
+      ctx2.ellipse(0, 0, Math.abs(hw), Math.abs(hh), 0, 0, Math.PI * 2);
+    } else if (o.type === "path" && o.path && o.path.length) {
+      var psx = o.pathW ? (o.width / o.pathW) : 1, psy = o.pathH ? (o.height / o.pathH) : 1;
+      ctx2.translate(-hw, -hh);
+      if (psx !== 1 || psy !== 1) ctx2.scale(psx, psy);
+      var cmds = o.path;
+      for (var pi = 0; pi < cmds.length;) {
+        var op = cmds[pi];
+        if (op === 0) { ctx2.moveTo(cmds[pi + 1], cmds[pi + 2]); pi += 3; }
+        else if (op === 1) { ctx2.lineTo(cmds[pi + 1], cmds[pi + 2]); pi += 3; }
+        else if (op === 2) { ctx2.quadraticCurveTo(cmds[pi + 1], cmds[pi + 2], cmds[pi + 3], cmds[pi + 4]); pi += 5; }
+        else { ctx2.closePath(); pi += 1; }
+      }
+    } else if ((o.type === "pencil" || o.type === "brush") && o.points && o.points.length > 3) {
+      ctx2.moveTo(o.points[0] - hw, o.points[1] - hh);
+      for (var qi = 2; qi < o.points.length; qi += 2) ctx2.lineTo(o.points[qi] - hw, o.points[qi + 1] - hh);
+      ctx2.closePath();
+    } else {
+      ctx2.rect(-hw, -hh, o.width, o.height);
+    }
+    ctx2.restore();
+  }
+
+  function maskedContainer(maskObjects) {
+    var holder = new Flashy.MovieClip();
+    holder.render = function (ctx2) {
+      ctx2.save();
+      ctx2.beginPath();
+      for (var i = 0; i < maskObjects.length; i++) objectOutline(ctx2, maskObjects[i]);
+      ctx2.clip();
+      Flashy.MovieClip.prototype.render.call(this, ctx2);
+      ctx2.restore();
+    };
+    return holder;
+  }
+
+  /** The layer runs: each either plain, or a mask plus what it masks. */
+  function layerGroups(layers) {
+    var groups = [], i = 0;
+    while (i < layers.length) {
+      if ((layers[i].layerType || "normal") === "mask") {
+        var mask = layers[i], run = [], j = i + 1;
+        while (j < layers.length && (layers[j].layerType || "normal") === "masked") { run.push(layers[j]); j++; }
+        groups.push({ mask: mask, layers: run });
+        i = j;
+      } else {
+        var plain = [];
+        while (i < layers.length && (layers[i].layerType || "normal") !== "mask") { plain.push(layers[i]); i++; }
+        groups.push({ mask: null, layers: plain });
+      }
+    }
+    return groups;
+  }
+  var groups = layerGroups(data.layers);
+
   for (var f = 1; f <= maxF; f++) {
     (function (fr) {
       root.timeline.addFrameScript(fr, function () {
         this.removeAllChildren();
-        for (var li = data.layers.length - 1; li >= 0; li--) {
-          var la = data.layers[li];
-          if (la.visible === false) continue;
-          var kf = null;
-          for (var ki = la.keyframes.length - 1; ki >= 0; ki--) {
-            var k = la.keyframes[ki];
-            if (fr >= k.index && fr < k.index + k.duration) { kf = k; break; }
+        for (var gi = groups.length - 1; gi >= 0; gi--) {
+          var group = groups[gi];
+          var host = this;
+          if (group.mask) {
+            var maskObjs = layerObjects(group.mask, fr);
+            if (!maskObjs.length) continue;      // nothing shown through it
+            host = maskedContainer(maskObjs);
+            this.addChild(host);
           }
-          if (!kf) continue;
-
-          var nk = kf.tweenType && kf.tweenType !== "none" && kf.duration > 1
-            ? la.keyframes[la.keyframes.indexOf(kf) + 1] : null;
-          // Divide by duration (not duration-1) so the frame holding the next
-          // keyframe is the one that shows the destination — same as the stage.
-          var t = nk ? easeAt((fr - kf.index) / kf.duration, kf.easing) : 0;
-
-          var frameObjs = [];
-          for (var oi = 0; oi < kf.objects.length; oi++) {
-            var a = kf.objects[oi];
-            var o = a;
-            var b = nk ? nk.objects[oi] : null;
-            if (b) {
-              o = {};
-              for (var prop in a) o[prop] = a[prop];
-              o.x = a.x + (b.x - a.x) * t;
-              o.y = a.y + (b.y - a.y) * t;
-              o.width = a.width + (b.width - a.width) * t;
-              o.height = a.height + (b.height - a.height) * t;
-              o.rotation = (a.rotation || 0) + ((b.rotation || 0) - (a.rotation || 0)) * t;
-              o.scaleX = (a.scaleX || 1) + ((b.scaleX || 1) - (a.scaleX || 1)) * t;
-              o.scaleY = (a.scaleY || 1) + ((b.scaleY || 1) - (a.scaleY || 1)) * t;
-              var aa = a.alpha != null ? a.alpha : 1, ba = b.alpha != null ? b.alpha : 1;
-              o.alpha = aa + (ba - aa) * t;
-            }
-            frameObjs.push(o);
-          }
-          // Stable identity for stateful symbol instances, so a MovieClip
-          // keeps its own playhead and a Button keeps its hover across the
-          // root's per-frame rebuild. addPlanned appends the object's index to
-          // the prefix, so the key is the same one this loop used to build.
-          addPlanned(this, frameObjs, 0, fr, kf.index, li + ":" + kf.index);
+          buildLayerRun(host, group.layers, fr, gi);
         }
         runFrameScripts(fr);
         refreshButtons();
         if (track) track.update(fr, false);
       });
     })(f);
+  }
+
+  function activeKeyframe(la, fr) {
+    for (var ki = la.keyframes.length - 1; ki >= 0; ki--) {
+      var k = la.keyframes[ki];
+      if (fr >= k.index && fr < k.index + k.duration) return k;
+    }
+    return null;
+  }
+
+  /** The objects a layer shows on a frame, interpolated if it is tweening. */
+  function layerObjects(la, fr) {
+    if (la.visible === false) return [];
+    var kf = activeKeyframe(la, fr);
+    if (!kf) return [];
+    var nk = kf.tweenType && kf.tweenType !== "none" && kf.duration > 1
+      ? la.keyframes[la.keyframes.indexOf(kf) + 1] : null;
+    // Divide by duration (not duration-1) so the frame holding the next
+    // keyframe is the one that shows the destination — same as the stage.
+    var t = nk ? easeAt((fr - kf.index) / kf.duration, kf.easing) : 0;
+    var out = [];
+    for (var oi = 0; oi < kf.objects.length; oi++) {
+      var a = kf.objects[oi];
+      var o = a;
+      var b = nk ? nk.objects[oi] : null;
+      if (b) {
+        o = {};
+        for (var prop in a) o[prop] = a[prop];
+        o.x = a.x + (b.x - a.x) * t;
+        o.y = a.y + (b.y - a.y) * t;
+        o.width = a.width + (b.width - a.width) * t;
+        o.height = a.height + (b.height - a.height) * t;
+        o.rotation = (a.rotation || 0) + ((b.rotation || 0) - (a.rotation || 0)) * t;
+        o.scaleX = (a.scaleX || 1) + ((b.scaleX || 1) - (a.scaleX || 1)) * t;
+        o.scaleY = (a.scaleY || 1) + ((b.scaleY || 1) - (a.scaleY || 1)) * t;
+        var aa = a.alpha != null ? a.alpha : 1, ba = b.alpha != null ? b.alpha : 1;
+        o.alpha = aa + (ba - aa) * t;
+        o.__tween = true;              // the timeline is driving this one
+      }
+      out.push(o);
+    }
+    return out;
+  }
+
+  /** Build one run of layers into `host`, bottom layer first. */
+  function buildLayerRun(host, layers, fr, groupIndex) {
+    for (var li = layers.length - 1; li >= 0; li--) {
+      var la = layers[li];
+      if (la.visible === false) continue;
+      var kf = activeKeyframe(la, fr);
+      if (!kf) continue;
+      /* Stable identity for stateful instances — a MovieClip keeps its own
+         playhead, a Button its hover, and a scripted object whatever its
+         handlers did to it — across the root's per-frame rebuild. */
+      addPlanned(host, layerObjects(la, fr), 0, fr, kf.index,
+        groupIndex + ":" + li + ":" + kf.index);
+    }
   }
 
   // Buttons clear their state on the stage (which is dispatched to first) and
@@ -8648,7 +9057,29 @@ function exportAsSVG() {
   var s = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"'+
           ' width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">\n';
   s += '<rect width="'+w+'" height="'+h+'" fill="'+xmlAttr(doc.backgroundColor||"#fff")+'"/>\n';
-  frameObjects(doc.layers, frame).forEach(function (o) { s += _objToSVG(o, 0); });
+  /* Mask layers become clipPaths. The mask's own objects are emitted inside
+     one — their fills and strokes are ignored there, only the silhouette
+     counts — and the layers it masks are wrapped in a group that references
+     it, which is the same picture the stage and the HTML export draw. */
+  var svgGroups = maskGroups(doc.layers);
+  for (var gi = svgGroups.length - 1; gi >= 0; gi--) {
+    var group = svgGroups[gi];
+    if (!group.layers.length) continue;
+    var objects = frameObjects(group.layers, frame);
+    if (!group.mask) {
+      objects.forEach(function (o) { s += _objToSVG(o, 0); });
+      continue;
+    }
+    var maskObjects = frameObjects([group.mask], frame);
+    if (!maskObjects.length) continue;
+    var clipId = "fy-mask-" + gi;
+    s += '<clipPath id="' + clipId + '">';
+    maskObjects.forEach(function (o) { s += _objToSVG(o, 0); });
+    s += '</clipPath>\n';
+    s += '<g clip-path="url(#' + clipId + ')">\n';
+    objects.forEach(function (o) { s += _objToSVG(o, 0); });
+    s += '</g>\n';
+  }
   s += '</svg>';
   dlFile(s, "animation.svg", "image/svg+xml");
 }
@@ -9413,11 +9844,66 @@ function importFromStage(flashyStage){
   alert(msg);
 }
 
+/**
+ * Test Movie: play the document as it stands, in a window of its own.
+ *
+ * This used to generate the whole HTML export, turn it into a blob and open
+ * that. For anything hand-drawn it is instant; for an imported Flash movie
+ * it is not — serialising a 75MB document into one string is minutes of
+ * work and a lot of memory for something nobody is going to save.
+ *
+ * So the window loads the same scripts from the same origin and is handed
+ * the document **as an object**, then runs the very same player the export
+ * ships. Nothing is serialised, so the cost no longer depends on how big
+ * the movie is. The export itself is unchanged: that one has to be a file
+ * you can send someone.
+ */
 function testMovie(){
-  genHTML(function(html){
-    var blob=new Blob([html],{type:"text/html"});
-    var url=URL.createObjectURL(blob);
-    window.open(url,"_blank");
+  var w=window.open("","_blank");
+  if(!w){
+    showMessage("Test Movie","The browser blocked the preview window. Allow pop-ups for this page and try again.");
+    return;
+  }
+  var data=serializeDoc();
+  var needsAS2=docHasClipScripts(data);
+  var scripts=["flashy.js"];
+  if(needsAS2)scripts.push("flashy-as2.js");
+  var base=location.href.replace(/[^/]*$/,"");
+  var html="<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Test Movie</title>"+
+    "<style>*{margin:0;padding:0}body{background:#111;display:flex;align-items:center;"+
+    "justify-content:center;min-height:100vh;overflow:hidden}canvas{display:block}</style>"+
+    "</head><body><canvas id=\"stage\"></canvas></body></html>";
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+
+  var loaded=0;
+  var runWhenReady=function(){
+    if(++loaded<scripts.length)return;
+    try{
+      w.__flashyData=data;
+      // The player is compiled in the preview window, so its timers, input
+      // and engine are all that window's own.
+      var run=w.eval("("+exportRuntime.toString()+")");
+      w.__stage=run(w.__flashyData,w.document.getElementById("stage"),{});
+    }catch(err){
+      if(window.console)console.error("Flashy: Test Movie failed",err);
+      showMessage("Test Movie","The preview could not start:\n"+((err&&err.message)||err));
+    }
+  };
+  scripts.forEach(function(src){
+    var el=w.document.createElement("script");
+    el.src=base+src;
+    /* A script element added from code is async by default, so flashy-as2.js
+       could run before the engine it extends and quietly fail to register —
+       after which every imported script falls back to plain JavaScript and
+       dies on `_root`. `async = false` keeps them in order. */
+    el.async=false;
+    el.onload=runWhenReady;
+    el.onerror=function(){
+      showMessage("Test Movie","Could not load "+src+" for the preview.");
+    };
+    w.document.head.appendChild(el);
   });
 }
 

@@ -362,6 +362,25 @@ Drive the app through its published seams, not its internals:
   - Only a MovieClip dispatches its own `enterFrame`; a Shape's handler has
     to ride the stage's, or a handler on a piece of artwork silently does
     nothing.
+- **A SWF's button actions are found through the file's own offset field**,
+  not from wherever record parsing stops. Records carrying a filter or a
+  blend mode are longer, the position drifts by those bytes, and the handler
+  decompiles as garbage or as nothing — 199 buttons in the test movie came
+  in with empty bodies that way, which reads as "buttons do nothing".
+- **`parseActions` does not stop at an End record.** A function body is
+  length-delimited and may carry its own terminator; stopping there threw
+  away every record after the first function in a block.
+- **At frame level, AVM1's DefineLocal is a TIMELINE variable**, so the
+  decompiler emits `x = 1` there and `var x = 1` only inside functions.
+  Emitting `var` at frame level compiles to a function-local that vanishes
+  when the script ends — every variable a movie sets up on frame 1.
+- **The Stage runs frame 1's script when it primes.** Priming only marked
+  the root primed, so the first tick took the "advance" branch and frame 1
+  never ran: a `stop()` there did nothing.
+- **Test Movie does not serialise.** It opens a window, loads the same
+  scripts from the same origin and hands the document over as an object.
+  Generating the HTML export for a 75MB imported movie is minutes of work
+  for a preview nobody saves.
 - **Imports replace the document and start dirty.** `installImportedDoc` is
   `loadDocFromObject` minus `markSaved()`, because an imported movie has never
   been written to disk.

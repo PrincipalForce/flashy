@@ -202,7 +202,7 @@
   function keyframe(index, over) {
     var kf = {
       index: index, duration: 1, tweenType: 'none', easing: 'linear',
-      objects: [], script: '', sound: null
+      objects: [], script: '', label: '', sound: null
     };
     if (over) for (var k in over) if (Object.prototype.hasOwnProperty.call(over, k)) kf[k] = over[k];
     return kf;
@@ -313,7 +313,7 @@
     this.stats = {
       layers: 0, keyframes: 0, objects: 0, symbols: 0, shapes: 0,
       scripts: 0, sounds: 0, bitmaps: 0, texts: 0, tweens: 0, gradients: 0,
-      handlers: 0
+      handlers: 0, masks: 0
     };
     this.said = {};                // one warning per kind, not per placement
     /* Where every imported script ended up. A movie can put most of its code
@@ -1042,32 +1042,54 @@
     var layerInfo = (this.model.timeline && this.model.timeline.layers) || null;
     var layers = [];
 
+    /* A clip depth makes one placement the mask for everything between its
+       own depth and that clip depth — Flash's mask layer, written as a
+       range. Collect the ranges first so each layer knows which it is. */
+    var maskRanges = [];
+    states.forEach(function (snap) {
+      for (var d in snap) {
+        if (!snap[d].clipDepth) continue;
+        var from = Number(d), to = snap[d].clipDepth;
+        var known = maskRanges.some(function (r) { return r.from === from && r.to === to; });
+        if (!known) maskRanges.push({ from: from, to: to });
+      }
+    });
+    function layerTypeFor(depth) {
+      for (var i = 0; i < maskRanges.length; i++) {
+        if (depth === maskRanges[i].from) return 'mask';
+      }
+      for (var j = 0; j < maskRanges.length; j++) {
+        if (depth > maskRanges[j].from && depth <= maskRanges[j].to) return 'masked';
+      }
+      return 'normal';
+    }
+
     depths.forEach(function (depth, index) {
       var keyframes = self.depthKeyframes(depth, states, total);
       if (!keyframes.length) return;
       var meta = layerInfo && layerInfo[depth];
+      var type = layerTypeFor(depth);
       layers.push({
         name: (meta && meta.name) || self.layerName(depth, states),
         visible: meta ? meta.visible !== false : true,
         locked: meta ? !!meta.locked : false,
+        layerType: type,
         keyframes: keyframes
       });
+      if (type === 'mask') self.stats.masks++;
       self.stats.keyframes += keyframes.length;
     });
+
+    /* In the file a mask sits BELOW what it masks — a clip depth reaches
+       upwards from it. In a layer stack it sits above, which is both how
+       Flash showed it and how the renderers here find the run a mask
+       applies to, so each mask layer is lifted over its own range. */
+    layers = liftMasksAboveTheirRange(layers, maskRanges, depths);
 
     if (this.opts.coalesceLayers !== false) {
       layers = coalesceLayers(layers, this.opts.layerTarget);
     }
 
-    // Masks are a layer property this editor does not have yet.
-    var masked = states.some(function (snap) {
-      for (var d in snap) if (snap[d].clipDepth) return true;
-      return false;
-    });
-    if (masked) {
-      this.warn('mask', 'Mask layers were imported as ordinary layers — the ' +
-        'masked artwork is all visible.');
-    }
 
     var actions = this.actionsLayer(frames, labels, total, states, opts.initScripts,
       { root: opts.root });
@@ -1205,7 +1227,11 @@
       /* A script or a sound belongs to the frame it was written on, so it
          only rides along when the span still starts there. */
       var src = (ia && ia.kf.index === from) ? ia.kf : (ib && ib.kf.index === from) ? ib.kf : null;
-      if (src) { kf.script = src.script || ''; kf.sound = src.sound || null; }
+      if (src) {
+        kf.script = src.script || '';
+        kf.label = src.label || '';
+        kf.sound = src.sound || null;
+      }
       out.push(kf);
     }
     while (out.length && !out[out.length - 1].objects.length) out.pop();
@@ -1257,7 +1283,10 @@
     for (var i = layers.length - 1; i >= 0; i--) {
       var layer = layers[i];
       var mine = layerSpans(layer);
-      var tweened = hasTween(layer);
+      var type = layer.layerType || 'normal';
+      /* A mask and the layers it masks are a group whose order IS the
+         feature; packing them into other layers would dissolve it. */
+      var tweened = hasTween(layer) || type === 'mask' || type === 'masked';
       var above = [];
       var host = -1;
       if (!tweened) {
@@ -1311,6 +1340,38 @@
     return layers;
   }
 
+  /**
+   * Move each mask layer directly above the layers it masks.
+   *
+   * `layers` is top-first (descending depth) and `depths` matches it, so a
+   * mask's range is a contiguous block immediately before it. Lifting it to
+   * the front of that block turns a clip depth into Flash's own layer
+   * arrangement without changing what covers what.
+   */
+  function liftMasksAboveTheirRange(layers, maskRanges, depths) {
+    if (!maskRanges.length) return layers;
+    var byDepth = {};
+    for (var i = 0; i < layers.length; i++) byDepth[depths[i]] = layers[i];
+    var out = layers.slice();
+    maskRanges.forEach(function (range) {
+      var mask = byDepth[range.from];
+      if (!mask) return;
+      var at = out.indexOf(mask);
+      if (at < 0) return;
+      /* The topmost layer this mask covers: depths descend, so it is the
+         earliest index whose depth is inside the range. */
+      var target = -1;
+      for (var j = 0; j < out.length; j++) {
+        var d = depths[layers.indexOf(out[j])];
+        if (d > range.from && d <= range.to) { target = j; break; }
+      }
+      if (target < 0 || target > at) return;    // nothing above it to mask
+      out.splice(at, 1);
+      out.splice(target, 0, mask);
+    });
+    return out;
+  }
+
   /** Name a layer after whatever was on it, the way an author would. */
   Converter.prototype.layerName = function (depth, states) {
     var fallback = null;
@@ -1328,7 +1389,6 @@
       if (!fallback && c) fallback = c.kind.charAt(0).toUpperCase() + c.kind.slice(1) + ' ' + c.id;
     }
     var name = fallback || ('Depth ' + depth);
-    /* A mask layer cannot mask here, but it can at least be findable. */
     return isMask ? name + ' (mask)' : name;
   };
 
@@ -1426,7 +1486,7 @@
     var self = this;
     var entries = {};                  // frame → { script:[], sound }
     function at(f) {
-      if (!entries[f]) entries[f] = { script: [], sound: null };
+      if (!entries[f]) entries[f] = { script: [], sound: null, label: '' };
       return entries[f];
     }
 
@@ -1466,7 +1526,7 @@
       this.note(1, 'init');
     }
     for (var f in labels || {}) {
-      at(parseInt(f, 10)).script.push('// frame label: ' + labels[f]);
+      at(parseInt(f, 10)).label = labels[f];
     }
     frames.forEach(function (frame, i) {
       var n = i + 1;
@@ -1499,6 +1559,7 @@
       keyframes.push(keyframe(m, {
         duration: Math.max(1, next - m),
         script: e.script.join('\n'),
+        label: e.label || '',
         sound: e.sound
       }));
     });
@@ -1528,6 +1589,10 @@
       fps: Math.max(1, Math.round(this.model.fps || 24)),
       backgroundColor: hexColor(this.model.backgroundColor != null ? this.model.backgroundColor : 0xffffff),
       totalFrames: Math.max(root.totalFrames, 1),
+      /* These scripts are ActionScript, so the player has to run them with
+         AS2's scope — `_root`, `_parent`, timeline variables — rather than
+         as the plain JavaScript the editor's own scripts are. */
+      scriptDialect: 'as2',
       layers: root.layers,
       library: this.library,
       sounds: this.sounds,
@@ -1556,6 +1621,7 @@
         texts: this.stats.texts,
         gradients: this.stats.gradients,
         handlers: this.stats.handlers,
+        masks: this.stats.masks,
         scripts: this.stats.scripts,
         scriptsOnStage: this.scriptsOnStage,
         scriptsInSymbols: this.scriptsInSymbols,

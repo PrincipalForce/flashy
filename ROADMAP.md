@@ -412,10 +412,35 @@ origin and this engine draws it around the centre of its box, so a handler
 with `origin = {x: 39.1}` baked into it lands half a bounding box out unless
 the importer records the offset — which it now does, per object.
 
-**Known gaps**, each reported in the import dialog rather than dropped
-silently: masks (the editor has no mask layer), filters, AS3 control flow,
-`attachMovie`/`duplicateMovieClip` (reported once by the handler runtime
-rather than thrown), and LZMA-compressed SWFs (browsers have no LZMA
+**An imported movie plays.** The test movie — a 2008 AS2 game — now runs
+its preloader, navigates by script to its menu, suppresses the dialog its
+own save-state logic decides not to show, tracks the mouse with the eye
+handlers its author hand-wrote, and takes a click on ARCADE through to the
+level-select screen. Seven bugs stood between "imports" and "plays", and
+each was general rather than specific to that file:
+
+- Button condition actions were read from wherever record parsing stopped
+  rather than from the file's own offset field; any button with a filter or
+  a blend mode decompiled to nothing. 199 of 358 buttons in the test movie
+  had empty handlers.
+- Button conditions were reported as state transitions (`overDownToOverUp`)
+  rather than as the event names a handler listens for (`release`).
+- `parseActions` stopped at the first End record, which a length-delimited
+  function body may contain — losing everything after the first function.
+- `var x = 1` at frame level compiled to a function-local, so every variable
+  a movie sets up on frame 1 vanished when the script ended.
+- The Stage primed the root without running frame 1's script, so a `stop()`
+  there did nothing and the movie ran straight past its setup frame.
+- A clip's hit area was only live from its second frame, and the global hit
+  test returned whatever artwork was on top rather than asking the button.
+- Masks worked on the root but not inside symbols, where all 43 of the test
+  movie's masks live — so masked scenes drew their masks as flat shapes.
+
+**Known gaps**, each reported in the import dialog or the console rather
+than dropped silently: filters, AS3 control flow,
+`attachMovie`/`duplicateMovieClip`, handlers assigned from a frame script to
+a clip found by name (`flashy-as2.js` binds the property but that path has
+no passing test yet), and LZMA-compressed SWFs (browsers have no LZMA
 decoder).
 
 ### 🚧 17. Engine features Flash users expect

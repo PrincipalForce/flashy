@@ -192,24 +192,67 @@
     _height: [function (n) { return sizeOf(n).height * Math.abs(n.scaleY == null ? 1 : n.scaleY); },
       function (n, v) { var h = sizeOf(n).height; if (h) n.scaleY = Number(v) / h; }],
     _name: [function (n) { return n.name || ''; }, function (n, v) { n.name = String(v); }],
-    _currentframe: [function (n) { return n.currentFrame || 1; }],
-    _totalframes: [function (n) { return (n.timeline && n.timeline.totalFrames) || 1; }],
-    _framesloaded: [function (n) { return (n.timeline && n.timeline.totalFrames) || 1; }],
+    _currentframe: [function (n) { return timelineOf(n).currentFrame || 1; }],
+    _totalframes: [function (n) { var t = timelineOf(n); return (t.timeline && t.timeline.totalFrames) || 1; }],
+    _framesloaded: [function (n) { var t = timelineOf(n); return (t.timeline && t.timeline.totalFrames) || 1; }],
     _quality: [function () { return 'HIGH'; }],
     _focusrect: [function () { return false; }],
     _droptarget: [function () { return ''; }],
     _url: [function () { return typeof location !== 'undefined' ? location.href : ''; }]
   };
 
+  /**
+   * The node that actually carries a clip's timeline.
+   *
+   * An imported symbol instance is built as two nodes: a wrapper holding
+   * the transform and the instance name, and an inner node holding the
+   * symbol's own timeline. AS2 knows them as one clip, so `myClip.play()`
+   * arrives at the wrapper — whose timeline is one frame long, making the
+   * call do nothing at all.
+   */
+  function timelineOf(node) {
+    var inner = node.__inner;
+    if (inner && inner.timeline && inner.timeline.totalFrames > 1) return inner;
+    return node;
+  }
+
   var METHODS = {
-    play: function (n) { if (n.play) n.play(); },
-    stop: function (n) { if (n.stop) n.stop(); },
-    gotoAndPlay: function (n, f) { if (n.gotoAndPlay) n.gotoAndPlay(f); },
-    gotoAndStop: function (n, f) { if (n.gotoAndStop) n.gotoAndStop(f); },
-    nextFrame: function (n) { if (n.nextFrame) n.nextFrame(); },
-    prevFrame: function (n) { if (n.prevFrame) n.prevFrame(); },
+    /* The document is already in memory, so a preloader's own test —
+       "is it all here yet?" — is true from the first frame. Returning
+       nothing instead left every imported movie sitting on its preloader
+       forever, which looks exactly like a movie that does not play. */
+    getBytesLoaded: function () { return 1000; },
+    getBytesTotal: function () { return 1000; },
+    play: function (n) { var t = timelineOf(n); if (t.play) t.play(); },
+    stop: function (n) { var t = timelineOf(n); if (t.stop) t.stop(); },
+    gotoAndPlay: function (n, f) { var t = timelineOf(n); if (t.gotoAndPlay) t.gotoAndPlay(f); },
+    gotoAndStop: function (n, f) { var t = timelineOf(n); if (t.gotoAndStop) t.gotoAndStop(f); },
+    nextFrame: function (n) { var t = timelineOf(n); if (t.nextFrame) t.nextFrame(); },
+    prevFrame: function (n) { var t = timelineOf(n); if (t.prevFrame) t.prevFrame(); },
     removeMovieClip: function (n) { if (n.removeFromParent) n.removeFromParent(); }
   };
+
+  /**
+   * An object that swallows whatever is done to it.
+   *
+   * Reading a property gives another one, calling it gives another one,
+   * and assigning to it is accepted — so `com.newgrounds.API.connect(key,
+   * id, root)` runs to completion and does nothing, instead of throwing on
+   * its first dot and stopping everything after it.
+   */
+  function inertPackage(name) {
+    var fn = function () { return inertPackage(name + '()'); };
+    return new Proxy(fn, {
+      get: function (t, prop) {
+        if (prop === 'toString' || prop === Symbol.toPrimitive) return function () { return ''; };
+        if (prop === 'valueOf') return function () { return undefined; };
+        if (typeof prop === 'symbol') return undefined;
+        return inertPackage(name + '.' + String(prop));
+      },
+      set: function () { return true; },
+      apply: function () { return inertPackage(name); }
+    });
+  }
 
   /** Things an AS2 script can name that are not on the clip. */
   function globalsFor(ctx) {
@@ -221,6 +264,8 @@
       int: function (v) { return Math.trunc(Number(v)) || 0; },
       random: function (n) { return Math.floor(Math.random() * (Number(n) || 0)); },
       getTimer: function () { return Math.round((ctx.now() - ctx.started)); },
+      getBytesLoaded: function () { return 1000; },
+      getBytesTotal: function () { return 1000; },
       trace: function () {
         if (global.console) global.console.log.apply(global.console, arguments);
       },
@@ -230,8 +275,48 @@
       getURL: function (url, target) {
         if (typeof global.open === 'function') global.open(url, target || '_blank');
       },
-      Mouse: { show: function () {}, hide: function () {} },
-      Stage: { width: ctx.stage ? ctx.stage.width : 0, height: ctx.stage ? ctx.stage.height : 0 },
+      Mouse: {
+        show: function () {}, hide: function () {},
+        addListener: function () {}, removeListener: function () { return false; }
+      },
+      /* The handles the editor's own frame scripts are written against, so
+         one scope serves both dialects. */
+      stage: ctx.stage, root: ctx.root, Flashy: F,
+      /* A published movie calls into whatever it was linked against —
+         a sound library, a portal's API, a preloader. Nothing here can run
+         them, and a ReferenceError on line one would stop the whole script,
+         so the common ones answer as inert objects. */
+      /* Nearly every portal SWF calls into an API compiled into it as AS2
+         classes — Newgrounds medals, MochiAds, a sponsor's tracking. Those
+         classes cannot be reconstructed here, and one
+         `com.newgrounds.API.connect(…)` on frame one would otherwise throw
+         and take the rest of the frame script with it, game logic included.
+         These package names answer as objects that absorb anything. */
+      com: inertPackage('com'), org: inertPackage('org'), net: inertPackage('net'),
+      mochi: inertPackage('mochi'), MochiAd: inertPackage('MochiAd'),
+      _global: inertPackage('_global'),
+      SharedObject: {
+        getLocal: function () {
+          return { data: {}, flush: function () {}, clear: function () {} };
+        }
+      },
+      System: { security: { allowDomain: function () {} } },
+      setInterval: function () {
+        return typeof global.setInterval === 'function'
+          ? global.setInterval.apply(global, arguments) : 0;
+      },
+      clearInterval: function () {
+        if (typeof global.clearInterval === 'function') global.clearInterval.apply(global, arguments);
+      },
+      setTimeout: function () {
+        return typeof global.setTimeout === 'function'
+          ? global.setTimeout.apply(global, arguments) : 0;
+      },
+      Stage: {
+        width: ctx.stage ? ctx.stage.width : 0, height: ctx.stage ? ctx.stage.height : 0,
+        scaleMode: 'showAll', align: '', showMenu: true,
+        addListener: function () {}, removeListener: function () { return false; }
+      },
       Key: ctx.key
     };
   }
@@ -239,8 +324,8 @@
   /* Calls with no equivalent here. Reported once each, because a clip that
      calls attachMovie every frame would otherwise fill the console. */
   var STUBS = ['attachMovie', 'duplicateMovieClip', 'swapDepths', 'tellTarget',
-    'loadMovie', 'loadVariables', 'startDrag', 'stopDrag', 'getBytesLoaded',
-    'getBytesTotal', 'createEmptyMovieClip', 'createTextField', 'beginFill',
+    'loadMovie', 'loadVariables', 'startDrag', 'stopDrag',
+    'createEmptyMovieClip', 'createTextField', 'beginFill',
     'lineTo', 'moveTo', 'endFill'];
 
   function makeScope(node, ctx) {
@@ -289,6 +374,7 @@
         if (typeof prop === 'symbol') return true;
         var p = PROPS[prop];
         if (p && p[1]) { p[1](node, value); return true; }
+        if (EVENT_PROPS[prop]) bindDynamic(node, ctx, prop, value, proxy);
         vars[prop] = value;
         return true;
       }
@@ -316,6 +402,129 @@
   var BUTTON_EVENTS = ['press', 'release', 'releaseOutside', 'rollOver',
     'rollOut', 'dragOver', 'dragOut', 'keyPress'];
 
+  /**
+   * Bind one event of one node, returning a disposer.
+   *
+   * Shared by the `onClipEvent(…)` blocks a movie was authored with and the
+   * `clip.onRelease = fn` assignments it makes at runtime — the same events
+   * either way, so they go through the same code.
+   */
+  function wireEvent(node, ctx, event, run, kind) {
+    var stage = ctx.stage;
+    if (kind === 'button' || BUTTON_EVENTS.indexOf(event) >= 0) {
+      return wireButtonEvent(node, ctx, event, run);
+    }
+    switch (event) {
+    case 'enterFrame': {
+      /* Only a MovieClip ticks a timeline and dispatches its own
+         enterFrame; a Shape never will, so its handler has to ride the
+         stage's. Binding to the node regardless is how a handler on a
+         piece of artwork silently did nothing. */
+      var source = node.timeline ? node : stage;
+      source.addEventListener('enterFrame', run);
+      return function () { source.removeEventListener('enterFrame', run); };
+    }
+    case 'mouseMove': case 'mouseDown': case 'mouseUp':
+      /* In Flash these fire wherever the pointer is, not only over the
+         clip — which is the whole trick behind eyes that follow it. */
+      stage.addEventListener(event, run);
+      return function () { stage.removeEventListener(event, run); };
+    case 'keyDown': case 'keyUp': {
+      var type = event === 'keyDown' ? 'keydown' : 'keyup';
+      if (typeof global.addEventListener !== 'function') return null;
+      global.addEventListener(type, run);
+      return function () { global.removeEventListener(type, run); };
+    }
+    case 'unload':
+      return run;
+    default:
+      ctx.unsupported('onClipEvent(' + event + ')');
+      return null;
+    }
+  }
+
+  function wireButtonEvent(node, ctx, event, run) {
+    var stage = ctx.stage;
+    var over = false, down = false;
+    var onMove = function () {
+      var nowOver = isOver(ctx, node);
+      if (nowOver === over) return;
+      over = nowOver;
+      if ((event === 'rollOver' && nowOver) || (event === 'rollOut' && !nowOver)) run();
+      if ((event === 'dragOver' && nowOver && down) || (event === 'dragOut' && !nowOver && down)) run();
+    };
+    var onDown = function () {
+      if (!isOver(ctx, node)) return;
+      down = true;
+      if (event === 'press') run();
+    };
+    var onUp = function () {
+      var hit = isOver(ctx, node);
+      if (event === 'release' && hit && down) run();
+      if (event === 'releaseOutside' && !hit && down) run();
+      down = false;
+    };
+    if (event === 'rollOver' || event === 'rollOut' || event === 'dragOver' || event === 'dragOut') {
+      stage.addEventListener('mouseMove', onMove);
+      stage.addEventListener('mouseDown', onDown);
+      stage.addEventListener('mouseUp', onUp);
+      return function () {
+        stage.removeEventListener('mouseMove', onMove);
+        stage.removeEventListener('mouseDown', onDown);
+        stage.removeEventListener('mouseUp', onUp);
+      };
+    }
+    stage.addEventListener('mouseDown', onDown);
+    stage.addEventListener('mouseUp', onUp);
+    return function () {
+      stage.removeEventListener('mouseDown', onDown);
+      stage.removeEventListener('mouseUp', onUp);
+    };
+  }
+
+  /* `clip.onRelease = function () { … }` is how AS2 code written after about
+     2004 attaches behaviour — the `on(release)` block belongs to the Flash
+     authoring tool, the property belongs to the language.
+
+     INCOMPLETE: assignment through a clip reference binds, but a handler
+     assigned from a frame script to a clip found by name has been seen not
+     to bind on a real movie, and that case has no passing test yet. Treat
+     this as the start of the feature rather than the whole of it. */
+  var EVENT_PROPS = {
+    onEnterFrame: 'enterFrame', onLoad: 'load', onUnload: 'unload',
+    onMouseDown: 'mouseDown', onMouseUp: 'mouseUp', onMouseMove: 'mouseMove',
+    onPress: 'press', onRelease: 'release', onReleaseOutside: 'releaseOutside',
+    onRollOver: 'rollOver', onRollOut: 'rollOut',
+    onDragOver: 'dragOver', onDragOut: 'dragOut',
+    onKeyDown: 'keyDown', onKeyUp: 'keyUp'
+  };
+
+  function bindDynamic(node, ctx, prop, fn, scope) {
+    var slots = node.__as2Dyn || (node.__as2Dyn = {});
+    if (slots[prop]) { slots[prop](); delete slots[prop]; }
+    if (typeof fn !== 'function') return;
+    var event = EVENT_PROPS[prop];
+    var dead = false;
+    var run = function () {
+      if (dead) return;
+      /* Same rule as an authored handler: a clip that has left the display
+         list stops, and lets its listeners go. */
+      if (!node.parent && node !== ctx.stage.root) {
+        if (slots[prop]) { slots[prop](); delete slots[prop]; }
+        return;
+      }
+      try { fn.call(scope); }
+      catch (e) {
+        dead = true;
+        if (global.console) global.console.warn('Flashy: ' + prop + ' failed and was switched off: ' + e.message);
+      }
+    };
+    if (event === 'load') { run(); return; }
+    var kind = BUTTON_EVENTS.indexOf(event) >= 0 ? 'button' : 'clip';
+    var dispose = wireEvent(node, ctx, event, run, kind);
+    if (dispose) slots[prop] = dispose;
+  }
+
   function contextFor(stage) {
     if (stage.__as2) return stage.__as2;
     var ctx = {
@@ -325,10 +534,22 @@
       started: (typeof performance !== 'undefined' ? performance.now() : Date.now()),
       now: function () { return typeof performance !== 'undefined' ? performance.now() : Date.now(); },
       said: {},
-      key: { code: 0, ascii: 0, down: {},
+      /* `Key` is a broadcaster in AS2: code calls `Key.addListener(this)`
+         and gets `onKeyDown`/`onKeyUp` called back on the listener. Games
+         drive their controls through it, so leaving the methods off stops
+         the first script that touches the keyboard. */
+      key: {
+        code: 0, ascii: 0, down: {}, listeners: [],
         getCode: function () { return this.code; },
         getAscii: function () { return this.ascii; },
-        isDown: function (c) { return !!this.down[c]; } },
+        isDown: function (c) { return !!this.down[c]; },
+        addListener: function (l) { if (l && this.listeners.indexOf(l) < 0) this.listeners.push(l); },
+        removeListener: function (l) {
+          var i = this.listeners.indexOf(l);
+          if (i >= 0) this.listeners.splice(i, 1);
+          return i >= 0;
+        }
+      },
       mouseIn: function (node) {
         /* Flash reports the pointer in the clip's own space, measured from
            its registration point — which sits at the top-left of the box
@@ -344,29 +565,48 @@
       }
     };
     if (typeof global.addEventListener === 'function') {
+      var broadcast = function (which) {
+        var list = ctx.key.listeners.slice();
+        for (var i = 0; i < list.length; i++) {
+          var fn = list[i] && list[i][which];
+          if (typeof fn === 'function') {
+            try { fn.call(list[i]); }
+            catch (e) {
+              if (global.console) global.console.warn('Flashy: ' + which + ' listener failed: ' + e.message);
+            }
+          }
+        }
+      };
       global.addEventListener('keydown', function (e) {
         ctx.key.code = e.keyCode || 0;
         ctx.key.ascii = e.key ? e.key.charCodeAt(0) : 0;
         ctx.key.down[ctx.key.code] = true;
+        broadcast('onKeyDown');
       });
       global.addEventListener('keyup', function (e) {
         ctx.key.down[e.keyCode || 0] = false;
+        broadcast('onKeyUp');
       });
     }
     stage.__as2 = ctx;
     return ctx;
   }
 
-  /** Is the pointer over this node (or something inside it)? */
+  /**
+   * Is the pointer over this node?
+   *
+   * Asked of the node itself, not of the display list as a whole. Hit
+   * testing from the root returns whatever is on TOP at that point, and a
+   * menu is artwork layered over its buttons — so the global answer is the
+   * decoration every time, and no button ever reports itself as clicked.
+   * Flash tests a button's own hit area and does not care what is drawn
+   * above it.
+   */
   function isOver(ctx, node) {
     var stage = ctx.stage;
     if (!stage || !stage._hitTest) return false;
-    var hit = stage._hitTest(stage.root, stage.mouseX || 0, stage.mouseY || 0);
-    while (hit) {
-      if (hit === node) return true;
-      hit = hit.parent;
-    }
-    return false;
+    var p = globalToLocal(node, stage.mouseX || 0, stage.mouseY || 0);
+    return !!stage._hitTest(node, p.x, p.y);
   }
 
   /**
@@ -383,9 +623,20 @@
     var blocks = parseHandlers(source);
     if (!blocks.length) return null;
 
-    var scope = makeScope(node, ctx);
+    /* Where unqualified names resolve. `onClipEvent` code belongs to the
+       clip itself, but an `on(release)` block on a BUTTON belongs to the
+       timeline the button sits on — `arcadeNav = true` in a menu button is
+       setting a variable on the menu, which something else then reads as
+       `_root.arcadeNav`. Scoping it to the button instead loses it.
+       Resolved when the handler RUNS, not when it is wired: at wiring time
+       the object is still being built and has no parent yet. */
+    var clipScope = makeScope(node, ctx);
+    var scopeFor = function (kind) {
+      return kind === 'button' ? makeScope(node.parent || node, ctx) : clipScope;
+    };
     var bound = [];
     var disposers = [];
+    var controller = null;
 
     blocks.forEach(function (block) {
       var fn;
@@ -398,99 +649,42 @@
         return;
       }
       var dead = false;
-      var run = function () {
+      var exec = function () {
         if (dead) return;
-        try { fn.call(scope); }
+        try { fn.call(scopeFor(block.kind)); }
         catch (e) {
           dead = true;                        // one report, then stop
           report(block, e, 'failed and was switched off');
         }
       };
+      /* An event-driven run needs the clip to still be in the display list.
+         A rebuilt or removed one keeps its stage listeners otherwise, and
+         goes on running against a parent it no longer has — which surfaces
+         as `_parent` being undefined, from a clip nobody can see. `load` is
+         the exception: it fires while the object is still being built, so
+         it runs through `exec` directly. */
+      var run = function () {
+        if (dead) return;
+        if (!node.parent && node !== stage.root) {
+          if (controller) controller.detach();
+          return;
+        }
+        exec();
+      };
       block.events.forEach(function (event) {
         bound.push(event);
-        wire(block, event, run);
+        wire(block, event, run, exec);
       });
     });
 
-    function wire(block, event, run) {
-      if (block.kind === 'button' || BUTTON_EVENTS.indexOf(event) >= 0) {
-        wireButton(event, run);
+    function wire(block, event, run, exec) {
+      if (event === 'load' || event === 'initialize' || event === 'construct' || event === 'data') {
+        exec();
         return;
       }
-      switch (event) {
-      case 'load': case 'initialize': case 'construct': case 'data':
-        run();
-        break;
-      case 'enterFrame': {
-        /* Only a MovieClip ticks a timeline and dispatches its own
-           enterFrame; a Shape never will, so its handler has to ride the
-           stage's. Binding to the node regardless is how a handler on a
-           piece of artwork silently did nothing. */
-        var source = node.timeline ? node : stage;
-        source.addEventListener('enterFrame', run);
-        disposers.push(function () { source.removeEventListener('enterFrame', run); });
-        break;
-      }
-      case 'mouseMove': case 'mouseDown': case 'mouseUp':
-        /* In Flash these fire wherever the pointer is, not only over the
-           clip — which is the whole trick behind eyes that follow it. */
-        stage.addEventListener(event, run);
-        disposers.push(function () { stage.removeEventListener(event, run); });
-        break;
-      case 'keyDown': case 'keyUp': {
-        var type = event === 'keyDown' ? 'keydown' : 'keyup';
-        if (typeof global.addEventListener === 'function') {
-          global.addEventListener(type, run);
-          disposers.push(function () { global.removeEventListener(type, run); });
-        }
-        break;
-      }
-      case 'unload':
-        disposers.push(run);
-        break;
-      default:
-        ctx.unsupported('onClipEvent(' + event + ')');
-        break;
-      }
-    }
-
-    function wireButton(event, run) {
-      var over = false;
-      var onMove = function () {
-        var nowOver = isOver(ctx, node);
-        if (nowOver !== over) {
-          over = nowOver;
-          if ((event === 'rollOver' && nowOver) || (event === 'rollOut' && !nowOver)) run();
-        }
-      };
-      var down = false;
-      var onDown = function () {
-        if (!isOver(ctx, node)) return;
-        down = true;
-        if (event === 'press') run();
-      };
-      var onUp = function () {
-        var hit = isOver(ctx, node);
-        if (event === 'release' && hit && down) run();
-        if (event === 'releaseOutside' && !hit && down) run();
-        down = false;
-      };
-      if (event === 'rollOver' || event === 'rollOut' || event === 'dragOver' || event === 'dragOut') {
-        stage.addEventListener('mouseMove', onMove);
-        disposers.push(function () { stage.removeEventListener('mouseMove', onMove); });
-      } else if (event === 'press') {
-        stage.addEventListener('mouseDown', onDown);
-        disposers.push(function () { stage.removeEventListener('mouseDown', onDown); });
-      } else if (event === 'release' || event === 'releaseOutside') {
-        stage.addEventListener('mouseDown', onDown);
-        stage.addEventListener('mouseUp', onUp);
-        disposers.push(function () {
-          stage.removeEventListener('mouseDown', onDown);
-          stage.removeEventListener('mouseUp', onUp);
-        });
-      } else {
-        ctx.unsupported('on(' + event + ')');
-      }
+      var kind = (block.kind === 'button' || BUTTON_EVENTS.indexOf(event) >= 0) ? 'button' : 'clip';
+      var dispose = wireEvent(node, ctx, event, run, kind);
+      if (dispose) disposers.push(dispose);
     }
 
     function report(block, error, what) {
@@ -499,10 +693,10 @@
         '(' + block.events.join(', ') + ') ' + what + ': ' + (error && error.message));
     }
 
-    return {
+    controller = {
       node: node,
       events: bound,
-      scope: scope,
+      scope: clipScope,
       detach: function () {
         for (var i = 0; i < disposers.length; i++) {
           try { disposers[i](); } catch (e) { /* a handler that throws on unload is still gone */ }
@@ -510,9 +704,49 @@
         disposers.length = 0;
       }
     };
+    return controller;
+  }
+
+  /**
+   * Compile a FRAME script the same way, so an imported timeline script gets
+   * the scope it was written against.
+   *
+   * `stop()` and `gotoAndPlay("menuLabel")` are the easy half. The rest is
+   * what a published movie's frame scripts are actually full of: `_root.x`,
+   * `_quality`, `Mouse.show()`, `Stage.showMenu`, and calls into whatever
+   * API the author linked against. Those resolve to the timeline's own
+   * variables or to undefined instead of throwing a ReferenceError that
+   * stops the script on its first line.
+   */
+  function frameScript(node, source, opts) {
+    opts = opts || {};
+    var stage = opts.stage;
+    if (!stage) throw new Error('Flashy.AS2.frameScript needs the stage');
+    var ctx = contextFor(stage);
+    var scope = makeScope(node, ctx);
+    var fn;
+    try {
+      fn = new Function('with (this) {' + String.fromCharCode(10) + source +
+        String.fromCharCode(10) + '}');
+    } catch (e) {
+      if (global.console) global.console.warn('Flashy: frame script could not be compiled: ' + e.message);
+      return null;
+    }
+    var failed = false;
+    return function () {
+      if (failed) return;
+      try { fn.call(scope); }
+      catch (e) {
+        /* One report, then stay quiet: a frame script that throws usually
+           does it on every pass through the frame. */
+        failed = true;
+        if (global.console) global.console.warn('Flashy: frame script failed and was switched off: ' + e.message);
+      }
+    };
   }
 
   F.AS2 = {
+    frameScript: frameScript,
     attach: attach,
     parseHandlers: parseHandlers,
     hasHandlers: hasHandlers,

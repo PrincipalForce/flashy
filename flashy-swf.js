@@ -670,6 +670,78 @@
     return out;
   }
 
+  /* IMA ADPCM, which is what SWF means by "compressed" before MP3 came
+     along. The step table is the standard 89-entry one; the index table
+     depends on how many bits each sample was packed into, which the stream
+     says up front. */
+  var ADPCM_STEP = [
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41,
+    45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190,
+    209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724,
+    796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272,
+    2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132,
+    7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500,
+    20350, 22385, 24623, 27086, 29794, 32767
+  ];
+  var ADPCM_INDEX = {
+    2: [-1, 2],
+    3: [-1, -1, 2, 4],
+    4: [-1, -1, -1, -1, 2, 4, 6, 8],
+    5: [-1, -1, -1, -1, -1, -1, -1, -1, 1, 2, 4, 6, 8, 10, 13, 16]
+  };
+
+  /**
+   * Decode an ADPCM sound to 16-bit PCM.
+   *
+   * The stream is a run of packets, each 4096 samples: a full 16-bit sample
+   * and a step index per channel, then 4095 coded deltas of `bits` each.
+   */
+  function decodeADPCM(bytes, channels, sampleCount) {
+    var br = new BitReader(bytes);
+    var bits = br.ub(2) + 2;
+    var indexTable = ADPCM_INDEX[bits];
+    if (!indexTable) return null;
+    var out = new Int16Array(sampleCount * channels);
+    var at = 0;
+    var sample = [0, 0], index = [0, 0];
+    var signBit = 1 << (bits - 1);
+    var mask = signBit - 1;
+
+    while (at < out.length && br.pos < br.end) {
+      for (var c = 0; c < channels; c++) {
+        sample[c] = br.sb(16);
+        index[c] = br.ub(6);
+        if (at < out.length) out[at++] = sample[c];
+      }
+      for (var i = 1; i < 4096 && at < out.length; i++) {
+        for (var ch = 0; ch < channels; ch++) {
+          var code = br.ub(bits);
+          var step = ADPCM_STEP[index[ch]];
+          var delta = code & mask;
+          /* The usual IMA reconstruction, written for any width: half a
+             step, then a step shifted down once per bit. */
+          var diff = step >> (bits - 1);
+          for (var b = 0; b < bits - 1; b++) {
+            if (delta & (1 << b)) diff += step >> (bits - 2 - b);
+          }
+          var value = sample[ch] + ((code & signBit) ? -diff : diff);
+          sample[ch] = value > 32767 ? 32767 : (value < -32768 ? -32768 : value);
+          index[ch] += indexTable[delta];
+          if (index[ch] < 0) index[ch] = 0;
+          if (index[ch] > 88) index[ch] = 88;
+          if (at < out.length) out[at++] = sample[ch];
+        }
+      }
+    }
+    return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
+  }
+
+  /** Silence of a known length — a sound whose format we cannot decode, but
+      whose place in the timeline we can still keep. */
+  function silentPCM(sampleCount, channels) {
+    return new Uint8Array(Math.max(0, sampleCount) * channels * 2);
+  }
+
   // -------------------- bitmaps --------------------
   /* SWF's own JPEG quirk: the data may begin with an EOI/SOI pair that no
      decoder accepts. Strip it. */
@@ -1270,11 +1342,17 @@
       case TAG.DefineButton2: {
         const id = br.u16();
         br.u8();                        // track as menu
+        /* The offset counts from the START of this field, which is the only
+           reliable way in: deriving the position from where record parsing
+           happens to stop drifts by a byte on anything with filters or a
+           blend mode, and a one-byte drift decompiles the handler as
+           garbage or as nothing at all. */
+        const offsetField = br.pos;
         const actionOffset = br.u16();
         const states = this._readButtonRecords(br, end, true);
         const handlers = [];
         if (actionOffset) {
-          let p = br.pos;
+          let p = offsetField + actionOffset;
           while (p < end) {
             const sub = new BitReader(br.bytes, p, end);
             const size = sub.u16();
@@ -1315,9 +1393,30 @@
         } else if (format === 0 || format === 3) {
           sound.mime = 'audio/wav';
           sound.data = pcmToWav(raw, rate, stereo ? 2 : 1, is16 ? 16 : 8);
+        } else if (format === 1) {
+          var pcm = null;
+          try { pcm = decodeADPCM(raw, stereo ? 2 : 1, sampleCount); }
+          catch (e) { pcm = null; }
+          if (pcm) {
+            sound.mime = 'audio/wav';
+            sound.data = pcmToWav(pcm, rate, stereo ? 2 : 1, 16);
+            sound.decoded = 'ADPCM';
+          } else {
+            sound.unsupported = 'ADPCM';
+            this._warn('sound ' + id + ' is ADPCM and could not be decoded');
+          }
         } else {
-          sound.unsupported = format === 1 ? 'ADPCM' : format === 6 ? 'Nellymoser' : 'format ' + format;
-          this._warn('sound ' + id + ' is ' + sound.unsupported + ' and was not decoded');
+          /* Nellymoser (and the handful of other codecs) need a decoder this
+             project does not have. Rather than drop the sound — which loses
+             its place on the timeline as well as its audio — keep silence of
+             the right length, and say so. */
+          sound.unsupported = format === 6 || format === 5 ? 'Nellymoser'
+            : format === 4 ? 'Nellymoser 16kHz' : 'format ' + format;
+          sound.mime = 'audio/wav';
+          sound.data = pcmToWav(silentPCM(sampleCount, stereo ? 2 : 1), rate, stereo ? 2 : 1, 16);
+          sound.silent = true;
+          this._warn('sound ' + id + ' is ' + sound.unsupported + ', which Flashy cannot ' +
+            'decode; it was imported as silence of the same length so the timing survives');
         }
         doc.characters[id] = sound;
         break;
@@ -1844,6 +1943,7 @@
     gradientEndPoints,
     itemsToGraphics,
     buildItems,
+    decodeADPCM,
     pathBounds,
     itemsBounds,
     TWIPS,

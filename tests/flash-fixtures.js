@@ -221,6 +221,17 @@ function placeWithClipActions(depth, charId, tx, ty, handlers) {
   return tag(26, w);
 }
 
+/** A PlaceObject2 that also carries a clip depth — Flash's mask. */
+function placeAsMask(depth, charId, tx, ty, clipDepth) {
+  const w = new SWFWriter();
+  w.u8(0x02 | 0x04 | 0x40);              // character, matrix, clip depth
+  w.u16(depth);
+  w.u16(charId);
+  w.matrix(tx * 20, ty * 20);
+  w.u16(clipDepth);
+  return tag(26, w);
+}
+
 function placeObject2(depth, charId, tx, ty, opts) {
   opts = opts || {};
   const w = new SWFWriter();
@@ -235,6 +246,48 @@ function placeObject2(depth, charId, tx, ty, opts) {
   w.matrix(tx * 20, ty * 20, opts.scale);
   if (opts.name) w.string(opts.name);
   return tag(26, w);
+}
+
+/**
+ * A DefineButton2 with separate up and hit artwork and one condition
+ * action. The hit state is deliberately BIGGER than the up state: in Flash
+ * the hit frame is the clickable area and is never drawn, so a click in the
+ * gap between them has to count.
+ */
+function defineButton(id, upChar, hitChar, conditions, actions, opts) {
+  opts = opts || {};
+  const w = new SWFWriter();
+  w.u16(id);
+  w.u8(0);                               // track as menu: no
+  const records = new SWFWriter();
+  const record = (flags, charId) => {
+    /* Optionally with a filter list and a blend mode, which is where the
+       action offset used to drift: anything that makes a button record
+       longer than the simple case moved the handler bytes, and the handler
+       then decompiled as garbage or as nothing. */
+    if (opts.decorated) flags |= 0x10 | 0x20;
+    records.u8(flags);
+    records.u16(charId);
+    records.u16(1);
+    records.matrix(0, 0);
+    records.u8(0);                       // an identity colour transform
+    if (opts.decorated) {
+      records.u8(1);                     // one filter…
+      records.u8(1);                     // …a blur
+      records.u32(0); records.u32(0); records.u8(1);
+      records.u8(0);                     // blend mode: normal
+    }
+  };
+  record(0x01, upChar);                  // up
+  record(0x08, hitChar);                 // hit
+  records.u8(0);                         // end of the record list
+  const conds = new SWFWriter();
+  conds.u16(0);                          // size 0: the last (only) action
+  conds.u16(conditions);
+  const body = Buffer.concat([records.bytesOf(), conds.bytesOf(), Buffer.from(actions)]);
+  // The action offset counts from this field itself.
+  w.u16(2 + records.bytesOf().length);
+  return tag(34, Buffer.concat([w.bytesOf(), body]));
 }
 
 const removeObject2 = (depth) => tag(28, new SWFWriter().u16(depth));
@@ -658,8 +711,347 @@ function makeClipHandlerSWF(opts) {
   return Buffer.concat([head, size, payload]);
 }
 
+/**
+ * One button: a small red square to look at, a much larger invisible hit
+ * area, and `on(release) { _x = 200; }`. Clicking in the hit area but away
+ * from the artwork has to move it — which is the whole of what a Flash hit
+ * frame is for.
+ */
+function makeButtonSWF(opts) {
+  opts = opts || {};
+  const pushStr = (str) => {
+    const d = [0];
+    for (const ch of str) d.push(ch.charCodeAt(0));
+    d.push(0);
+    return [0x96, d.length & 0xff, d.length >> 8, ...d];
+  };
+  const pushInt = (n) => {
+    const dv = new DataView(new ArrayBuffer(4));
+    dv.setInt32(0, n, true);
+    return [0x96, 5, 0, 7, dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)];
+  };
+  //  _x = 200;
+  const release = [...pushStr(""), ...pushInt(0), ...pushInt(200), 0x23, 0x00];
+
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 20, 20, 0xff0000, 1),     // what you see
+    defineRect(2, 0, 0, 80, 80, 0x00ff00, 1),     // the hit area, never drawn
+    defineButton(3, 1, 2, 0x0008, release, opts), // 0x0008: over-down to over-up
+    placeObject2(1, 3, 40, 40),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(24 * 256);
+  body.u16(1);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x08]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
+/**
+ * A three-frame movie that navigates by LABEL and talks to things that are
+ * not there:
+ *
+ *   frame 1  `_root.gotoAndStop("painted"); Mouse.show(); _quality = "HIGH";`
+ *   frame 2  (nothing)
+ *   frame 3  labelled "painted", shows a blue box, `stop();`
+ *
+ * The calls on frame 1 are the point as much as the goto: a published movie
+ * is full of `Mouse`, `_quality` and API calls that this player has no
+ * implementation for, and one ReferenceError on line one would stop the
+ * script before it reached the navigation.
+ */
+function makeLabelSWF() {
+  const pushStr = (str) => {
+    const d = [0];
+    for (const ch of str) d.push(ch.charCodeAt(0));
+    d.push(0);
+    return [0x96, d.length & 0xff, d.length >> 8, ...d];
+  };
+  const pushInt = (n) => {
+    const dv = new DataView(new ArrayBuffer(4));
+    dv.setInt32(0, n, true);
+    return [0x96, 5, 0, 7, dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)];
+  };
+  const frame1 = [
+    // Mouse.show();
+    ...pushInt(0), ...pushStr("Mouse"), 0x1c, ...pushStr("show"), 0x52, 0x17,
+    // _quality = "HIGH";
+    ...pushStr("_quality"), ...pushStr("HIGH"), 0x1d,
+    // _root.gotoAndStop("painted");
+    ...pushInt(1), ...pushStr("painted"),
+    ...pushStr("_root"), 0x1c, ...pushStr("gotoAndStop"), 0x52, 0x17,
+    0x00
+  ];
+
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 60, 60, 0x0000ff, 1),
+    tag(12, Buffer.from(frame1)),
+    showFrame(),
+    showFrame(),
+    frameLabel("painted"),
+    placeObject2(1, 1, 100, 60),
+    doActionStop(),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(24 * 256);
+  body.u16(3);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x08]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
+/**
+ * A movie with one ADPCM sound on frame 1 — the compression every SWF used
+ * before MP3, and the one this reader had been skipping.
+ *
+ * The stream is written by hand: 4-bit samples, an initial sample of 1000,
+ * and a run of the code that adds a full step each time, so the decoded
+ * result is a ramp whose first value is exactly the initial sample.
+ */
+function makeADPCMSWF() {
+  const bits = [];
+  const put = (value, n) => { for (let i = n - 1; i >= 0; i--) bits.push((value >> i) & 1); };
+  put(2, 2);                             // code size 2 -> 4 bits per sample
+  put(1000 & 0xffff, 16);                // the first sample, verbatim
+  put(0, 6);                             // step index
+  for (let i = 0; i < 15; i++) put(4, 4);  // +1 step each, a rising ramp
+  while (bits.length % 8) bits.push(0);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let b = 0;
+    for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j];
+    data.push(b);
+  }
+
+  const snd = new SWFWriter();
+  snd.u16(1);                            // character id
+  snd.ub(4, 1);                          // format 1: ADPCM
+  snd.ub(2, 2);                          // 22050 Hz
+  snd.ub(1, 1);                          // 16-bit
+  snd.ub(1, 0);                          // mono
+  snd.align();
+  snd.u32(16);                           // sample count
+  for (const b of data) snd.u8(b);
+
+  const start = new SWFWriter();
+  start.u16(1);
+  start.u8(0);                           // SOUNDINFO: no flags
+
+  const tags = [
+    setBackground(0xffffff),
+    tag(14, snd),                        // DefineSound
+    defineRect(2, 0, 0, 30, 30, 0x884400, 1),
+    placeObject2(1, 2, 10, 10),
+    tag(15, start),                      // StartSound
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(12 * 256);
+  body.u16(1);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x06]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
+/**
+ * A masked movie: a wide red bar on depth 2, and on depth 1 a small square
+ * placed with a clip depth of 2 — so only the part of the bar inside that
+ * square is drawn. Half the point of the fixture is the part that must NOT
+ * appear: the mask's own artwork.
+ */
+function makeMaskSWF() {
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 40, 40, 0x00ff00, 1),     // the mask, never drawn
+    defineRect(2, 0, 0, 200, 20, 0xff0000, 1),    // the bar being masked
+    placeAsMask(1, 1, 60, 50, 2),
+    placeObject2(2, 2, 20, 60),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(12 * 256);
+  body.u16(1);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x06]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
+/**
+ * The same button, but one level down: inside a sprite that is itself
+ * placed on the root. A real movie keeps almost all of its buttons inside
+ * symbols, so "the button works" has to mean "at depth", not just at the
+ * top of the display list.
+ */
+function makeNestedButtonSWF() {
+  const pushStr = (str) => {
+    const d = [0];
+    for (const ch of str) d.push(ch.charCodeAt(0));
+    d.push(0);
+    return [0x96, d.length & 0xff, d.length >> 8, ...d];
+  };
+  const pushInt = (n) => {
+    const dv = new DataView(new ArrayBuffer(4));
+    dv.setInt32(0, n, true);
+    return [0x96, 5, 0, 7, dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)];
+  };
+  const release = [...pushStr(""), ...pushInt(0), ...pushInt(240), 0x23, 0x00];
+
+  const spriteFrames = [placeObject2(1, 3, 0, 0), showFrame()];
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 20, 20, 0xff0000, 1),
+    defineRect(2, 0, 0, 80, 80, 0x00ff00, 1),
+    defineButton(3, 1, 2, 0x0008, release),
+    defineSprite(4, 1, spriteFrames),
+    placeObject2(1, 4, 40, 40),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(24 * 256);
+  body.u16(1);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x08]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
+/** The same mask, but one level down — inside a symbol, where a real movie
+    keeps nearly all of its masks. */
+function makeNestedMaskSWF() {
+  const spriteFrames = [
+    placeAsMask(1, 1, 60, 50, 2),
+    placeObject2(2, 2, 20, 60),
+    showFrame()
+  ];
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 40, 40, 0x00ff00, 1),
+    defineRect(2, 0, 0, 200, 20, 0xff0000, 1),
+    defineSprite(3, 1, spriteFrames),
+    placeObject2(1, 3, 0, 0),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(12 * 256);
+  body.u16(1);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x06]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
+/**
+ * Three frames with `stop();` on the FIRST one. A player that primes its
+ * root without running frame 1's script sails past it to frame 2.
+ */
+function makeStopOnFrameOneSWF() {
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 40, 40, 0x0000ff, 1),
+    placeObject2(1, 1, 20, 20),
+    doActionStop(),
+    showFrame(),
+    showFrame(),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const body = new SWFWriter();
+  body.rect(0, 320 * 20, 0, 240 * 20);
+  body.u16(24 * 256);
+  body.u16(3);
+  const payload = Buffer.concat([body.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x06]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
+/**
+ * A movie that wires its button the way AS2 code written after about 2004
+ * does: `theButton.onRelease = function () { … }` from a frame script,
+ * rather than an `on(release)` block in the authoring tool.
+ */
+function makeDynamicHandlerSWF() {
+  const pushStr = (str) => {
+    const d = [0];
+    for (const ch of str) d.push(ch.charCodeAt(0));
+    d.push(0);
+    return [0x96, d.length & 0xff, d.length >> 8, ...d];
+  };
+  const pushInt = (n) => {
+    const dv = new DataView(new ArrayBuffer(4));
+    dv.setInt32(0, n, true);
+    return [0x96, 5, 0, 7, dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)];
+  };
+  /* `box._x = 200;` — the body of the function being assigned. No
+     terminator: a function body is length-delimited. */
+  const body = [...pushStr("box"), 0x1c, ...pushStr("_x"), ...pushInt(200), 0x4f];
+  //  box.onRelease = function () { … };
+  const frame1 = [
+    ...pushStr("box"), 0x1c,                       // getVariable box
+    ...pushStr("onRelease"),
+    /* DefineFunction's own length covers its NAME, parameter count and
+       code size — not the body, which follows the record. Counting the
+       body in makes the reader start it several bytes late and decompile
+       nothing at all. */
+    0x9b, 0x05, 0x00,                              // action, 5 bytes of header
+    0x00,                                          // an empty function name
+    0x00, 0x00,                                    // no parameters
+    body.length & 0xff, body.length >> 8,          // code size
+    ...body,
+    0x4f,                                          // setMember
+    0x00
+  ];
+
+  const tags = [
+    setBackground(0xffffff),
+    defineRect(1, 0, 0, 60, 60, 0xff0000, 1),
+    placeObject2(1, 1, 40, 40, { name: "box" }),
+    tag(12, Buffer.from(frame1)),
+    showFrame(),
+    tag(0, new SWFWriter())
+  ];
+  const head2 = new SWFWriter();
+  head2.rect(0, 320 * 20, 0, 240 * 20);
+  head2.u16(24 * 256);
+  head2.u16(1);
+  const payload = Buffer.concat([head2.bytesOf(), ...tags]);
+  const head = Buffer.from([0x46, 0x57, 0x53, 0x08]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32LE(8 + payload.length, 0);
+  return Buffer.concat([head, size, payload]);
+}
+
 export {
   makeSWF, makeFLA, makeSkewSWF, makeGradientSWF, makeAS3SWF, makeLayeringSWF,
-  makeClipHandlerSWF,
+  makeClipHandlerSWF, makeButtonSWF, makeNestedButtonSWF, makeLabelSWF,
+  makeADPCMSWF, makeMaskSWF, makeNestedMaskSWF, makeStopOnFrameOneSWF,
+  makeDynamicHandlerSWF,
   makeZip, SWFWriter, tag
 };

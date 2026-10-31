@@ -167,7 +167,12 @@
       }
       out.push(rec);
       r.pos = next;
-      if (code === A.End) break;
+      /* Deliberately NOT stopping at End. A function body is length-
+         delimited and may carry its own terminator, and breaking there
+         threw away every record after the first function in the block —
+         which in a frame script that defines a helper and then calls it is
+         everything that mattered. decompileActions() stops at the first
+         End at ITS level, which is the right place to stop. */
     }
     return out;
   }
@@ -669,8 +674,22 @@
         out(lhs + ' = ' + sv.text + ';');
         break;
       }
-      case A.DefineLocal: { var dv = pop(), dn = pop(); out('var ' + nameText(dn) + ' = ' + dv.text + ';'); break; }
-      case A.DefineLocal2: { out('var ' + nameText(pop()) + ';'); break; }
+      /* DefineLocal declares in the CURRENT scope, which at frame level is
+         the timeline itself — `var score = 0;` on a frame makes a variable
+         the whole movie can read, not a local that vanishes when the frame
+         script ends. Rendering it as `var` inside a function is right and
+         at frame level is wrong twice over: it reads as something private,
+         and it compiles to something that really is. */
+      case A.DefineLocal: {
+        var dv = pop(), dn = pop();
+        out((ctx.depth > 0 ? 'var ' : '') + nameText(dn) + ' = ' + dv.text + ';');
+        break;
+      }
+      case A.DefineLocal2: {
+        var dn2 = nameText(pop());
+        out(ctx.depth > 0 ? ('var ' + dn2 + ';') : ('if (' + dn2 + ' === undefined) ' + dn2 + ' = undefined;'));
+        break;
+      }
 
       case A.GetMember: { var mn = pop(), mo = pop(); push(member(mo, mn)); break; }
       case A.SetMember: {
@@ -988,21 +1007,43 @@
     return names;
   }
 
+  /*
+   * A button's conditions are state TRANSITIONS in the file — "over down to
+   * over up" — but what an author wrote, and what a handler runtime listens
+   * for, is the event name: `on(release)`. Reporting the transition names
+   * is faithful to the bytes and useless downstream: every imported button
+   * ends up listening for an event nothing ever fires. The transitions are
+   * still available through buttonTransitionNames() for anyone reading the
+   * file rather than running it.
+   */
   var BUTTON_CONDITIONS = [
-    [0x0001, 'idleToOverUp'], [0x0002, 'overUpToIdle'], [0x0004, 'overUpToOverDown'],
-    [0x0008, 'overDownToOverUp'], [0x0010, 'overDownToOutDown'], [0x0020, 'outDownToOverDown'],
-    [0x0040, 'outDownToIdle'], [0x0080, 'idleToOverDown'], [0x0100, 'overDownToIdle']
+    [0x0001, 'rollOver',       'idleToOverUp'],
+    [0x0002, 'rollOut',        'overUpToIdle'],
+    [0x0004, 'press',          'overUpToOverDown'],
+    [0x0008, 'release',        'overDownToOverUp'],
+    [0x0010, 'dragOut',        'overDownToOutDown'],
+    [0x0020, 'dragOver',       'outDownToOverDown'],
+    [0x0040, 'releaseOutside', 'outDownToIdle'],
+    [0x0080, 'dragOver',       'idleToOverDown'],
+    [0x0100, 'dragOut',        'overDownToIdle']
   ];
 
-  function buttonConditionNames(flags) {
+  function buttonNames(flags, column) {
     var names = [];
     for (var i = 0; i < BUTTON_CONDITIONS.length; i++) {
-      if (flags & BUTTON_CONDITIONS[i][0]) names.push(BUTTON_CONDITIONS[i][1]);
+      if (!(flags & BUTTON_CONDITIONS[i][0])) continue;
+      var name = BUTTON_CONDITIONS[i][column];
+      if (names.indexOf(name) < 0) names.push(name);
     }
     var key = (flags >> 9) & 0x7f;
     if (key) names.push('keyPress ' + key);
     return names;
   }
+
+  /** The AS2 event names — `press`, `release`, … — an `on(…)` block uses. */
+  function buttonConditionNames(flags) { return buttonNames(flags, 1); }
+  /** The raw state transitions, for reading the file rather than running it. */
+  function buttonTransitionNames(flags) { return buttonNames(flags, 2); }
 
   /**
    * Decompile a whole action block to source.
@@ -1041,6 +1082,7 @@
     decompileActions: decompileActions,
     clipEventNames: clipEventNames,
     buttonConditionNames: buttonConditionNames,
+    buttonTransitionNames: buttonTransitionNames,
     clipHandlerSource: clipHandlerSource,
     buttonHandlerSource: buttonHandlerSource
   };

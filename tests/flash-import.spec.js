@@ -14,7 +14,9 @@ import { test, expect } from "@playwright/test";
 import { openEditor, downloadFromAction, runExportedHTML } from "./helpers.js";
 import {
   makeSWF, makeFLA, makeSkewSWF, makeGradientSWF, makeAS3SWF, makeLayeringSWF,
-  makeClipHandlerSWF,
+  makeClipHandlerSWF, makeButtonSWF, makeNestedButtonSWF, makeLabelSWF,
+  makeADPCMSWF, makeMaskSWF, makeNestedMaskSWF, makeStopOnFrameOneSWF,
+  makeDynamicHandlerSWF,
 } from "./flash-fixtures.js";
 
 const SWF_B64 = makeSWF().toString("base64");
@@ -25,6 +27,15 @@ const AS3_B64 = makeAS3SWF().toString("base64");
 const LAYERS_B64 = makeLayeringSWF().toString("base64");
 const CLIP_B64 = makeClipHandlerSWF().toString("base64");
 const CLIP_ABS_B64 = makeClipHandlerSWF({ absolute: true }).toString("base64");
+const BUTTON_B64 = makeButtonSWF().toString("base64");
+const LABEL_B64 = makeLabelSWF().toString("base64");
+const ADPCM_B64 = makeADPCMSWF().toString("base64");
+const MASK_B64 = makeMaskSWF().toString("base64");
+const NESTED_BTN_B64 = makeNestedButtonSWF().toString("base64");
+const DECORATED_BTN_B64 = makeButtonSWF({ decorated: true }).toString("base64");
+const NESTED_MASK_B64 = makeNestedMaskSWF().toString("base64");
+const STOP1_B64 = makeStopOnFrameOneSWF().toString("base64");
+const DYNAMIC_B64 = makeDynamicHandlerSWF().toString("base64");
 
 async function open(page) {
   const errors = await openEditor(page);
@@ -132,11 +143,15 @@ test("AVM1 clip and button event flags are named", async ({ page }) => {
     enterFrame: FlashyAVM1.clipEventNames(0x02),
     both: FlashyAVM1.clipEventNames(0x03),
     release: FlashyAVM1.buttonConditionNames(0x0008),
+    transition: FlashyAVM1.buttonTransitionNames(0x0008),
   }));
   expect(names.load).toEqual(["load"]);
   expect(names.enterFrame).toEqual(["enterFrame"]);
   expect(names.both).toEqual(["load", "enterFrame"]);
-  expect(names.release).toEqual(["overDownToOverUp"]);
+  // The event an `on(…)` block names, not the state transition the file
+  // records — a handler listening for "overDownToOverUp" never fires.
+  expect(names.release).toEqual(["release"]);
+  expect(names.transition).toEqual(["overDownToOverUp"]);
 });
 
 // ───────────────────────────── SWF model ─────────────────────────────
@@ -215,6 +230,8 @@ test("a SWF is back-engineered into stage, layers, symbols and tweens", async ({
       })),
       library: Object.keys(doc.library),
       scripts: doc.layers[0].keyframes.map((k) => k.script).filter(Boolean),
+      labels: doc.layers[0].keyframes.map((k) => [k.index, k.label]).filter((l) => l[1]),
+      dialect: doc.scriptDialect,
       report,
     };
   }, SWF_B64);
@@ -237,7 +254,12 @@ test("a SWF is back-engineered into stage, layers, symbols and tweens", async ({
   // The sprite was exported as "Ball", so that is its name in the library.
   expect(out.library).toEqual(["Ball"]);
 
-  expect(out.scripts[0]).toBe("// frame label: start\nstop();");
+  expect(out.scripts[0]).toBe("stop();");
+  // A label is data, not a comment: `gotoAndPlay("start")` has to resolve.
+  expect(out.labels).toEqual([[1, "start"]]);
+  // And the document says its scripts are ActionScript, so the exported
+  // player compiles them against the AS2 scope rather than as plain JS.
+  expect(out.dialect).toBe("as2");
   expect(out.scripts[1]).toBe("gotoAndPlay(1);");
   expect(out.report.tweens).toBe(1);
   expect(out.report.symbols).toBe(1);
@@ -527,6 +549,290 @@ test("a handler with a baked-in coordinate lands where Flash put it", async ({ p
   expect(px.farRight).toEqual([255, 255, 255]);
   expect(errors).toEqual([]);
   await out.close();
+});
+
+test("an imported button is clickable over its hit area", async ({ page, context }) => {
+  await open(page);
+  const report = await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "button.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, BUTTON_B64);
+  expect(report).not.toBeNull();
+
+  const inst = await page.evaluate(() => {
+    const o = window._flashyAI.doc.layers[0].keyframes[0].objects[0];
+    return { behavior: o.symbolBehavior, script: o.clipScript };
+  });
+  expect(inst.behavior).toBe("button");
+  // `on(release)`, not `on(overDownToOverUp)` — the file records the state
+  // transition, but the event name is what a handler can listen for.
+  expect(inst.script).toContain("on(release)");
+
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  const box = await out.locator("#stage").boundingBox();
+
+  // (100,100) is inside the 80x80 hit area but well outside the 20x20 of
+  // artwork — the gap a Flash hit frame exists to cover.
+  await out.mouse.click(box.x + 100, box.y + 100);
+  /* A handler runs between one frame's render and the next, so the canvas
+     is a frame behind it for a moment. Wait for the settled state — both
+     the new position filled and the old one cleared — rather than for the
+     first pixel to change, which catches the frame in between. */
+  await out.waitForFunction(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => d.getImageData(x, y, 1, 1).data;
+    return at(210, 50)[0] > 200 && at(50, 50)[1] > 200;
+  }, null, { timeout: 5000 });
+
+  const px = await out.evaluate(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => Array.from(d.getImageData(x, y, 1, 1).data).slice(0, 3);
+    return { moved: at(210, 50), vacated: at(50, 50) };
+  });
+  expect(px.moved[0]).toBeGreaterThan(200);
+  expect(px.vacated).toEqual([255, 255, 255]);
+  // The hit area is never drawn, however large it is.
+  expect(errors).toEqual([]);
+  await out.close();
+});
+
+test("an imported movie navigates by label, past calls that are not there", async ({ page, context }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "labels.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, LABEL_B64);
+
+  const labels = await page.evaluate(() =>
+    window._flashyAI.doc.layers.flatMap((l) =>
+      l.keyframes.filter((k) => k.label).map((k) => [k.index, k.label])));
+  expect(labels).toEqual([[3, "painted"]]);
+
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.currentFrame === 3,
+    null, { timeout: 5000 });
+
+  // `_root.gotoAndStop("painted")` resolved the label and stopped there —
+  // after `Mouse.show()` and `_quality = "HIGH"`, neither of which exists
+  // here and neither of which was allowed to stop the script.
+  const state = await out.evaluate(() => ({
+    frame: window.__stage.root.currentFrame,
+    playing: window.__stage.root.playing,
+  }));
+  expect(state.frame).toBe(3);
+  expect(state.playing).toBe(false);
+
+  const px = await out.evaluate(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    return Array.from(d.getImageData(130, 90, 1, 1).data).slice(0, 3);
+  });
+  expect(px[2]).toBeGreaterThan(200);   // the blue box on the labelled frame
+  expect(errors).toEqual([]);
+  await out.close();
+});
+
+test("a button inside a symbol is clickable too", async ({ page, context }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "nested.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, NESTED_BTN_B64);
+
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  const box = await out.locator("#stage").boundingBox();
+
+  /* Almost every button in a real movie lives inside a symbol, so the
+     handler has to survive being built one level down — and the click has
+     to reach it through the hit area of a nested instance. The sprite sits
+     at (40,40), so `_x = 240` inside it lands the artwork at 280 on the
+     stage: a nested handler moves things in its PARENT's space. */
+  await out.mouse.click(box.x + 100, box.y + 100);
+  await out.waitForFunction(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => d.getImageData(x, y, 1, 1).data;
+    return at(285, 50)[0] > 200 && at(50, 50)[1] > 200;
+  }, null, { timeout: 5000 });
+
+  expect(errors).toEqual([]);
+  await out.close();
+});
+
+// ───────────────────────────── masks ─────────────────────────────
+
+test("a clip depth imports as a mask layer, above what it masks", async ({ page }) => {
+  const errors = await open(page);
+  const out = await page.evaluate(async (b64) => {
+    const model = await window.__parseSWF(b64);
+    const { doc, report } = FlashyImport.toDocument(model, {});
+    return {
+      masks: report.masks,
+      layers: doc.layers.map((l) => [l.name, l.layerType]),
+      warnings: report.warnings,
+    };
+  }, MASK_B64);
+
+  expect(out.masks).toBe(1);
+  // In the file the mask is BELOW what it masks — a clip depth reaches
+  // upwards. In a layer stack it belongs above, as Flash showed it.
+  expect(out.layers[0][1]).toBe("mask");
+  expect(out.layers[1][1]).toBe("masked");
+  // It is a mask now, so nothing reports it as lost.
+  expect(out.warnings.join(" ")).not.toContain("mask");
+  expect(errors).toEqual([]);
+});
+
+test("a mask clips on the stage, in the HTML export and in the SVG", async ({ page, context }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "mask.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, MASK_B64);
+
+  /* The bar runs 20..220 across y 60..80; the mask is a 40x40 square at
+     (60,50). Only the overlap should be painted, and the mask's own green
+     square must never appear. */
+  expect(await stagePixel(page, 80, 70)).toBe("#ff0000");   // inside both
+  expect(await stagePixel(page, 150, 70)).toBe("#ffffff");  // bar, outside the mask
+  expect(await stagePixel(page, 70, 55)).toBe("#ffffff");   // mask, no bar under it
+
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  const px = await out.evaluate(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => Array.from(d.getImageData(x, y, 1, 1).data).slice(0, 3);
+    return { inside: at(80, 70), outside: at(150, 70), maskArt: at(70, 55) };
+  });
+  expect(px.inside[0]).toBeGreaterThan(200);
+  expect(px.outside).toEqual([255, 255, 255]);
+  expect(px.maskArt).toEqual([255, 255, 255]);
+  expect(errors).toEqual([]);
+  await out.close();
+
+  const svg = await downloadFromAction(page, "exportSVG");
+  expect(svg).toContain("<clipPath");
+  expect(svg).toContain("clip-path=\"url(#");
+});
+
+test("a button's actions are found however long its records are", async ({ page }) => {
+  const errors = await open(page);
+  const script = await page.evaluate(async (b64) => {
+    const model = await window.__parseSWF(b64);
+    const button = Object.values(model.characters).find((c) => c.kind === "button");
+    return button.handlers.map((h) => [h.conditions.join("+"), h.source]);
+  }, DECORATED_BTN_B64);
+
+  /* The records here carry a filter and a blend mode, which make them
+     longer than the simple case. Deriving the action position from where
+     record parsing stops drifts by those bytes, and the handler decompiles
+     as garbage or as nothing — which is how 199 buttons in a real movie
+     came in with empty bodies. The file states the offset; use it. */
+  expect(script).toEqual([["release", "_x = 200;"]]);
+  expect(errors).toEqual([]);
+});
+
+test("a stop() on frame 1 actually stops the movie", async ({ page, context }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "stop1.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, STOP1_B64);
+
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  await out.waitForTimeout(700);        // several frames' worth
+
+  /* Priming the root without running its frame script marks it primed, so
+     the first real tick takes the "advance" branch and frame 1's script is
+     never run at all. */
+  const state = await out.evaluate(() => ({
+    frame: window.__stage.root.currentFrame,
+    playing: window.__stage.root.playing,
+  }));
+  expect(state.frame).toBe(1);
+  expect(state.playing).toBe(false);
+  expect(errors).toEqual([]);
+  await out.close();
+});
+
+test("a mask inside a symbol clips what it masks", async ({ page }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "nestedmask.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, NESTED_MASK_B64);
+
+  /* Masks live inside symbols far more often than on the root — all 43 of
+     them do in the test movie — and a flattened symbol draws the mask's own
+     artwork over the scene instead of clipping with it. */
+  expect(await stagePixel(page, 80, 70)).toBe("#ff0000");   // inside the mask
+  expect(await stagePixel(page, 150, 70)).toBe("#ffffff");  // bar, outside it
+  expect(await stagePixel(page, 70, 55)).toBe("#ffffff");   // the mask itself
+});
+
+// ───────────────────────────── sound ─────────────────────────────
+
+test("ADPCM sound is decoded, and an undecodable one keeps its length", async ({ page }) => {
+  const errors = await open(page);
+  const out = await page.evaluate(async (b64) => {
+    const model = await window.__parseSWF(b64);
+    const sound = Object.values(model.characters).find((c) => c.kind === "sound");
+    const { doc, report } = FlashyImport.toDocument(model, {});
+    const asset = doc.sounds[Object.keys(doc.sounds)[0]];
+    return {
+      format: sound.format, decoded: sound.decoded, mime: sound.mime,
+      bytes: sound.data.length, sounds: report.sounds,
+      assetType: asset && asset.mediaType,
+      attached: doc.layers.some((l) => l.keyframes.some((k) => k.sound)),
+      warnings: model.warnings,
+    };
+  }, ADPCM_B64);
+
+  expect(out.format).toBe(1);
+  expect(out.decoded).toBe("ADPCM");
+  expect(out.mime).toBe("audio/wav");
+  // 16 mono samples at 16 bits, plus a 44-byte WAV header.
+  expect(out.bytes).toBe(44 + 16 * 2);
+  expect(out.sounds).toBe(1);
+  expect(out.assetType).toBe("audio/wav");
+  // StartSound put it on the timeline.
+  expect(out.attached).toBe(true);
+  expect(out.warnings).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("the ADPCM decoder reconstructs the samples it was given", async ({ page }) => {
+  await open(page);
+  const samples = await page.evaluate(() => {
+    // 4-bit samples, initial sample 1000 at step index 0, then four codes
+    // that each add a whole step.
+    const bits = [];
+    const put = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >> i) & 1); };
+    put(2, 2); put(1000, 16); put(0, 6);
+    for (let i = 0; i < 4; i++) put(4, 4);
+    while (bits.length % 8) bits.push(0);
+    const bytes = new Uint8Array(bits.length / 8);
+    for (let i = 0; i < bytes.length; i++) {
+      let b = 0;
+      for (let j = 0; j < 8; j++) b = (b << 1) | bits[i * 8 + j];
+      bytes[i] = b;
+    }
+    const pcm = Flashy.SWF.decodeADPCM(bytes, 1, 5);
+    return Array.from(new Int16Array(pcm.buffer, pcm.byteOffset, 5));
+  });
+
+  // The first sample is stored outright, and each code after it adds one
+  // step — rising, and by a growing amount as the step index climbs.
+  expect(samples[0]).toBe(1000);
+  expect(samples[1]).toBeGreaterThan(samples[0]);
+  expect(samples[2]).toBeGreaterThan(samples[1]);
+  expect(samples[3] - samples[2]).toBeGreaterThan(samples[1] - samples[0]);
 });
 
 // ───────────────────────────── layers ─────────────────────────────
