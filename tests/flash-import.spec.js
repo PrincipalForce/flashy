@@ -761,6 +761,50 @@ test("a stop() on frame 1 actually stops the movie", async ({ page, context }) =
   await out.close();
 });
 
+test("a handler assigned in code, not in the authoring tool, still runs", async ({ page, context }) => {
+  await open(page);
+  await page.evaluate(async (b64) => {
+    const file = window.__file(b64, "dynamic.swf");
+    return window._flashyFlash.importFile(file, { force: true, quiet: true });
+  }, DYNAMIC_B64);
+
+  // The movie carries no handler of its own: a frame script assigns one.
+  const imported = await page.evaluate(() => {
+    const layer = window._flashyAI.doc.layers.find((l) => l.name === "Actions");
+    const art = window._flashyAI.doc.layers.flatMap((l) => l.keyframes[0].objects);
+    return { script: layer.keyframes[0].script, handlers: art.map((o) => o.clipScript || null) };
+  });
+  expect(imported.script).toContain("onRelease");
+  expect(imported.handlers).toEqual([null]);
+
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  const box = await out.locator("#stage").boundingBox();
+
+  /* The handler lands on a node the root rebuilds every tick, so what this
+     really tests is that a script-touched node survives the rebuild: bind
+     it, let several frames go by, and only then click. */
+  await out.waitForTimeout(400);
+  await out.mouse.click(box.x + 70, box.y + 70);
+
+  await out.waitForFunction(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => d.getImageData(x, y, 1, 1).data;
+    return at(230, 70)[0] > 200 && at(70, 70)[1] > 200;
+  }, null, { timeout: 5000 });
+
+  const px = await out.evaluate(() => {
+    const d = document.getElementById("stage").getContext("2d", { willReadFrequently: true });
+    const at = (x, y) => Array.from(d.getImageData(x, y, 1, 1).data).slice(0, 3);
+    return { moved: at(230, 70), vacated: at(70, 70) };
+  });
+  expect(px.moved[0]).toBeGreaterThan(200);
+  expect(px.vacated).toEqual([255, 255, 255]);
+  expect(errors).toEqual([]);
+  await out.close();
+});
+
 test("a mask inside a symbol clips what it masks", async ({ page }) => {
   await open(page);
   await page.evaluate(async (b64) => {

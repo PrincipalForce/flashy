@@ -486,10 +486,9 @@
      2004 attaches behaviour — the `on(release)` block belongs to the Flash
      authoring tool, the property belongs to the language.
 
-     INCOMPLETE: assignment through a clip reference binds, but a handler
-     assigned from a frame script to a clip found by name has been seen not
-     to bind on a real movie, and that case has no passing test yet. Treat
-     this as the start of the feature rather than the whole of it. */
+     The binding lives on the node, and the runtime rebuilds its display
+     list every tick — so a node that gets a handler this way has to be
+     kept across rebuilds, or the handler goes with the node it was on. */
   var EVENT_PROPS = {
     onEnterFrame: 'enterFrame', onLoad: 'load', onUnload: 'unload',
     onMouseDown: 'mouseDown', onMouseUp: 'mouseUp', onMouseMove: 'mouseMove',

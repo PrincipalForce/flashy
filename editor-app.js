@@ -8353,13 +8353,17 @@ function exportRuntime(data, canvas, options) {
     var hw = (o.width || 0) / 2, hh = (o.height || 0) / 2;
     var node;
 
-    /* An object whose handlers move it owns its own position from then on.
-       The root rebuilds its display list every frame, so without this the
-       node a handler just moved is thrown away and rebuilt where the
-       document says — which looks exactly like the handler never ran. */
-    if (o.clipScript && key) {
-      var scripted = scriptedCache[key];
-      if (scripted && scripted.script === o.clipScript) return scripted.node;
+    /* An object a script has touched owns itself from then on.
+       The root rebuilds its display list every tick, so a node that a
+       handler has just moved — or that code has just attached `onRelease`
+       to — is otherwise thrown away and rebuilt from the document, which
+       looks exactly like the script never ran. Scripts reach a node two
+       ways, and both have to survive: handlers imported with the object
+       (`__as2`) and handlers assigned in code (`__as2Dyn`). */
+    var cached = key ? scriptedCache[key] : null;
+    if (cached && cached.sig === objectSignature(o) &&
+        (cached.node.__as2 || hasDynamicHandlers(cached.node))) {
+      return cached.node;
     }
 
     /* Whether the timeline may overwrite this node's transform this frame.
@@ -8542,16 +8546,30 @@ function exportRuntime(data, canvas, options) {
       };
       var attached = Flashy.AS2.attach(node, o.clipScript, { stage: stage });
       if (attached) node.__as2 = attached;
-      if (key) {
-        /* Handlers listen on the stage, so a node that is being replaced has
-           to take its listeners with it — otherwise every rebuild leaves a
-           set behind, firing at an object nobody can see. */
-        var prior = scriptedCache[key];
-        if (prior && prior.node !== node && prior.node.__as2) prior.node.__as2.detach();
-        scriptedCache[key] = { node: node, script: o.clipScript };
-      }
+    }
+    if (key) {
+      /* Handlers listen on the stage, so a node being replaced has to take
+         its listeners with it — otherwise every rebuild leaves a set
+         behind, firing at an object nobody can see. */
+      if (cached && cached.node !== node && cached.node.__as2) cached.node.__as2.detach();
+      scriptedCache[key] = { node: node, sig: objectSignature(o) };
     }
     return node;
+  }
+
+  /* What makes a rebuilt object "the same object" as the one before it:
+     if any of this changed, the timeline has replaced it and the old node
+     (and anything a script did to it) goes. */
+  function objectSignature(o) {
+    return (o.type || "") + "|" + (o.symbolName || "") + "|" +
+      (o.bitmapAsset || "") + "|" + (o.clipScript ? o.clipScript.length : 0) + "|" +
+      (o.instanceName || "");
+  }
+
+  function hasDynamicHandlers(node) {
+    if (!node.__as2Dyn) return false;
+    for (var k in node.__as2Dyn) if (Object.prototype.hasOwnProperty.call(node.__as2Dyn, k)) return true;
+    return false;
   }
 
   var maxF = 1;
