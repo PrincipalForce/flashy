@@ -9878,10 +9878,20 @@ function importFromStage(flashyStage){
  */
 function testMovie(){
   var w=window.open("","_blank");
-  if(!w){
-    showMessage("Test Movie","The browser blocked the preview window. Allow pop-ups for this page and try again.");
-    return;
-  }
+  /* A blocked popup used to be the end of it — a message telling the user to
+     go and change a browser setting, with the movie they asked to see
+     nowhere. A pop-up blocker only stops a *window*, not the player, so
+     fall back to running the same preview in an overlay on this page. */
+  if(!w){startPreview(inlinePreviewWindow());return;}
+  startPreview(w);
+}
+
+/**
+ * Run the exported player inside `w`, which is either a preview window or
+ * the iframe standing in for one. Nothing here is specific to a popup.
+ */
+function startPreview(w){
+  if(!w)return;
   var data=serializeDoc();
   var needsAS2=docHasClipScripts(data);
   var scripts=["flashy.js"];
@@ -9923,6 +9933,60 @@ function testMovie(){
     };
     w.document.head.appendChild(el);
   });
+}
+
+/**
+ * A stand-in for the preview window, for when the browser will not open one.
+ *
+ * A same-origin iframe is the same kind of target: its contentWindow has its
+ * own document, timers and engine, so the player runs in it unchanged — the
+ * preview is the real thing in a smaller frame, not a second implementation.
+ * Returns the window to run in, closing over the chrome that dismisses it.
+ */
+function inlinePreviewWindow(){
+  var prev=document.getElementById("fy-preview");
+  if(prev)prev.parentNode.removeChild(prev);
+
+  var back=document.createElement("div");
+  back.id="fy-preview";
+  back.className="fy-dialog-backdrop";
+  var box=document.createElement("div");
+  box.className="fy-preview";
+  back.appendChild(box);
+
+  var bar=document.createElement("div");
+  bar.className="fy-dialog-title";
+  bar.textContent="Test Movie";
+  var close=document.createElement("button");
+  close.className="fy-preview-close";
+  close.type="button";
+  close.textContent="Close";
+  bar.appendChild(close);
+  box.appendChild(bar);
+
+  var frame=document.createElement("iframe");
+  frame.className="fy-preview-frame";
+  frame.title="Test Movie";
+  box.appendChild(frame);
+  document.body.appendChild(back);
+
+  var dismiss=function(){
+    if(!back.parentNode)return;
+    /* The player holds timers and input listeners of its own; they live in
+       the frame, so taking the frame out stops the movie with it. */
+    back.parentNode.removeChild(back);
+    document.removeEventListener("keydown",onKey,true);
+  };
+  var onKey=function(ev){
+    if(ev.key==="Escape"){ev.stopPropagation();dismiss();}
+  };
+  close.addEventListener("click",dismiss);
+  back.addEventListener("mousedown",function(ev){if(ev.target===back)dismiss();});
+  document.addEventListener("keydown",onKey,true);
+
+  frame.style.width=doc.width+"px";
+  frame.style.height=doc.height+"px";
+  return frame.contentWindow;
 }
 
 // === UI Wiring & Init ===

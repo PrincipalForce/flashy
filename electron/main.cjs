@@ -402,11 +402,13 @@ function createWindow(files = []) {
   });
 
   // External links go to the user's browser, never into the app window.
-  // The one exception is blob: — "Test Movie" generates the standalone HTML
-  // export in memory and window.open()s it, so denying blob: would break it.
-  // The payload is the renderer's own output, not remote content.
+  // The exceptions are the renderer's own previews: "Test Movie" opens a
+  // window and writes the player into it, which arrives here as about:blank
+  // (it used to build a blob: URL, and still may for the file export), so
+  // denying either leaves Test Movie reporting a blocked popup. Both
+  // payloads are the renderer's own output, not remote content.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("blob:")) {
+    if (!url || url === "about:blank" || url.startsWith("blob:")) {
       return {
         action: "allow",
         overrideBrowserWindowOptions: {

@@ -126,3 +126,49 @@ test("sprite sheet export contains the symbol's pixels", async ({ page }) => {
 
   expect(hasGreen, "the symbol rendered into the sprite sheet").toBe(true);
 });
+
+/* Test Movie is the thing people use far more than the file export, and it
+   had no coverage at all — which is how it came to report a blocked pop-up
+   in the desktop build, where the shell was denying about:blank, and how a
+   browser's pop-up blocker left nothing on screen but a scolding. */
+test("Test Movie plays in a window of its own", async ({ page, context }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+
+  const [preview] = await Promise.all([
+    context.waitForEvent("page"),
+    page.evaluate(() => window._flashyEditor.doAction("test")),
+  ]);
+  await preview.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+  expect(await preview.evaluate(() => window.__stage.root.children.length)).toBeGreaterThan(0);
+  await preview.close();
+});
+
+test("a blocked pop-up still previews, on the page", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+
+  // What a pop-up blocker does: window.open returns null, with no error.
+  await page.evaluate(() => { window.open = () => null; });
+  await page.evaluate(() => window._flashyEditor.doAction("test"));
+
+  const frame = page.frameLocator("#fy-preview iframe");
+  await expect(page.locator("#fy-preview")).toBeVisible();
+  await page.waitForFunction(() => {
+    const f = document.querySelector("#fy-preview iframe");
+    const w = f && f.contentWindow;
+    return !!(w && w.__stage && w.__stage.root.children.length > 0);
+  }, null, { timeout: 15000 });
+  // The movie is really drawn in there, not merely loaded.
+  await expect(frame.locator("#stage")).toBeVisible();
+  // And it is sized to the movie rather than to the viewport.
+  const size = await page.evaluate(() => {
+    const f = document.querySelector("#fy-preview iframe");
+    return { w: f.style.width, h: f.style.height };
+  });
+  expect(size).toEqual({ w: "550px", h: "400px" });
+
+  // Escape closes it, and takes the player's timers with it.
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#fy-preview")).toHaveCount(0);
+});

@@ -133,3 +133,25 @@ test("the in-app dialogs work in the desktop build, where prompt() does not", as
 
   await app.close();
 });
+
+test("Test Movie opens a preview window in the app, not a blocked pop-up", async ({}, testInfo) => {
+  const app = await launch(testInfo.outputPath("userData"));
+  const page = await app.firstWindow();
+  await page.waitForFunction(() => !!(window._flashyEditor && window._flashyAI));
+
+  /* The shell decides what window.open may do, and Test Movie opens a window
+     and writes the player into it rather than building a blob: URL. The shell
+     used to allow blob: alone, so the preview arrived as about:blank and was
+     denied: the editor saw a null window and reported that the browser had
+     blocked the pop-up — in an app with no pop-up blocker. */
+  const [preview] = await Promise.all([
+    app.waitForEvent("window", { timeout: 30000 }),
+    page.evaluate(() => window._flashyEditor.doAction("test")),
+  ]);
+  await preview.waitForFunction(() => !!window.__stage, null, { timeout: 30000 });
+  expect(await preview.evaluate(() => typeof window.__stage.root.currentFrame)).toBe("number");
+
+  // No dialog: the editor only raises one when it has nowhere to draw.
+  await expect(page.locator("#fy-dialog")).toHaveCount(0);
+  await app.close();
+});

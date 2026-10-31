@@ -526,6 +526,31 @@ input[type="range"].props-input {
   border-radius: 4px 4px 0 0;
 }
 .fy-dialog-body { padding: 12px; overflow: auto; }
+/* Test Movie's stand-in for a preview window, used when the browser blocks
+   the pop-up. Sized to the movie, so the frame is the stage and nothing
+   inside it has to know it is not a window of its own. */
+.fy-preview {
+  background: var(--chrome);
+  border: 1px solid var(--bevel-lo);
+  border-top-color: var(--bevel-hi); border-left-color: var(--bevel-hi);
+  border-radius: 5px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  display: flex; flex-direction: column;
+  max-width: 96vw; max-height: 94vh;
+}
+.fy-preview .fy-dialog-title { display: flex; align-items: center; gap: 10px; }
+.fy-preview-close {
+  margin-left: auto; font: inherit; font-weight: normal;
+  background: var(--input-bg); color: var(--text-bright);
+  border: 1px solid var(--input-bd); border-radius: 3px;
+  padding: 2px 9px; cursor: pointer;
+}
+.fy-preview-close:hover { border-color: var(--accent); }
+.fy-preview-frame {
+  display: block; border: 0; background: #111;
+  max-width: 96vw; max-height: calc(94vh - 34px);
+}
+
 /* pre-wrap so a message can use a blank line between paragraphs; textContent
    otherwise collapses them into one run of text. */
 .fy-dialog-msg { color: var(--text); margin-bottom: 10px; line-height: 1.45; white-space: pre-wrap; }
