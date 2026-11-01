@@ -33,7 +33,20 @@ if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clon
    Scale checkbox. All default to the behaviour documents already have. */
 function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;this.orientToPath=false;this.shapeHints=null;}
 KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;return c;};
-function cloneSound(s){return {asset:s.asset,sync:s.sync||"stream",volume:s.volume!=null?s.volume:1,loop:!!s.loop,offset:s.offset||0};}
+function cloneSound(s){
+  return {
+    asset:s.asset,sync:s.sync||"stream",
+    volume:s.volume!=null?s.volume:1,
+    loop:!!s.loop,offset:s.offset||0,
+    /* The effect, its envelope and the repeat count. `envelope` is an array of
+       ARRAYS, so it needs a real copy — a shallow one would have two keyframes
+       sharing one curve, which is the trap group children and filter stacks
+       each fell into. */
+    effect:s.effect||"none",
+    envelope:Array.isArray(s.envelope)?s.envelope.map(function(p){return p.slice();}):null,
+    repeat:s.repeat!=null?(s.repeat|0):0
+  };
+}
 function Layer(n){this.name=n;this.visible=true;this.locked=false;this.keyframes=[new KeyFrame(1)];}
 Layer.prototype.getKeyframeAt=function(f){for(var i=this.keyframes.length-1;i>=0;i--){var k=this.keyframes[i];if(f>=k.index&&f<k.index+k.duration)return k;}return null;};
 Layer.prototype.getFrameEnd=function(){var l=this.keyframes[this.keyframes.length-1];return l?l.index+l.duration-1:1;};
@@ -7068,15 +7081,47 @@ function updateProps(){
       },{type:"select",width:"130px",options:soundOpts});
 
       if(skf.sound&&skf.sound.asset){
+        /* Sync, including STOP — which was in the save format and honoured by
+           nothing, so "stop the music here" did nothing at all. Start is
+           Flash's "play it unless it is already playing". */
         row("Sync",skf.sound.sync||"stream",function(v){
           pushUndo();skf.sound.sync=v;fullRefresh();
-        },{type:"select",width:"90px",options:[["stream","Stream"],["event","Event"]]});
+        },{type:"select",width:"90px",options:[
+          ["stream","Stream"],["event","Event"],["start","Start"],["stop","Stop"]
+        ]});
+        if((skf.sound.sync||"stream")==="stop"){
+          note("This keyframe silences “"+skf.sound.asset+"” — including a copy "+
+               "of it started earlier as an Event sound. It plays nothing itself.");
+        }
         row("Volume",Math.round((skf.sound.volume!=null?skf.sound.volume:1)*100),function(v){
           pushUndo();skf.sound.volume=Math.max(0,Math.min(100,parseFloat(v)||0))/100;
         },{type:"number",width:"60px"});
-        row("Loop",!!skf.sound.loop,function(v){
-          pushUndo();skf.sound.loop=!!v;fullRefresh();
-        },{type:"checkbox"});
+        if((skf.sound.sync||"stream")!=="stop"){
+          row("Effect",skf.sound.effect||"none",function(v){
+            pushUndo();
+            setSoundEffect(skf.sound,v);
+            fullRefresh();
+          },{type:"select",width:"130px",options:SOUND_EFFECTS});
+          /* Loop and a repeat count are different things, and Flash offered
+             both: "loop" is forever, "repeat 3" is three times and then
+             silence. A boolean alone cannot say the second. */
+          row("Loop",!!skf.sound.loop,function(v){
+            pushUndo();
+            skf.sound.loop=!!v;
+            if(v)skf.sound.repeat=0;
+            fullRefresh();
+          },{type:"checkbox"});
+          if(!skf.sound.loop){
+            row("Repeat",skf.sound.repeat||1,function(v){
+              pushUndo();
+              skf.sound.repeat=Math.max(1,Math.min(99,parseInt(v,10)||1));
+              fullRefresh();
+            },{type:"number",width:"50px",unit:"times"});
+          }
+          actionRow([
+            {label:"Edit Envelope…",onClick:function(){showSoundEnvelopeDialog();}}
+          ]);
+        }
         actionRow([
           {label:"Auto Lip Sync...",onClick:function(){showLipSyncDialog();}}
         ]);
@@ -11150,6 +11195,258 @@ function getBounds(objs){
  * and redraws itself when they do.
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Sound effects and the envelope editor
+ *
+ * There was no sound editing at all. A sound could be imported, attached to a
+ * keyframe and given a volume, and that was the whole of it: no fade in, no
+ * fade out, no pan, no repeat count — and `sync: "stop"`, which is how you
+ * silence a music track, was stored in the file and honoured by nothing.
+ *
+ * The envelope is the general case and the presets are shorthand for it, which
+ * is how Flash's Edit Envelope dialog worked: picking Fade In filled the curve
+ * in, and dragging the curve afterwards turned the effect into Custom.
+ * ------------------------------------------------------------------ */
+
+var SOUND_EFFECTS=[
+  ["none","None"],
+  ["fadeIn","Fade In"],
+  ["fadeOut","Fade Out"],
+  ["fadeLR","Fade Left to Right"],
+  ["fadeRL","Fade Right to Left"],
+  ["left","Left Channel"],
+  ["right","Right Channel"],
+  ["custom","Custom"]
+];
+
+/** The envelope a keyframe's sound should play with, or null. */
+function soundEnvelopeFor(snd){
+  if(!snd)return null;
+  if(snd.effect==="custom")return (snd.envelope&&snd.envelope.length)?snd.envelope:null;
+  if(!window.Flashy||!Flashy.SoundTrack)return null;
+  var asset=(doc.sounds||{})[snd.asset];
+  return Flashy.SoundTrack.envelopeFor(snd.effect||"none",(asset&&asset.duration)||1);
+}
+
+/**
+ * Apply an effect preset to a keyframe's sound.
+ *
+ * The preset's curve is written into `envelope` as well as recorded as
+ * `effect`, so the envelope editor opens on the preset's own shape rather than
+ * on a blank one — which is what makes "pick Fade In, then adjust it" work.
+ */
+function setSoundEffect(snd,effect){
+  if(!snd)return;
+  snd.effect=effect;
+  if(effect==="none"){snd.envelope=null;return;}
+  if(effect==="custom"){
+    if(!snd.envelope||!snd.envelope.length){
+      var asset=(doc.sounds||{})[snd.asset];
+      var d=(asset&&asset.duration)||1;
+      // A flat full-volume line is the honest starting point for a custom
+      // curve: it sounds exactly like no effect until you move it.
+      snd.envelope=[[0,1,1],[d,1,1]];
+    }
+    return;
+  }
+  var env=window.Flashy&&Flashy.SoundTrack
+    ? Flashy.SoundTrack.envelopeFor(effect,((doc.sounds||{})[snd.asset]||{}).duration||1)
+    : null;
+  snd.envelope=env?env.map(function(p){return p.slice();}):null;
+}
+
+/**
+ * The Edit Envelope dialog.
+ *
+ * Two lanes — left and right — over the sound's own waveform, with draggable
+ * points. Over the waveform because an envelope is drawn against what you can
+ * hear: "bring it down where he stops talking" is a shape you can only place
+ * if you can see where that is.
+ */
+function showSoundEnvelopeDialog(){
+  var kf=CKF();
+  var snd=kf&&kf.sound;
+  if(!snd||!snd.asset){
+    showMessage("Edit Envelope",
+      "Put the playhead on a keyframe that has a sound on it first.");
+    return;
+  }
+  var asset=(doc.sounds||{})[snd.asset];
+  var duration=(asset&&asset.duration)||1;
+  // Editing always edits a CUSTOM envelope: a preset is a shape, and changing
+  // it means you no longer have that preset.
+  var working=(snd.envelope&&snd.envelope.length)
+    ? snd.envelope.map(function(p){return p.slice();})
+    : (soundEnvelopeFor(snd)||[[0,1,1],[duration,1,1]]).map(function(p){return p.slice();});
+
+  var W=360,LANE=52,GAP=8,H=LANE*2+GAP;
+  var cv=null,drag=null;
+
+  var toX=function(t){return (t/duration)*W;};
+  var toT=function(x){return Math.max(0,Math.min(duration,(x/W)*duration));};
+  var laneY=function(lane,gain){
+    var top=lane===0?0:LANE+GAP;
+    return top+(1-Math.max(0,Math.min(1,gain)))*LANE;
+  };
+  var gainFromY=function(lane,y){
+    var top=lane===0?0:LANE+GAP;
+    return Math.max(0,Math.min(1,1-((y-top)/LANE)));
+  };
+
+  var draw=function(){
+    if(!cv)return;
+    var cx=cv.getContext("2d");
+    cx.clearRect(0,0,W,H);
+    [0,1].forEach(function(lane){
+      var top=lane===0?0:LANE+GAP;
+      cx.fillStyle="#1E1E1E";
+      cx.fillRect(0,top,W,LANE);
+      // The waveform, so the envelope is drawn against what you can hear.
+      var peaks=window.Flashy&&Flashy.Sound&&Flashy.Sound.peaks
+        ? Flashy.Sound.peaks(snd.asset,Math.floor(W/2)) : null;
+      if(peaks&&peaks.length){
+        cx.fillStyle="rgba(120,170,220,0.35)";
+        for(var i=0;i<peaks.length;i++){
+          var a=Math.max(0.02,peaks[i]);
+          var h=a*(LANE/2-2);
+          cx.fillRect(i*2,top+LANE/2-h,2,h*2);
+        }
+      }
+      cx.strokeStyle="#3A3A3A";
+      cx.strokeRect(0.5,top+0.5,W-1,LANE-1);
+      cx.fillStyle="#777";
+      cx.font="9px Tahoma,sans-serif";
+      cx.textBaseline="top";
+      cx.fillText(lane===0?"L":"R",3,top+2);
+
+      cx.strokeStyle=lane===0?"#FFD24A":"#8CE08C";
+      cx.lineWidth=1.5;
+      cx.beginPath();
+      working.forEach(function(p,i){
+        var x=toX(p[0]),y=laneY(lane,lane===0?p[1]:(p[2]==null?p[1]:p[2]));
+        if(i===0)cx.moveTo(x,y);else cx.lineTo(x,y);
+      });
+      cx.stroke();
+      working.forEach(function(p){
+        var x=toX(p[0]),y=laneY(lane,lane===0?p[1]:(p[2]==null?p[1]:p[2]));
+        cx.beginPath();cx.arc(x,y,3.5,0,Math.PI*2);
+        cx.fillStyle=lane===0?"#FFD24A":"#8CE08C";cx.fill();
+        cx.strokeStyle="#111";cx.lineWidth=1;cx.stroke();
+      });
+    });
+  };
+
+  var nearest=function(x,y){
+    var best=null,bestD=1e9;
+    working.forEach(function(p,i){
+      [0,1].forEach(function(lane){
+        var px=toX(p[0]);
+        var py=laneY(lane,lane===0?p[1]:(p[2]==null?p[1]:p[2]));
+        var d=Math.hypot(px-x,py-y);
+        if(d<bestD&&d<12){bestD=d;best={index:i,lane:lane};}
+      });
+    });
+    return best;
+  };
+
+  showDialog({
+    title:"Edit Envelope — "+snd.asset,
+    message:"Drag a point to change the level; click an empty part of a lane to "+
+            "add one. The left and right lanes are what make a pan: bring one "+
+            "down and the sound moves to the other side.",
+    fields:[
+      {name:"effect",label:"Effect",type:"select",value:snd.effect||"none",
+       options:SOUND_EFFECTS,
+       onChange:function(v){
+         // A preset replaces the curve, so you can start from one and adjust.
+         var env=window.Flashy&&Flashy.SoundTrack
+           ? Flashy.SoundTrack.envelopeFor(v,duration) : null;
+         working=(env||[[0,1,1],[duration,1,1]]).map(function(p){return p.slice();});
+         draw();
+       }}
+    ],
+    build:function(body){
+      cv=document.createElement("canvas");
+      cv.width=W;cv.height=H;
+      cv.className="sound-envelope";
+      cv.title="Drag a point. Click an empty part of a lane to add one; "+
+               "right-click a point to remove it.";
+      body.appendChild(cv);
+      var hint=document.createElement("div");
+      hint.className="fy-dialog-hint";
+      hint.textContent="Length "+(Math.round(duration*100)/100)+"s.";
+      body.appendChild(hint);
+
+      cv.addEventListener("pointerdown",function(e){
+        var r=cv.getBoundingClientRect();
+        var x=e.clientX-r.left,y=e.clientY-r.top;
+        var hit=nearest(x,y);
+        if(hit){drag=hit;return;}
+        // Add a point, in time order so the curve never doubles back.
+        var t=toT(x);
+        var lane=y<LANE?0:1;
+        var g=gainFromY(lane,y);
+        var at=0;
+        while(at<working.length&&working[at][0]<t)at++;
+        var prev=working[Math.max(0,at-1)]||[0,1,1];
+        var p=[t,prev[1],prev[2]==null?prev[1]:prev[2]];
+        if(lane===0)p[1]=g;else p[2]=g;
+        working.splice(at,0,p);
+        drag={index:at,lane:lane};
+        draw();
+      });
+      cv.addEventListener("pointermove",function(e){
+        if(!drag)return;
+        var r=cv.getBoundingClientRect();
+        var y=e.clientY-r.top;
+        var p=working[drag.index];
+        if(!p)return;
+        var g=gainFromY(drag.lane,y);
+        if(drag.lane===0)p[1]=g;else p[2]=g;
+        /* Time is NOT dragged for the first and last points: an envelope that
+           no longer starts at zero or reach the end leaves the sound
+           unscheduled at one end, which is silence nobody asked for. */
+        if(drag.index>0&&drag.index<working.length-1){
+          var t=toT(e.clientX-r.left);
+          var lo=working[drag.index-1][0],hi=working[drag.index+1][0];
+          p[0]=Math.max(lo,Math.min(hi,t));
+        }
+        draw();
+      });
+      var end=function(){drag=null;};
+      cv.addEventListener("pointerup",end);
+      cv.addEventListener("pointercancel",end);
+      cv.addEventListener("contextmenu",function(e){
+        e.preventDefault();
+        var r=cv.getBoundingClientRect();
+        var hit=nearest(e.clientX-r.left,e.clientY-r.top);
+        // Two points is the minimum an envelope can be and still be a line.
+        if(hit&&working.length>2){working.splice(hit.index,1);draw();}
+      });
+      draw();
+    },
+    onOk:function(v){
+      pushUndo();
+      snd.effect=v.effect;
+      /* Whatever is on screen is what is kept, and it is kept as a custom
+         curve unless it is still exactly the preset — otherwise reopening the
+         dialog would silently throw the edit away and redraw the preset. */
+      var preset=window.Flashy&&Flashy.SoundTrack
+        ? Flashy.SoundTrack.envelopeFor(v.effect,duration) : null;
+      var same=preset&&JSON.stringify(preset)===JSON.stringify(working);
+      if(v.effect==="none"&&!working.some(function(p){
+        return p[1]<0.999||((p[2]==null?p[1]:p[2])<0.999);
+      })){
+        snd.envelope=null;
+      }else{
+        snd.envelope=working.map(function(p){return p.slice();});
+        if(!same)snd.effect="custom";
+      }
+      fullRefresh();
+    }
+  });
+}
+
 /** Timeline sounds in the current edit context, as SoundTrack items. */
 function soundItems(){
   var items=[];
@@ -11169,7 +11466,11 @@ function soundItems(){
         sync:kf.sound.sync||"stream",
         volume:kf.sound.volume!=null?kf.sound.volume:1,
         loop:!!kf.sound.loop,
-        offset:kf.sound.offset||0
+        offset:kf.sound.offset||0,
+        // The envelope the effect resolves to, so the authoring preview and
+        // the export hear the same thing.
+        envelope:soundEnvelopeFor(kf.sound),
+        repeat:kf.sound.repeat||0
       });
     });
   });
@@ -15240,6 +15541,14 @@ function exportRuntime(data, canvas, options) {
       var frames = asset.duration
         ? Math.max(1, Math.ceil((asset.duration - (k.sound.offset || 0)) * data.fps))
         : k.duration;
+      /* The effect's envelope, resolved through the engine's own preset table
+         so the authoring preview and the published movie cannot disagree about
+         what "Fade In" is. A custom curve travels on the document already. */
+      var env = k.sound.effect === "custom"
+        ? (k.sound.envelope && k.sound.envelope.length ? k.sound.envelope : null)
+        : (Flashy.SoundTrack && Flashy.SoundTrack.envelopeFor
+            ? Flashy.SoundTrack.envelopeFor(k.sound.effect || "none", asset.duration || 1)
+            : null);
       soundItems.push({
         id: li + ":" + k.index,
         asset: k.sound.asset,
@@ -15248,7 +15557,9 @@ function exportRuntime(data, canvas, options) {
         sync: k.sound.sync || "stream",
         volume: k.sound.volume != null ? k.sound.volume : 1,
         loop: !!k.sound.loop,
-        offset: k.sound.offset || 0
+        offset: k.sound.offset || 0,
+        envelope: env,
+        repeat: k.sound.repeat || 0
       });
     });
   });
@@ -17742,6 +18053,11 @@ function init(){
       return addBehavior(spec,event,values||{});
     },
     behaviorsOn: behaviorsOn,
+    /* Sound effects. */
+    soundEnvelopeFor: soundEnvelopeFor,
+    setSoundEffect: setSoundEffect,
+    soundItems: soundItems,
+    showSoundEnvelope: showSoundEnvelopeDialog,
     /* Library management. */
     libUseCount: libUseCount,
     unusedLibraryItems: unusedLibraryItems,

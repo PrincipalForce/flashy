@@ -183,10 +183,10 @@ name — an entire class of Flash content is unreachable.
 | Feature | Flashy | Gap |
 | --- | --- | --- |
 | Import, attach to keyframe, waveform in timeline | ✅ | `drawWaveform`. |
-| Sync: Event / Start / Stop / Stream | ◐ | `sound.sync` is stored; Stop is not honoured. |
-| Loop / repeat count | ◐ | Boolean loop, no repeat count. |
-| **Edit Envelope** (fade in/out, custom volume envelope, pan, L/R) | ⬜ | No sound editing at all. |
-| Effect presets (Fade In, Fade Out, Fade L→R, Custom) | ⬜ | Missing. |
+| Sync: Event / Start / Stop / Stream | ✅ | Stop now silences the asset — including an event sound fired long ago, which is the only reading that makes it useful. It was in the save format and honoured by nothing. |
+| Loop / repeat count | ✅ | Both, and they are different things: loop is forever, repeat 3 is three times and then silence. A BufferSource has no loop count, so a repeat is a loop with a scheduled stop. |
+| **Edit Envelope** (fade in/out, custom volume envelope, pan, L/R) | ✅ | Two draggable lanes over the sound's own waveform — an envelope is drawn against what you can hear. Scheduled on a real GainNode and StereoPannerNode rather than polled, so it stays accurate while the main thread is busy drawing. |
+| Effect presets (Fade In, Fade Out, Fade L→R, Fade R→L, Left, Right, Custom) | ✅ | `Flashy.SoundTrack.envelopeFor` is the one table, so the dialog, the authoring preview and the published movie cannot disagree about what "Fade In" is. Picking a preset fills the curve in, so you can start from one and adjust it. |
 | Per-sound compression / export settings | ⬜ | Missing. |
 | Auto lip sync | ✅ | Beyond Flash — a genuine Flashy advantage. |
 

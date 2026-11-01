@@ -2326,16 +2326,79 @@
       src.buffer = buf;
       src.loop = !!opts.loop;
       const gain = ctx.createGain();
-      gain.gain.value = opts.volume != null ? opts.volume : 1;
+      const base = opts.volume != null ? opts.volume : 1;
+      gain.gain.value = base;
       src.connect(gain);
-      gain.connect(this._master);
+
+      /* Panning. A StereoPannerNode is how "fade left to right" and a
+         one-sided sound are actually done; without one, Flash's pan effects
+         could only ever be faked by changing the volume of both channels at
+         once, which is not the same sound. Browsers without the node fall
+         back to no panning rather than to no audio. */
+      let panNode = null;
+      if ((opts.pan || opts.envelope) && typeof ctx.createStereoPanner === 'function') {
+        panNode = ctx.createStereoPanner();
+        panNode.pan.value = Math.max(-1, Math.min(1, opts.pan || 0));
+        gain.connect(panNode);
+        panNode.connect(this._master);
+      } else {
+        gain.connect(this._master);
+      }
 
       const offset = Math.max(0, Math.min(opts.offset || 0, buf.duration));
       const when = ctx.currentTime;
-      if (opts.duration != null) src.start(when, offset, Math.max(0, opts.duration));
-      else src.start(when, offset);
 
-      return { name: name, src: src, gain: gain, startedAt: when, offset: offset, loop: !!opts.loop };
+      /* A volume envelope, scheduled on the gain node.
+       *
+       * Points are [timeInAsset, left, right]. The two channels collapse to
+       * one gain plus one pan value — a true per-channel envelope needs a
+       * channel splitter, and the difference is inaudible against the thing
+       * this is for, which is fades and sweeps. Scheduled rather than polled
+       * so it stays sample-accurate while the main thread is busy drawing.
+       */
+      if (opts.envelope && opts.envelope.length) {
+        const env = opts.envelope;
+        gain.gain.cancelScheduledValues(when);
+        let started = false;
+        for (let i = 0; i < env.length; i++) {
+          const t = env[i][0], l = env[i][1], r = env[i][2] == null ? env[i][1] : env[i][2];
+          const level = base * Math.max(0, (l + r) / 2);
+          // Everything before the start offset has already happened.
+          if (t < offset) continue;
+          const at = when + (t - offset);
+          if (!started) {
+            // Start from the first point's value rather than ramping up to it
+            // from the base volume, which would add a fade nobody asked for.
+            gain.gain.setValueAtTime(level, at);
+            started = true;
+          } else {
+            gain.gain.linearRampToValueAtTime(level, at);
+          }
+          if (panNode) {
+            const bal = (l + r) > 0 ? (r - l) / (l + r) : 0;
+            if (i === 0) panNode.pan.setValueAtTime(bal, at);
+            else panNode.pan.linearRampToValueAtTime(bal, at);
+          }
+        }
+      }
+
+      /* A repeat count, as distinct from looping forever. `src.loop` with a
+         scheduled stop is the only way to get "play it three times": there is
+         no loopCount on a BufferSource. */
+      const repeat = opts.repeat != null ? (opts.repeat | 0) : 0;
+      if (repeat > 1 && buf.duration > 0) {
+        src.loop = true;
+        src.start(when, offset);
+        try { src.stop(when + (buf.duration - offset) + buf.duration * (repeat - 1)); }
+        catch (e) { /* a browser that refuses a future stop just loops on */ }
+      } else if (opts.duration != null) {
+        src.start(when, offset, Math.max(0, opts.duration));
+      } else {
+        src.start(when, offset);
+      }
+
+      return { name: name, src: src, gain: gain, pan: panNode,
+               startedAt: when, offset: offset, loop: !!src.loop };
     },
 
     /** Where a handle is in its asset, in seconds. */
@@ -2351,8 +2414,13 @@
     stop(handle) {
       if (!handle || !handle.src) return;
       try { handle.src.stop(); } catch (e) { /* already ended */ }
-      try { handle.src.disconnect(); handle.gain.disconnect(); } catch (e) { /* ditto */ }
+      try {
+        handle.src.disconnect();
+        handle.gain.disconnect();
+        if (handle.pan) handle.pan.disconnect();
+      } catch (e) { /* ditto */ }
     },
+
 
     setVolume(handle, v) {
       if (handle && handle.gain) handle.gain.gain.value = v;
@@ -2504,7 +2572,30 @@
       this.tolerance = opts.tolerance != null ? opts.tolerance : 0.12;
     }
 
-    /** items: [{id, asset, startFrame, endFrame, sync, volume, loop, offset}] */
+    /**
+     * Flash's sound effect presets, as an envelope.
+     *
+     * An envelope point is [timeInAsset, leftGain, rightGain]. Generating the
+     * presets from one place means the editor's dialog, the authoring preview
+     * and the exported player cannot disagree about what "Fade In" is — and
+     * "custom" is simply an envelope somebody edited, so a preset and a hand
+     * drawn curve are the same kind of thing.
+     */
+    static envelopeFor(effect, duration) {
+      const d = duration > 0 ? duration : 1;
+      switch (effect) {
+        case 'fadeIn':   return [[0, 0, 0], [Math.min(1, d * 0.25), 1, 1]];
+        case 'fadeOut':  return [[Math.max(0, d - Math.min(1, d * 0.25)), 1, 1], [d, 0, 0]];
+        case 'fadeLR':   return [[0, 1, 0], [d, 0, 1]];
+        case 'fadeRL':   return [[0, 0, 1], [d, 1, 0]];
+        case 'left':     return [[0, 1, 0], [d, 1, 0]];
+        case 'right':    return [[0, 0, 1], [d, 0, 1]];
+        default:         return null;    // "none", and "custom" brings its own
+      }
+    }
+
+    /** items: [{id, asset, startFrame, endFrame, sync, volume, loop, offset,
+                 envelope, repeat}] */
     setItems(items) {
       this.stopAll();
       this.items = (items || []).slice();
@@ -2523,6 +2614,10 @@
     }
 
     _covers(item, frame) {
+      /* A sync-"stop" marker is an instant, not a span: it has no sound of its
+         own to bound. Treating it like one meant it only acted while the
+         playhead sat inside a span it did not really have. */
+      if (item.sync === 'stop') return frame >= item.startFrame;
       return frame >= item.startFrame && frame <= item.endFrame;
     }
 
@@ -2553,10 +2648,30 @@
           continue;
         }
 
+        /* Sync STOP: a keyframe whose job is to silence an asset. It was
+           stored on the keyframe, written to the file, and honoured by
+           nothing — so "stop the music here" did nothing at all. It stops
+           every handle playing that asset, including an event sound fired
+           long ago, which is the only reading that makes it useful. */
+        if (item.sync === 'stop') {
+          if (jumped ? frame >= item.startFrame : this._lastFrame < item.startFrame) {
+            for (const other in this._active) {
+              const oi = this.items.filter(x => String(x.id) === String(other))[0];
+              if (!oi || oi.asset !== item.asset) continue;
+              Sound.stop(this._active[other]);
+              delete this._active[other];
+            }
+          }
+          continue;
+        }
+
         if (item.sync === 'event') {
           // Fire once, on entry.
           if (!handle && (jumped ? frame === item.startFrame : this._lastFrame < item.startFrame)) {
-            const h = Sound.play(item.asset, { volume: item.volume, loop: item.loop, offset: item.offset || 0 });
+            const h = Sound.play(item.asset, {
+              volume: item.volume, loop: item.loop, offset: item.offset || 0,
+              envelope: item.envelope, repeat: item.repeat
+            });
             if (h) this._active[id] = h;
           }
           continue;
@@ -2564,12 +2679,16 @@
 
         // Stream.
         const want = this._positionFor(item, frame);
+        const playOpts = {
+          offset: want, volume: item.volume, loop: item.loop,
+          envelope: item.envelope, repeat: item.repeat
+        };
         if (!handle) {
-          const h = Sound.play(item.asset, { offset: want, volume: item.volume, loop: item.loop });
+          const h = Sound.play(item.asset, playOpts);
           if (h) this._active[id] = h;
         } else if (jumped || Math.abs(Sound.positionOf(handle) - want) > this.tolerance) {
           Sound.stop(handle);
-          const h = Sound.play(item.asset, { offset: want, volume: item.volume, loop: item.loop });
+          const h = Sound.play(item.asset, playOpts);
           if (h) this._active[id] = h; else delete this._active[id];
         }
       }

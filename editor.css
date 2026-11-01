@@ -1519,3 +1519,15 @@ input[type="range"].props-input {
   color: #8AA; font-size: 9px;
 }
 .lib-use.unused { color: #B07A7A; font-style: italic; }
+
+/* ── Sound envelope editor ──
+   Two lanes over the waveform: an envelope is drawn against what you can hear,
+   because "bring it down where he stops talking" is a shape you can only
+   place if you can see where that is. */
+.sound-envelope {
+  display: block; margin: 4px auto;
+  border: 1px solid #111;
+  border-top-color: #555; border-left-color: #555;
+  border-radius: 2px; cursor: crosshair;
+  touch-action: none;
+}
