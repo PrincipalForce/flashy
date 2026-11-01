@@ -53,6 +53,31 @@ function currentTotalFrames(){
   }
   return doc.totalFrames;
 }
+/*
+ * Layer visibility is an authoring aid, not a property of the movie: Flash
+ * publishes hidden layers, and so does this. Everything that draws the
+ * document for the author — the stage, the Library preview — asks
+ * layerShows(); everything that produces output renders inside
+ * withAllLayers(), which turns the eye off for the duration of one render.
+ * The exported runtime does not consult visibility at all, because it has no
+ * authoring view to be an aid to.
+ *
+ * Without this, soloing a layer and forgetting meant exporting one layer's
+ * worth of movie, and the hidden state was invisible in the output.
+ */
+var showingAllLayers=false;
+
+function layerShows(l){
+  return !!l&&(showingAllLayers||l.visible!==false);
+}
+
+/** Render `fn` with every layer showing, whatever the eyes say. */
+function withAllLayers(fn){
+  var prev=showingAllLayers;
+  showingAllLayers=true;
+  try{return fn();}finally{showingAllLayers=prev;}
+}
+
 /**
  * Show one layer and hide the rest — of the timeline being edited, so inside
  * a symbol it solos within the symbol, which is where you are working.
@@ -1010,7 +1035,7 @@ function symbolFrameObjects(sym,frame){
   var out=[];
   for(var i=sym.layers.length-1;i>=0;i--){
     var sl=sym.layers[i];
-    if(!sl||sl.visible===false)continue;
+    if(!layerShows(sl))continue;
     // Library layers are revived through reviveLayers(), so getKeyframeAt is
     // always present; guard anyway for documents hand-edited outside the app.
     var skf=typeof sl.getKeyframeAt==="function"?sl.getKeyframeAt(frame):null;
@@ -1031,7 +1056,7 @@ function symbolFrameGroups(sym,frame){
   if(!sym)return [];
   if(!sym.layers)return (sym.objects&&sym.objects.length)?[{mask:null,objects:sym.objects}]:[];
   var objectsAt=function(layer){
-    if(!layer||layer.visible===false)return [];
+    if(!layerShows(layer))return [];
     var kf=typeof layer.getKeyframeAt==="function"?layer.getKeyframeAt(frame):null;
     return kf?kf.objects:[];
   };
@@ -3274,7 +3299,7 @@ function frameObjects(layers,frame){
   var out=[];
   for(var i=(layers||[]).length-1;i>=0;i--){
     var l=layers[i];
-    if(!l||l.visible===false)continue;
+    if(!layerShows(l))continue;
     var kf=typeof l.getKeyframeAt==="function"?l.getKeyframeAt(frame):null;
     if(!kf)continue;
     if(kf.tweenType&&kf.tweenType!=="none"&&kf.duration>1){
@@ -5364,7 +5389,7 @@ function symbolContentBox(sym){
   if(sym&&sym.layers&&sym.layers.length){
     for(var i=sym.layers.length-1;i>=0;i--){
       var l=sym.layers[i];
-      if(!l||l.visible===false)continue;
+      if(!layerShows(l))continue;
       var kf=(typeof l.getKeyframeAt==="function")?l.getKeyframeAt(1):(l.keyframes||[])[0];
       if(kf)objs=objs.concat(kf.objects||[]);
     }
@@ -6237,7 +6262,9 @@ function getBounds(objs){
 function soundItems(){
   var items=[];
   currentLayers().forEach(function(l,li){
-    if(l.visible===false)return;
+    /* Hiding a layer never silenced its sound in Flash, and it does not
+       here: the eye is about what you can see. */
+    if(!layerShows(l))return;
     l.keyframes.forEach(function(kf){
       if(!kf.sound||!kf.sound.asset)return;
       var asset=doc.sounds[kf.sound.asset];
@@ -8594,7 +8621,11 @@ function exportRuntime(data, canvas, options) {
   /** What a library symbol shows on its own `frame`, bottom layer first. */
   /**
    * A symbol's content at a frame, grouped by mask — the runtime's twin of
-   * the editor's symbolFrameGroups(). Masks live inside symbols far more
+   * the editor's symbolFrameGroups() — except that nothing in here consults
+   * `layer.visible`. Hiding a layer is an authoring aid, as it is in Flash:
+   * the published movie has every layer in it.
+   *
+   * Masks live inside symbols far more
    * often than on the root, and a flattened symbol draws every mask's own
    * artwork over the scene it was supposed to be clipping.
    */
@@ -8604,7 +8635,7 @@ function exportRuntime(data, canvas, options) {
       return (sym.objects && sym.objects.length) ? [{ mask: null, objects: sym.objects }] : [];
     }
     var objectsAt = function (layer) {
-      if (!layer || layer.visible === false) return [];
+      if (!layer) return [];
       for (var k = layer.keyframes.length - 1; k >= 0; k--) {
         var kf = layer.keyframes[k];
         if (frame >= kf.index && frame < kf.index + kf.duration) return kf.objects;
@@ -8649,7 +8680,7 @@ function exportRuntime(data, canvas, options) {
     var out = [];
     for (var i = sym.layers.length - 1; i >= 0; i--) {
       var l = sym.layers[i];
-      if (!l || l.visible === false) continue;
+      if (!l) continue;
       for (var k = l.keyframes.length - 1; k >= 0; k--) {
         var kf = l.keyframes[k];
         if (frame >= kf.index && frame < kf.index + kf.duration) { out = out.concat(kf.objects); break; }
@@ -9311,7 +9342,6 @@ function exportRuntime(data, canvas, options) {
 
   /** The objects a layer shows on a frame, interpolated if it is tweening. */
   function layerObjects(la, fr) {
-    if (la.visible === false) return [];
     var kf = activeKeyframe(la, fr);
     if (!kf) return [];
     var nk = kf.tweenType && kf.tweenType !== "none" && kf.duration > 1
@@ -9347,7 +9377,6 @@ function exportRuntime(data, canvas, options) {
   function buildLayerRun(host, layers, fr, groupIndex) {
     for (var li = layers.length - 1; li >= 0; li--) {
       var la = layers[li];
-      if (la.visible === false) continue;
       var kf = activeKeyframe(la, fr);
       if (!kf) continue;
       /* Stable identity for stateful instances — a MovieClip keeps its own
@@ -9443,8 +9472,10 @@ function renderFrameToCanvas(frameNum, w, h) {
   var cx = c.getContext("2d");
   cx.fillStyle = doc.backgroundColor || "#FFFFFF";
   cx.fillRect(0, 0, w, h);
-  frameObjects(doc.layers, frameNum).forEach(function (o) {
-    paintObj(cx, o, { chrome: false });
+  withAllLayers(function () {
+    frameObjects(doc.layers, frameNum).forEach(function (o) {
+      paintObj(cx, o, { chrome: false });
+    });
   });
   return c;
 }
@@ -9513,7 +9544,8 @@ function exportAsMP4() {
    * fast as it can render, but there is then no clock for live audio
    * capture — that route needs WebCodecs plus a muxer. See ROADMAP.)
    * ------------------------------------------------------------------- */
-  var items = soundItems();
+  // An export, so the eyes do not apply — see layerShows().
+  var items = withAllLayers(soundItems);
   var scheduled = [];
   function attachAudio() {
     if (!items.length || typeof Flashy === "undefined" || !Flashy.Sound) return Promise.resolve();
@@ -9584,24 +9616,27 @@ function exportAsSVG() {
      counts — and the layers it masks are wrapped in a group that references
      it, which is the same picture the stage and the HTML export draw. */
   var svgGroups = maskGroups(doc.layers);
-  for (var gi = svgGroups.length - 1; gi >= 0; gi--) {
-    var group = svgGroups[gi];
-    if (!group.layers.length) continue;
-    var objects = frameObjects(group.layers, frame);
-    if (!group.mask) {
+  // Hidden layers are in the output here too, as they are in every export.
+  withAllLayers(function () {
+    for (var gi = svgGroups.length - 1; gi >= 0; gi--) {
+      var group = svgGroups[gi];
+      if (!group.layers.length) continue;
+      var objects = frameObjects(group.layers, frame);
+      if (!group.mask) {
+        objects.forEach(function (o) { s += _objToSVG(o, 0); });
+        continue;
+      }
+      var maskObjects = frameObjects([group.mask], frame);
+      if (!maskObjects.length) continue;
+      var clipId = "fy-mask-" + gi;
+      s += '<clipPath id="' + clipId + '">';
+      maskObjects.forEach(function (o) { s += _objToSVG(o, 0); });
+      s += '</clipPath>\n';
+      s += '<g clip-path="url(#' + clipId + ')">\n';
       objects.forEach(function (o) { s += _objToSVG(o, 0); });
-      continue;
+      s += '</g>\n';
     }
-    var maskObjects = frameObjects([group.mask], frame);
-    if (!maskObjects.length) continue;
-    var clipId = "fy-mask-" + gi;
-    s += '<clipPath id="' + clipId + '">';
-    maskObjects.forEach(function (o) { s += _objToSVG(o, 0); });
-    s += '</clipPath>\n';
-    s += '<g clip-path="url(#' + clipId + ')">\n';
-    objects.forEach(function (o) { s += _objToSVG(o, 0); });
-    s += '</g>\n';
-  }
+  });
   s += '</svg>';
   dlFile(s, "animation.svg", "image/svg+xml");
 }
@@ -10795,6 +10830,10 @@ function init(){
     /** An undo snapshot, so a spec can check what one does and does not hold. */
     snapshot: snap,
     fullRefresh: fullRefresh,
+    /* One frame rasterised the way the GIF, sprite-sheet and video exports
+       do it — the only way to check what those put in a file without
+       decoding one. */
+    renderFrameToCanvas: renderFrameToCanvas,
     Layer: Layer,
     KeyFrame: KeyFrame,
     EditorObject: EditorObject,

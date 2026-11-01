@@ -172,3 +172,83 @@ test("a blocked pop-up still previews, on the page", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(page.locator("#fy-preview")).toHaveCount(0);
 });
+
+/* Layer visibility is an authoring aid, the way it is in Flash: the eye is
+   for the author's benefit and the published movie has every layer in it.
+   Before this, soloing a layer and forgetting meant exporting one layer's
+   worth of movie, with nothing in the file to say why. */
+async function hideUpperLayer(page) {
+  await page.evaluate(() => {
+    // sampleDoc's layers are [Shapes, Symbols]; hide the symbol layer.
+    window._flashyAI.currentLayers()[1].visible = false;
+    window._flashyAI.fullRefresh();
+  });
+}
+
+test("a hidden layer is still in the HTML export, and still on the stage of it",
+  async ({ page, context }) => {
+    await openEditor(page);
+    await loadDoc(page, sampleDoc());
+    await hideUpperLayer(page);
+
+    const html = await downloadFromAction(page, "export");
+    const { page: out, errors } = await runExportedHTML(context, html);
+    await out.waitForFunction(() => window.__stage && window.__stage.root.children.length > 0);
+
+    // The instance on the hidden layer is in the running movie.
+    const names = await out.evaluate(() =>
+      window.__stage.root.children.map((c) => c.name).filter(Boolean));
+    expect(names).toContain("star1");
+    expect(errors).toEqual([]);
+    await out.close();
+  });
+
+test("a hidden layer is still in the SVG export", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+  await hideUpperLayer(page);
+
+  const svg = await downloadFromAction(page, "exportSVG");
+  // The symbol's artwork is the green rectangle inside it.
+  expect(svg).toContain("#00FF00");
+});
+
+test("the editor itself still honours the eye", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+
+  const drawn = () => page.evaluate(() => {
+    const c = document.getElementById("stageCanvas");
+    const d = c.getContext("2d", { willReadFrequently: true })
+      .getImageData(0, 0, c.width, c.height).data;
+    let green = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 1] > 180 && d[i] < 120) green++;
+    return green;
+  });
+  expect(await drawn()).toBeGreaterThan(100);
+  await hideUpperLayer(page);
+  // Hiding is still hiding — where it is supposed to apply.
+  expect(await drawn()).toBe(0);
+});
+
+test("a hidden layer is still in the raster exports", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+  await hideUpperLayer(page);
+
+  /* What the GIF, sprite-sheet and video exports rasterise — they all go
+     through renderFrameToCanvas, and it is the one export path whose output
+     cannot be read back without decoding a file. */
+  const px = await page.evaluate(() => {
+    const cv = window._flashyAI.renderFrameToCanvas(1, 550, 400);
+    const d = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data;
+    let red = 0, green = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 180 && d[i + 1] < 120) red++;          // the visible layer
+      if (d[i + 1] > 180 && d[i] < 120) green++;        // the hidden one
+    }
+    return { red, green };
+  });
+  expect(px.red).toBeGreaterThan(100);
+  expect(px.green).toBeGreaterThan(100);
+});
