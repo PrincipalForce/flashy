@@ -1356,6 +1356,12 @@ input[type="range"].props-input {
 }
 .props-row.filter-head .props-label { font-weight: bold; color: #DDD; }
 
+/* A gradient filter's ramp: one row per stop, tighter than a normal property
+   row because there are usually three of them stacked. */
+.props-row.filter-stop { gap: 4px; align-items: center; padding: 1px 6px; }
+.props-row.filter-stop .props-slider { flex: 1; min-width: 40px; }
+.props-row.filter-stop .props-btn-action:disabled { opacity: 0.35; cursor: default; }
+
 /* ── Layer folders and outline view ──
    A folder reads as a band rather than a row: its contents are indented
    beneath it, so the grouping is visible without a tree widget. */

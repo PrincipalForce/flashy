@@ -816,3 +816,269 @@ test("the pencil's mode is applied when the stroke is released", async ({ page }
   const inked = await objects(page);
   expect(inked[0].nodes).toBeGreaterThan(50);
 });
+
+/* ------------------------------------------------------------------ *
+ * Anchor editing
+ *
+ * The Pen's other three jobs. A path you cannot repair is a path you have to
+ * redraw, so these are not a refinement of Bézier drawing — they are what
+ * makes it usable.
+ * ------------------------------------------------------------------ */
+
+/** A path object, sized to whatever box the caller gives it. */
+const pathObj = (cmds, over = {}) => ({
+  type: "path", x: 0, y: 0, width: 100, height: 100,
+  rotation: 0, scaleX: 1, scaleY: 1, alpha: 1,
+  path: cmds, pathW: 100, pathH: 100,
+  fillColor: "#CC3344", fillAlpha: 1, fillType: "solid",
+  strokeColor: "#000000", strokeAlpha: 1, strokeWidth: 1, strokeStyle: "solid",
+  ...over,
+});
+
+// 0 moveTo x y · 1 lineTo x y · 2 quadTo cx cy x y · 3 closePath
+const SQUARE = [0, 0, 0, 1, 100, 0, 1, 100, 100, 1, 0, 100, 3];
+
+/** Every anchor of the first object, in stage coordinates. */
+const anchors = (page) =>
+  page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    return F.objectNodes(o)
+      .filter((n) => n.kind === "anchor")
+      .map((n) => ({ x: n.x, y: n.y, i: n.i }));
+  });
+
+/** How many segments of the first object are quadratics. */
+const quadCount = (page) =>
+  page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    return F.pathSegments(o.path).filter((g) => g.cx != null).length;
+  });
+
+test("adding an anchor on a straight segment leaves the shape where it was", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  const before = await anchors(page);
+  const added = await page.evaluate(() => {
+    const F = window._flashyAI;
+    F.setTool("pen");
+    // The middle of the top edge.
+    return F.penEditAt(50, 0, false);
+  });
+  expect(added.action).toBe("add");
+
+  const after = await anchors(page);
+  expect(after).toHaveLength(before.length + 1);
+  // The new point sits ON the edge it split, so the outline is unchanged.
+  expect(after.some((n) => Math.abs(n.x - 50) < 2 && Math.abs(n.y) < 2)).toBe(true);
+});
+
+test("splitting a curve puts the new anchor on the curve", async ({ page }) => {
+  await openEditor(page);
+  // One quadratic arching from the left edge to the right.
+  await loadDoc(page, docWith([pathObj([0, 0, 50, 2, 50, -40, 100, 50])]));
+
+  const split = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    const seg = F.pathSegments(o.path).find((g) => g.cx != null);
+    // Where the original curve passes at t = 0.5.
+    const was = [0.25 * seg.x0 + 0.5 * seg.cx + 0.25 * seg.x1,
+                 0.25 * seg.y0 + 0.5 * seg.cy + 0.25 * seg.y1];
+    F.pathInsertAnchor(o, seg.at, 0.5);
+    const segs = F.pathSegments(o.path).filter((g) => g.cx != null);
+    // The first half now ENDS at the split point.
+    return { was, at: [segs[0].x1, segs[0].y1], n: segs.length };
+  });
+
+  // One quadratic became two...
+  expect(split.n).toBe(2);
+  /* ...and they meet exactly on the old curve. A de Casteljau split traces
+     the same curve by construction; anything cheaper nudges the outline,
+     which is the one thing adding a point must not do. */
+  expect(split.at[0]).toBeCloseTo(split.was[0], 6);
+  expect(split.at[1]).toBeCloseTo(split.was[1], 6);
+});
+
+test("deleting an anchor joins its neighbours", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  const before = await anchors(page);
+  const gone = await page.evaluate((i) => {
+    const F = window._flashyAI;
+    F.setTool("pen");
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    return F.pathDeleteAnchor(o, i);
+  }, before[2].i);
+  expect(gone.ok).toBe(true);
+
+  const after = await anchors(page);
+  expect(after).toHaveLength(before.length - 1);
+  // The point that was there is not any more.
+  expect(after.some((n) => Math.abs(n.x - before[2].x) < 0.5 &&
+                           Math.abs(n.y - before[2].y) < 0.5)).toBe(false);
+});
+
+test("deleting the first point of a loop promotes the next one", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  const r = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    const nodes = F.objectNodes(o).filter((n) => n.kind === "anchor");
+    const ok = F.pathDeleteAnchor(o, nodes[0].i);
+    // The stream must still START with a move, or nothing downstream can read it.
+    return { ok: ok.ok, firstOp: o.path[0], start: [o.path[1], o.path[2]] };
+  });
+  expect(r.ok).toBe(true);
+  expect(r.firstOp).toBe(0);
+  // The old second point, 100,0, is the loop's start now.
+  expect(r.start).toEqual([100, 0]);
+});
+
+test("a path refuses to be deleted down to nothing", async ({ page }) => {
+  await openEditor(page);
+  // Two anchors: a line. One more deletion would leave an object that cannot
+  // be seen or clicked, which is worse than refusing.
+  await loadDoc(page, docWith([pathObj([0, 0, 0, 1, 100, 100])]));
+
+  const r = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    const nodes = F.objectNodes(o).filter((n) => n.kind === "anchor");
+    return F.pathDeleteAnchor(o, nodes[1].i);
+  });
+  expect(r.ok).toBe(false);
+  expect(r.why).toContain("two points");
+});
+
+test("converting an anchor turns a corner into a curve and back", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  expect(await quadCount(page)).toBe(0);
+
+  const smoothed = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    const nodes = F.objectNodes(o).filter((n) => n.kind === "anchor");
+    // The second anchor: it has a neighbour on each side to curve between.
+    return F.pathConvertAnchor(o, nodes[1].i);
+  });
+  expect(smoothed).toMatchObject({ ok: true, kind: "curve" });
+  // Both segments meeting at that anchor became quadratics.
+  expect(await quadCount(page)).toBe(2);
+
+  const straightened = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    const nodes = F.objectNodes(o).filter((n) => n.kind === "anchor");
+    return F.pathConvertAnchor(o, nodes[1].i);
+  });
+  expect(straightened).toMatchObject({ ok: true, kind: "corner" });
+  expect(await quadCount(page)).toBe(0);
+});
+
+test("a smoothed anchor gets its handles on opposite sides", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  const sides = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    const nodes = F.objectNodes(o).filter((n) => n.kind === "anchor");
+    F.pathConvertAnchor(o, nodes[1].i);
+    const segs = F.pathSegments(o.path).filter((g) => g.cx != null);
+    const a = segs[0];                         // arrives at the anchor
+    const b = segs[1];                         // leaves it
+    /* Smooth means the two handles and the anchor are collinear, and the
+       handles are on OPPOSITE sides — a handle on the same side as its
+       partner is a cusp, not a smooth join. */
+    const ax = a.cx - a.x1, ay = a.cy - a.y1;
+    const bx = b.cx - a.x1, by = b.cy - a.y1;
+    return { dot: ax * bx + ay * by, cross: ax * by - ay * bx };
+  });
+  expect(sides.dot).toBeLessThan(0);
+  expect(Math.abs(sides.cross)).toBeLessThan(1e-6);
+});
+
+test("the Pen says why an anchor cannot be converted", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj([0, 0, 0, 1, 100, 0, 1, 100, 100])]));
+
+  const r = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    const nodes = F.objectNodes(o).filter((n) => n.kind === "anchor");
+    // The last anchor of an OPEN path: there is nothing on its far side.
+    return F.pathConvertAnchor(o, nodes[nodes.length - 1].i);
+  });
+  expect(r.ok).toBe(false);
+  expect(r.why).toContain("one side");
+});
+
+test("a Pen click away from any path starts a new one instead of editing", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  const edit = await page.evaluate(() => {
+    const F = window._flashyAI;
+    F.setTool("pen");
+    // Far from the square, so there is nothing to edit.
+    return F.penEditAt(320, 240, false);
+  });
+  expect(edit).toBeNull();
+});
+
+test("the segment hit test finds the nearest edge and where along it", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  const hit = await page.evaluate(() => {
+    const h = window._flashyAI.pathSegHit(100, 25);
+    return h ? { t: h.t, x: h.x, y: h.y } : null;
+  });
+  // A quarter of the way down the right-hand edge.
+  expect(hit.x).toBeCloseTo(100, 1);
+  expect(hit.y).toBeCloseTo(25, 1);
+  expect(hit.t).toBeCloseTo(0.25, 1);
+});
+
+test("an edited path keeps its own transform", async ({ page }) => {
+  await openEditor(page);
+  /* Moved and scaled: the click arrives in stage space and has to be mapped
+     back through the object's own matrix before the stream is touched. */
+  await loadDoc(page, docWith([pathObj(SQUARE.slice(),
+    { x: 150, y: 80, width: 200, height: 200 })]));
+
+  const added = await page.evaluate(() => {
+    const F = window._flashyAI;
+    F.setTool("pen");
+    // The middle of the top edge, in stage coordinates.
+    return F.penEditAt(250, 80, false);
+  });
+  expect(added.action).toBe("add");
+
+  const after = await anchors(page);
+  expect(after.some((n) => Math.abs(n.x - 250) < 3 && Math.abs(n.y - 80) < 3)).toBe(true);
+});
+
+test("an anchor edit is one undo step", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([pathObj(SQUARE.slice())]));
+
+  const before = (await anchors(page)).length;
+  await page.evaluate(() => {
+    window._flashyAI.setTool("pen");
+    window._flashyAI.penEditAt(50, 0, false);
+    window._flashyAI.fullRefresh();
+  });
+  expect((await anchors(page)).length).toBe(before + 1);
+
+  await page.keyboard.press("Control+z");
+  expect((await anchors(page)).length).toBe(before);
+});

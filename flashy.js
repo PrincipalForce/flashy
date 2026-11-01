@@ -497,6 +497,145 @@
       return parts.join(' ');
     },
 
+    /* ---- gradient glow and gradient bevel ---------------------------
+     * The two filters whose colour is a RAMP rather than a single value, and
+     * the two that CSS cannot express at all: a drop-shadow function takes one
+     * colour, and no amount of stacking turns that into a gradient.
+     *
+     * Flash's construction, which is what is built here: blur the object's own
+     * alpha silhouette, then look the blurred alpha up in the ramp. Where the
+     * silhouette is solid you get the ramp's far end; where it has faded away
+     * to nothing you get the near end. A glow lays that halo under the object;
+     * a bevel offsets it twice along the light angle, taking one half of the
+     * ramp for the lit side and the other for the shadowed one.
+     *
+     * The ramp lives here because four things need the same colours: this
+     * canvas pass, the SVG export's feComponentTransfer tables, the exported
+     * player (which runs this very code), and the tween between keyframes.
+     * ------------------------------------------------------------------ */
+
+    /** The default ramp: transparent at the centre, solid colour at the edge. */
+    DEFAULT_STOPS: [
+      { ratio: 0, color: 0xffffff, alpha: 0 },
+      { ratio: 255, color: 0xff3366, alpha: 1 }
+    ],
+
+    /**
+     * A filter's ramp as 256 RGBA entries, indexed by blurred alpha.
+     *
+     * `stops` are Flash's: a ratio from 0 to 255, a colour, and an alpha.
+     * Unsorted or out-of-range stops are tolerated — a document is data, and
+     * refusing to draw is worse than drawing the obvious interpretation.
+     */
+    ramp(f) {
+      const raw = (f && f.stops && f.stops.length ? f.stops : this.DEFAULT_STOPS)
+        .map(s => ({
+          ratio: Math.max(0, Math.min(255, s.ratio == null ? 0 : s.ratio)),
+          color: typeof s.color === 'string'
+            ? parseInt(String(s.color).replace('#', ''), 16) : (s.color | 0),
+          alpha: s.alpha == null ? 1 : Math.max(0, Math.min(1, s.alpha))
+        }))
+        .sort((a, b) => a.ratio - b.ratio);
+      const out = new Uint8ClampedArray(256 * 4);
+      let k = 0;
+      for (let i = 0; i < 256; i++) {
+        while (k < raw.length - 2 && raw[k + 1].ratio < i) k++;
+        const a = raw[k], b = raw[Math.min(k + 1, raw.length - 1)];
+        const span = b.ratio - a.ratio;
+        const t = span > 0 ? Math.max(0, Math.min(1, (i - a.ratio) / span))
+                           : (i >= b.ratio ? 1 : 0);
+        const mix = (sh) => ((a.color >> sh) & 0xff) +
+                            (((b.color >> sh) & 0xff) - ((a.color >> sh) & 0xff)) * t;
+        out[i * 4] = mix(16);
+        out[i * 4 + 1] = mix(8);
+        out[i * 4 + 2] = mix(0);
+        out[i * 4 + 3] = (a.alpha + (b.alpha - a.alpha) * t) * 255;
+      }
+      return out;
+    },
+
+    /**
+     * The ramp as per-channel tables for SVG's feComponentTransfer.
+     *
+     * `n` samples, each 0..1. The SVG export copies the blurred alpha into
+     * R, G and B and then maps each through its own table, which is how an
+     * alpha-indexed colour ramp is expressed in a filter primitive.
+     */
+    rampTable(f, n) {
+      n = Math.max(2, n || 16);
+      const r = this.ramp(f);
+      const ch = [[], [], [], []];
+      for (let i = 0; i < n; i++) {
+        const at = Math.round((i / (n - 1)) * 255) * 4;
+        for (let c = 0; c < 4; c++) ch[c].push(+(r[at + c] / 255).toFixed(4));
+      }
+      return { r: ch[0], g: ch[1], b: ch[2], a: ch[3] };
+    },
+
+    /** The enabled gradient filters in a stack, in order. */
+    gradientPasses(filters) {
+      const out = [];
+      if (!filters) return out;
+      for (let i = 0; i < filters.length; i++) {
+        const f = filters[i];
+        if (!f || f.enabled === false) continue;
+        if (f.type === 'gradientGlow' || f.type === 'gradientBevel') out.push(f);
+      }
+      return out;
+    },
+
+    /**
+     * One halo layer, built from an already-rendered silhouette.
+     *
+     * The source canvas holds the object as drawn. Blurring it and then
+     * replacing every pixel's colour with the ramp entry its blurred alpha
+     * points at turns the silhouette into the halo — and because the lookup is
+     * by alpha, the object's own colours never leak into the glow.
+     */
+    halo(src, f) {
+      const w = src.width, h = src.height;
+      const slot = this._acquire(w, h);
+      if (!slot) return null;
+      const g = slot.ctx;
+      const blur = Math.max(0, f.blur == null ? 8 : f.blur) / 2;
+      const ang = ((f.angle == null ? 45 : f.angle) * Math.PI) / 180;
+      const dist = f.type === 'gradientBevel' ? (f.distance == null ? 4 : f.distance) : 0;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, w, h);
+      g.filter = blur > 0 ? 'blur(' + blur.toFixed(2) + 'px)' : 'none';
+      if (f.type === 'gradientBevel') {
+        /* Two offset copies, one each way along the light angle. They overlap
+           in the middle, where the ramp is at its transparent centre, which is
+           what makes a bevel read as an edge rather than two shadows. */
+        g.drawImage(src, Math.cos(ang) * dist, Math.sin(ang) * dist);
+        g.drawImage(src, -Math.cos(ang) * dist, -Math.sin(ang) * dist);
+      } else {
+        g.drawImage(src, 0, 0);
+      }
+      g.filter = 'none';
+      let img;
+      try { img = g.getImageData(0, 0, w, h); }
+      catch (e) { this._release(slot); return null; }   // a tainted canvas
+      const d = img.data;
+      const ramp = this.ramp(f);
+      // Strength multiplies the halo's alpha, which is what Flash's did.
+      const str = Math.max(0, Math.min(4, f.strength == null ? 1 : f.strength));
+      for (let i = 0; i < d.length; i += 4) {
+        const a = d[i + 3];
+        if (!a) continue;
+        const at = a * 4;
+        d[i] = ramp[at];
+        d[i + 1] = ramp[at + 1];
+        d[i + 2] = ramp[at + 2];
+        d[i + 3] = Math.min(255, ramp[at + 3] * str);
+      }
+      g.putImageData(img, 0, 0);
+      /* The slot is handed back to the caller still busy: it IS the returned
+         canvas, so releasing it here would let the next nested filter paint
+         over a layer that has not been composited yet. */
+      return { canvas: slot.canvas, slot: slot };
+    },
+
     /** How far outside its box a filter stack can reach, in pixels. */
     extent(filters) {
       let pad = 0;
@@ -510,6 +649,8 @@
           pad = Math.max(pad, Math.abs(f.distance || 0) + Math.abs(f.blur || 0));
         } else if (f.type === 'glow') {
           pad = Math.max(pad, Math.abs(f.blur || 0));
+        } else if (f.type === 'gradientGlow' || f.type === 'gradientBevel') {
+          pad = Math.max(pad, Math.abs(f.blur || 0) + Math.abs(f.distance || 0));
         }
       }
       return pad;
@@ -556,6 +697,8 @@
       dropShadow: ["distance", "angle", "blur", "alpha", "strength"],
       glow: ["blur", "alpha", "strength"],
       bevel: ["distance", "angle", "blur", "strength"],
+      gradientGlow: ["blur", "angle", "strength"],
+      gradientBevel: ["distance", "angle", "blur", "strength"],
       adjustColor: ["brightness", "contrast", "saturation", "hue"]
     },
     /** Colour fields each filter type blends. */
@@ -607,6 +750,21 @@
         (this.TWEEN_COLORS[f.type] || []).forEach(k => {
           if (a[i][k] != null && b[i][k] != null) f[k] = this._color(a[i][k], b[i][k], t);
         });
+        /* A gradient ramp tweens stop by stop, but only when the two
+           keyframes agree about how MANY stops there are — inserting a stop
+           mid-tween has no sensible meaning, so the start frame's ramp holds,
+           the same rule the whole stack already follows for its shape. */
+        if (a[i].stops && b[i].stops && a[i].stops.length === b[i].stops.length) {
+          f.stops = a[i].stops.map((sa, si) => {
+            const sb = b[i].stops[si];
+            return {
+              ratio: this._num(sa.ratio, sb.ratio, t, 0),
+              color: this._color(sa.color == null ? 0 : sa.color,
+                                 sb.color == null ? 0 : sb.color, t),
+              alpha: this._num(sa.alpha, sb.alpha, t, 1)
+            };
+          });
+        }
         out.push(f);
       }
       return out;
@@ -688,11 +846,13 @@
     render(ctx, filters, colorTransform, draw) {
       const css = this.css(filters);
       const needsColor = this.hasColor(colorTransform);
-      if (!css && !needsColor) { draw(ctx); return; }
+      const grads = this.gradientPasses(filters);
+      if (!css && !needsColor && !grads.length) { draw(ctx); return; }
       const target = ctx.canvas;
       const slot = this._acquire(target.width, target.height);
       if (!slot) { draw(ctx); return; }     // no DOM: render unfiltered
       const octx = slot.ctx;
+      const halos = [];
       // Same transform, so the object lands in the same device pixels; the
       // composite is then a straight 1:1 blit.
       octx.setTransform(ctx.getTransform());
@@ -708,11 +868,22 @@
         // Alpha is already baked into the buffer; applying it again would
         // square it.
         ctx.globalAlpha = 1;
+        /* Gradient halos go UNDER the object, and with no CSS filter of their
+           own — the stack's blur or glow applies to the artwork, not to a halo
+           that has already been blurred to build it. */
+        for (let gi = 0; gi < grads.length; gi++) {
+          const made = this.halo(slot.canvas, grads[gi]);
+          if (!made) continue;
+          ctx.filter = 'none';
+          ctx.drawImage(made.canvas, 0, 0);
+          halos.push(made.slot);
+        }
         ctx.filter = css || 'none';
         ctx.drawImage(slot.canvas, 0, 0);
         ctx.filter = 'none';
         ctx.restore();
       } finally {
+        for (let hi = 0; hi < halos.length; hi++) this._release(halos[hi]);
         this._release(slot);
       }
     }

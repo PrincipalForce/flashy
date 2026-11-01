@@ -543,3 +543,286 @@ test("a filter applies to a group and a symbol instance, not just a shape", asyn
   expect(seam[0]).toBeLessThan(60);
   expect(errors).toEqual([]);
 });
+
+/* ------------------------------------------------------------------ *
+ * Gradient Glow and Gradient Bevel
+ *
+ * The two filters whose colour is a RAMP, and the two CSS cannot express at
+ * all: a drop-shadow function takes one colour, and no amount of stacking
+ * turns that into a gradient. They are built instead the way Flash built
+ * them — blur the object's own alpha silhouette, then look the blurred alpha
+ * up in the ramp — which is why the ramp lives in Flashy.Filters and not in
+ * any one renderer.
+ * ------------------------------------------------------------------ */
+
+const RED_RAMP = [
+  { ratio: 0, color: 0xffffff, alpha: 0 },
+  { ratio: 255, color: 0xff0000, alpha: 1 },
+];
+
+test("the ramp resolves stops to 256 entries, however they are written", async ({ page }) => {
+  await openEditor(page);
+  const r = await page.evaluate(() => {
+    const F = window.Flashy.Filters;
+    // Out of order, out of range, and one colour as a string: a document is
+    // data, and refusing to draw is worse than drawing the obvious reading.
+    const ramp = F.ramp({ stops: [
+      { ratio: 300, color: "#00FF00", alpha: 1 },
+      { ratio: -20, color: 0x000000, alpha: 0 },
+    ] });
+    return {
+      len: ramp.length,
+      first: [...ramp.slice(0, 4)],
+      last: [...ramp.slice(1020)],
+      mid: [...ramp.slice(128 * 4, 128 * 4 + 4)],
+    };
+  });
+  expect(r.len).toBe(1024);
+  expect(r.first).toEqual([0, 0, 0, 0]);
+  expect(r.last).toEqual([0, 255, 0, 255]);
+  // Halfway along, halfway between the two stops.
+  expect(r.mid[1]).toBeGreaterThan(100);
+  expect(r.mid[1]).toBeLessThan(160);
+  expect(r.mid[3]).toBeGreaterThan(100);
+});
+
+test("a gradient glow paints a halo in the ramp's colour", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+  await setFx(page, { filters: [
+    { type: "gradientGlow", enabled: true, blur: 16, strength: 1, stops: RED_RAMP },
+  ] });
+
+  // Just outside the square's left edge: inside the halo.
+  const halo = await pixel(page, 98, 100);
+  /* Red over a white background, so red stays at the ceiling and the OTHER
+     two channels are what moved. The square itself is grey, so a red cast
+     there is the glow and nothing else — the lookup is by ALPHA, so the
+     artwork's own colour cannot leak into it. */
+  expect(halo[0]).toBe(255);
+  expect(halo[2]).toBeLessThan(245);
+  expect(halo[0] - halo[2]).toBeGreaterThan(10);
+
+  // The square still reads grey: the halo goes UNDER it, not over.
+  const body = await pixel(page, 140, 100);
+  expect(Math.abs(body[0] - body[1])).toBeLessThan(12);
+  expect(Math.abs(body[1] - body[2])).toBeLessThan(12);
+});
+
+test("a disabled gradient glow paints nothing", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+  const clean = await pixel(page, 94, 100);
+
+  await setFx(page, { filters: [
+    { type: "gradientGlow", enabled: false, blur: 16, stops: RED_RAMP },
+  ] });
+  expect(await pixel(page, 94, 100)).toEqual(clean);
+});
+
+test("strength scales the halo rather than its colour", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+
+  const at = async (strength) => {
+    await setFx(page, { filters: [
+      { type: "gradientGlow", enabled: true, blur: 16, strength, stops: RED_RAMP },
+    ] });
+    return pixel(page, 92, 100);
+  };
+  const faint = await at(0.4);
+  const strong = await at(3);
+  /* More strength means more red halo over a white background, which shows up
+     as LESS blue — red is already at the ceiling there. */
+  expect(strong[2]).toBeLessThan(faint[2]);
+});
+
+test("a gradient bevel is the offset that makes it one", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+
+  const BEVEL = (distance) => [{
+    type: "gradientBevel", enabled: true, distance, angle: 45, blur: 8, strength: 1,
+    stops: [
+      { ratio: 0, color: 0x000000, alpha: 0.9 },
+      { ratio: 128, color: 0x808080, alpha: 0 },
+      { ratio: 255, color: 0xffffff, alpha: 0.9 },
+    ],
+  }];
+  /* The square is 100,60 to 180,140, so these four probes are just past its
+     four corners: two on the 45 degree light axis, two across it. */
+  const corners = async (distance) => {
+    await setFx(page, { filters: BEVEL(distance) });
+    const g = await Promise.all([
+      pixel(page, 184, 144), pixel(page, 96, 56),     // on the axis
+      pixel(page, 184, 56), pixel(page, 96, 144),     // across it
+    ]);
+    return g.map((p) => p[0]);
+  };
+
+  /* With no offset the two copies land on top of each other, so a square --
+     which is symmetric about both diagonals -- reads the same at all four
+     corners. That is the control: it shows the asymmetry below comes from the
+     offset and not from the blur. */
+  const flat = await corners(0);
+  // Not pixel-identical -- the blur's own antialiasing differs a little by
+  // corner -- but nothing like the separation the offset produces below.
+  expect(Math.max(...flat) - Math.min(...flat)).toBeLessThan(40);
+
+  /* With an offset, the corners ALONG the light axis get both copies and so
+     land high on the ramp -- its highlight end -- while the corners across it
+     get a thin fringe and land at the shadow end. Two ends of one ramp from
+     one silhouette is what a gradient bevel is. */
+  const lit = await corners(8);
+  const onAxis = Math.min(lit[0], lit[1]);
+  const across = Math.max(lit[2], lit[3]);
+  expect(onAxis - across).toBeGreaterThan(80);
+});
+
+test("the filter's reach includes its blur and its offset", async ({ page }) => {
+  await openEditor(page);
+  const pad = await page.evaluate(() => ({
+    glow: window.Flashy.Filters.extent([{ type: "gradientGlow", blur: 20 }]),
+    bevel: window.Flashy.Filters.extent([{ type: "gradientBevel", blur: 10, distance: 6 }]),
+  }));
+  /* The extent is what the raster and SVG exports pad their bounds by. Too
+     small and the halo is sliced off at the object's own box, which was a
+     real bug class for the other filters. */
+  expect(pad.glow).toBe(20);
+  expect(pad.bevel).toBe(16);
+});
+
+test("the SVG export maps the ramp through component-transfer tables", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+  await setFx(page, { filters: [
+    { type: "gradientGlow", enabled: true, blur: 12, strength: 1, stops: RED_RAMP },
+  ] });
+  const svg = await downloadFromAction(page, "exportSVG");
+
+  // Blur the silhouette...
+  expect(svg).toContain('in="SourceAlpha"');
+  // ...copy the blurred alpha into the colour channels...
+  expect(svg).toContain("feColorMatrix");
+  // ...and run each through its own table.
+  expect(svg).toContain('type="table"');
+  expect(svg).toContain("feComponentTransfer");
+  // The halo is merged UNDER the artwork.
+  expect(svg).toContain("feMerge");
+
+  /* The tables come from the same Flashy.Filters.ramp the canvas uses, so the
+     two paths cannot drift. Checking the red channel's table is all ones is
+     checking exactly that: this ramp runs white to red, so red never drops. */
+  const table = await page.evaluate(() =>
+    window.Flashy.Filters.rampTable({ stops: [
+      { ratio: 0, color: 0xffffff, alpha: 0 },
+      { ratio: 255, color: 0xff0000, alpha: 1 },
+    ] }, 17));
+  expect(table.r.every((v) => v === 1)).toBe(true);
+  expect(table.a[0]).toBe(0);
+  expect(table.a[table.a.length - 1]).toBe(1);
+});
+
+test("the exported player draws the same halo", async ({ context, page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+  await setFx(page, { filters: [
+    { type: "gradientGlow", enabled: true, blur: 16, strength: 1, stops: RED_RAMP },
+  ] });
+  const html = await downloadFromAction(page, "export");
+  const { page: out, errors } = await runExportedHTML(context, html);
+  await out.waitForFunction(() => !!window.__stage);
+
+  const px = await out.evaluate(() => {
+    window.__stage.stop();
+    window.__stage.root.gotoAndStop(1);
+    window.__stage._render();
+    const g = document.getElementById("stage")
+      .getContext("2d", { willReadFrequently: true });
+    const d = g.getImageData(98, 100, 1, 1).data;
+    return [d[0], d[1], d[2], d[3]];
+  });
+  /* The export ships flashy.js, so it runs the very code the stage ran — the
+     point of putting the ramp in the engine rather than in the editor. */
+  expect(px[0]).toBe(255);
+  expect(px[0] - px[2]).toBeGreaterThan(10);
+  expect(errors).toEqual([]);
+  await out.close();
+});
+
+test("a ramp tweens stop by stop when the two keyframes agree about how many", async ({ page }) => {
+  await openEditor(page);
+  const lerped = await page.evaluate(() => {
+    const F = window.Flashy.Filters;
+    const mk = (color) => [{
+      type: "gradientGlow", enabled: true, blur: 10,
+      stops: [{ ratio: 0, color: 0, alpha: 0 }, { ratio: 255, color, alpha: 1 }],
+    }];
+    const half = F.lerpFilters(mk(0xff0000), mk(0x0000ff), 0.5);
+    // A keyframe that inserted a stop has no sensible midpoint, so the start
+    // frame's ramp holds — the same rule the whole stack follows for shape.
+    const mismatched = F.lerpFilters(mk(0xff0000), [{
+      type: "gradientGlow", enabled: true, blur: 10,
+      stops: [{ ratio: 0, color: 0, alpha: 0 }, { ratio: 128, color: 0x00ff00, alpha: 0.5 },
+              { ratio: 255, color: 0x0000ff, alpha: 1 }],
+    }], 0.5);
+    return {
+      midColor: half[0].stops[1].color,
+      kept: mismatched[0].stops.length,
+      keptColor: mismatched[0].stops[1].color,
+    };
+  });
+  // Halfway from red to blue.
+  expect(lerped.midColor).toBe(0x800080);
+  expect(lerped.kept).toBe(2);
+  expect(lerped.keptColor).toBe(0xff0000);
+});
+
+test("the Properties panel edits the ramp", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+  await setFx(page, { filters: [
+    { type: "gradientGlow", enabled: true, blur: 12, strength: 1, stops: RED_RAMP },
+  ] });
+
+  // The preview strip is drawn from the same ramp the painter uses.
+  await expect(page.locator("#propsPanel canvas.props-ramp")).toHaveCount(1);
+  // One row per stop...
+  await expect(page.locator("#propsPanel .filter-stop")).toHaveCount(2);
+  // ...and the two of a minimal ramp cannot be removed, because one stop is a
+  // flat colour and a flat gradient glow is just the Glow filter.
+  await expect(page.locator("#propsPanel .filter-stop button").first()).toBeDisabled();
+
+  await page.locator("#propsPanel button", { hasText: "+ Stop" }).click();
+  await expect(page.locator("#propsPanel .filter-stop")).toHaveCount(3);
+
+  const stops = await page.evaluate(() => {
+    const o = window._flashyAI.currentLayers()[0].getKeyframeAt(1).objects[0];
+    return o.filters[0].stops.map((s) => Math.round(s.ratio));
+  });
+  // The new stop went into the widest gap, in order.
+  expect(stops).toEqual([0, 128, 255]);
+});
+
+test("a ramp survives a save and open round trip", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, docWith([square()]));
+  await setFx(page, { filters: [{
+    type: "gradientBevel", enabled: true, distance: 5, angle: 30, blur: 7, strength: 2,
+    stops: [{ ratio: 0, color: 0x112233, alpha: 0.25 },
+            { ratio: 200, color: 0xAABBCC, alpha: 0.75 }],
+  }] });
+
+  const back = await page.evaluate(() => {
+    const json = JSON.stringify(window._flashyEditor.serializeDoc());
+    window._flashyEditor.loadDoc(JSON.parse(json));
+    const o = window._flashyAI.currentLayers()[0].getKeyframeAt(1).objects[0];
+    return o.filters[0];
+  });
+  expect(back.type).toBe("gradientBevel");
+  expect(back.angle).toBe(30);
+  expect(back.stops).toEqual([
+    { ratio: 0, color: 0x112233, alpha: 0.25 },
+    { ratio: 200, color: 0xAABBCC, alpha: 0.75 },
+  ]);
+});

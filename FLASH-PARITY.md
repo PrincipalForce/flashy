@@ -241,7 +241,7 @@ Covered by `tests/object-editing.spec.js` (21 specs).
 
 ### ✅ Wave 2 — drawing that can be corrected (shipped)
 8. ✅ **Subselection tool** — anchor editing on paths and polylines.
-9. ◐ **Pen tool** — Bézier drawing. Add/Delete/Convert anchor still to do.
+9. ✅ **Pen tool** — Bézier drawing, plus add, delete and convert anchor (see Wave 7).
 10. ✅ **PolyStar**, **Lasso** (+ polygon, magic wand), **Ink Bottle**, **Gradient Transform**.
 11. ✅ **Shape ▸ Smooth / Straighten / Optimize / Convert Lines to Fills / Expand Fill / Soften Edges**.
 12. ✅ **Combine Objects** — Union, Intersect, Punch, Crop (on `flashy-geom.js`).
@@ -365,3 +365,53 @@ bucket gap-closing and Lock Fill; the button Up/Over/Down/Hit authoring view;
 registration-point editing; templates; text kerning, baseline shift and
 super/subscript; Render as HTML; filter presets; the ComboBox component;
 History replay and save-as-command.
+
+34. ✅ **Pen: add, delete and convert anchor.** The Pen drew paths and then
+    abandoned them — a drawn curve could only be fixed by deleting it and
+    drawing again, which is the opposite of what a Bézier tool is for.
+
+    With nothing in progress, a Pen click on an existing path now edits it: on
+    a segment it adds an anchor, on an anchor it removes one, and Alt-click
+    converts a corner to a smooth curve and back. The overlay shows the
+    anchors and marks what the click under the pointer would do — a green plus
+    or a red ring — because add-an-anchor is otherwise a click into the dark.
+
+    Adding on a curve splits it by de Casteljau, so the outline does not move:
+    the point of adding an anchor is to get somewhere to pull from, not to
+    nudge the shape while you do it. Smoothing places the two quadratic
+    handles collinear with the anchor and on opposite sides, which is the
+    difference between a smooth join and a cusp. Deleting refuses below two
+    anchors, and deleting a loop's first point promotes the next one to the
+    MOVE rather than leaving a stream nothing downstream can read.
+
+    Covered by 12 specs in `tests/shape-tools.spec.js`.
+
+35. ✅ **Gradient Glow and Gradient Bevel.** The two filters whose colour is a
+    ramp, and the two CSS cannot express at all — `drop-shadow()` takes one
+    colour, and no amount of stacking turns that into a gradient.
+
+    Built the way Flash built them: blur the object's own alpha silhouette,
+    then look the blurred alpha up in the ramp. Because the lookup is by
+    alpha, the artwork's colours cannot leak into the halo, and the ramp's far
+    end lands where the silhouette is solid.
+
+    `Flashy.Filters.ramp()` resolves stops to 256 RGBA entries and is the
+    single source for four consumers: the canvas pass, the SVG export, the
+    exported player (which runs this very code), and the keyframe tween. The
+    SVG route is the interesting one — no filter primitive maps alpha to a
+    colour, but three in a row do: blur `SourceAlpha`, copy the blurred alpha
+    into R, G and B with an `feColorMatrix`, then run each channel through its
+    own `feComponentTransfer` table taken from `rampTable()`. Same ramp, not
+    an approximation of it.
+
+    A bevel is the same halo offset both ways along the light angle: the
+    corners along the axis get both copies and land at the ramp's highlight
+    end, the corners across it get a thin fringe and land at the shadow end.
+
+    Authoring: a preview strip drawn from the real ramp over a checkerboard,
+    one row per stop (position, colour, opacity), and an Add Stop that lands in
+    the widest gap taking the colour already there — so adding a stop does not
+    change the glow, it just gives you somewhere to grab. Ramps tween stop by
+    stop when the keyframes agree about how many stops there are.
+
+    Covered by 11 specs in `tests/filters.spec.js`.

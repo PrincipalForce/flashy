@@ -848,7 +848,7 @@ var TOOLS=[
   {id:"transform",label:"Free Transform (Q)",key:"q",svg:'<rect x="2" y="2" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="2" cy="2" r="1.5" fill="currentColor"/><circle cx="12" cy="2" r="1.5" fill="currentColor"/><circle cx="2" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/>'},
   {id:"gradient",label:"Gradient Transform (F) \u2014 drag a gradient's centre, angle and spread",key:"f",svg:'<rect x="2" y="3" width="10" height="8" fill="url(#fyGradIcon)" stroke="currentColor" stroke-width="1"/><defs><linearGradient id="fyGradIcon"><stop offset="0" stop-color="currentColor" stop-opacity="0.15"/><stop offset="1" stop-color="currentColor" stop-opacity="0.9"/></linearGradient></defs>'},
   {id:"text",label:"Text Tool (T)",key:"t",svg:'<text x="3" y="12" font-size="12" font-weight="bold" fill="currentColor">T</text>'},
-  {id:"pen",label:"Pen Tool (P) \u2014 click for corners, drag for curves",key:"p",svg:'<path d="M7,1 L10,4 L5,12 L3,13 L4,11 Z" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="7" cy="1" r="1.2" fill="currentColor"/>'},
+  {id:"pen",label:"Pen Tool (P) \u2014 click for corners, drag for curves; on a finished path a click adds or removes an anchor, Alt converts one",key:"p",svg:'<path d="M7,1 L10,4 L5,12 L3,13 L4,11 Z" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="7" cy="1" r="1.2" fill="currentColor"/>'},
   {id:"line",label:"Line Tool (N)",key:"n",svg:'<line x1="2" y1="12" x2="12" y2="2" stroke="currentColor" stroke-width="1.5"/>'},
   {id:"rect",label:"Rectangle Tool (R)",key:"r",svg:'<rect x="2" y="3" width="10" height="8" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
   {id:"oval",label:"Oval Tool (O)",key:"o",svg:'<ellipse cx="7" cy="7" rx="5" ry="4" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
@@ -4860,7 +4860,9 @@ function initMouse(){
   canvas.addEventListener("pointermove",function(e){
     stageHover=getStagePos(e);
     updateInfoPanel();
-    if(showRulers&&!dragging)render();
+    /* The Pen tool marks the segment or anchor under the pointer, so it needs
+       the repaint whether or not the rulers are showing. */
+    if((showRulers||curTool==="pen")&&!dragging)render();
     // Hovering a ruler is how a guide is discovered, so say so.
     var r=canvas.getBoundingClientRect();
     var ax=rulerHitAxis(e.clientX-r.left,e.clientY-r.top);
@@ -5080,6 +5082,19 @@ function onMouseDown(e){
       penCommit(true);
       fullRefresh();
       dragging=false;
+    }else if(!penPts||!penPts.length){
+      /* Nothing in progress, so a click on an existing path EDITS it: on a
+         segment it adds an anchor, on an anchor it removes one, and with Alt
+         held it converts a corner to a curve and back. Flash put all three on
+         this tool, and without them a drawn path is final. */
+      var pe=penEditAt(p.x,p.y,e.altKey);
+      if(pe){
+        fullRefresh();
+        dragging=false;
+      }else{
+        penStart(p.x,p.y);
+        render();
+      }
     }else{
       penStart(p.x,p.y);
       render();
@@ -7422,6 +7437,15 @@ var FILTER_TYPES=[
   {type:"bevel",label:"Bevel",
    make:function(){return {type:"bevel",enabled:true,distance:4,angle:45,blur:4,
      highlightColor:0xFFFFFF,shadowColor:0x000000,strength:1};}},
+  {type:"gradientGlow",label:"Gradient Glow",
+   make:function(){return {type:"gradientGlow",enabled:true,blur:10,angle:45,
+     strength:1,stops:[{ratio:0,color:0xFFFFFF,alpha:0},
+                       {ratio:255,color:0xFF3366,alpha:1}]};}},
+  {type:"gradientBevel",label:"Gradient Bevel",
+   make:function(){return {type:"gradientBevel",enabled:true,distance:5,angle:45,
+     blur:6,strength:1,stops:[{ratio:0,color:0x000000,alpha:0.7},
+                              {ratio:128,color:0x808080,alpha:0},
+                              {ratio:255,color:0xFFFFFF,alpha:0.9}]};}},
   {type:"adjustColor",label:"Adjust Color",
    make:function(){return {type:"adjustColor",enabled:true,brightness:0,
      contrast:0,saturation:0,hue:0};}}
@@ -7439,6 +7463,12 @@ var FILTER_FIELDS={
          ["blur","Blur",0,100,1,"num"],
          ["highlightColor","Highlight",0,0,0,"color"],
          ["shadowColor","Shadow",0,0,0,"color"]],
+  /* The gradient pair have no colour FIELD: their colour is the ramp, which
+     gets its own editor below the numbers. */
+  gradientGlow:[["blur","Blur",0,100,1,"num"],["angle","Angle",0,360,1,"num"],
+                ["strength","Strength",0,4,0.1,"num"]],
+  gradientBevel:[["distance","Distance",-100,100,1,"num"],["angle","Angle",0,360,1,"num"],
+                 ["blur","Blur",0,100,1,"num"],["strength","Strength",0,4,0.1,"num"]],
   adjustColor:[["brightness","Brightness",-100,100,1,"num"],
                ["contrast","Contrast",-100,100,1,"num"],
                ["saturation","Saturation",-100,100,1,"num"],
@@ -7485,8 +7515,9 @@ function buildFiltersSection(pp,o,sect,note){
   pp.appendChild(addRow);
 
   if(!filters.length){
-    note("No filters. Drop Shadow, Blur, Glow, Bevel and Adjust Color apply to "+
-         "shapes, groups and symbol instances alike, and tween between keyframes.");
+    note("No filters. Drop Shadow, Blur, Glow, Bevel, Gradient Glow, Gradient "+
+         "Bevel and Adjust Color apply to shapes, groups and symbol instances "+
+         "alike, and tween between keyframes.");
     return;
   }
 
@@ -7604,6 +7635,136 @@ function buildFiltersSection(pp,o,sect,note){
       });
       pp.appendChild(r);
     });
+
+    /* ── The ramp ──
+       Gradient Glow and Gradient Bevel have no single colour: their colour is
+       a ramp, indexed by the blurred alpha of the object's own silhouette. The
+       editor is a preview strip plus one row per stop, because a stop is three
+       things (where, what colour, how opaque) and a strip alone can only drag
+       the first. */
+    if(f.type==="gradientGlow"||f.type==="gradientBevel"){
+      var stops=f.stops&&f.stops.length?f.stops:(f.stops=[
+        {ratio:0,color:0xFFFFFF,alpha:0},{ratio:255,color:0xFF3366,alpha:1}]);
+
+      var strip=document.createElement("canvas");
+      strip.className="props-ramp";
+      strip.width=176;strip.height=14;
+      strip.title="The glow's colour, from the faintest edge of the blur on the "+
+                  "left to the solid silhouette on the right";
+      strip.style.cssText="width:176px;height:14px;display:block;margin:2px auto;"+
+                          "border:1px solid #1a1a1a;border-radius:2px";
+      // The SAME ramp the painter uses, so the strip cannot lie about it.
+      var rampData=Flashy.Filters.ramp(f);
+      var sctx=strip.getContext("2d");
+      // A checkerboard behind it, or a transparent stop looks like a white one.
+      for(var cxk=0;cxk<strip.width;cxk+=7){
+        for(var cyk=0;cyk<strip.height;cyk+=7){
+          sctx.fillStyle=((cxk/7+cyk/7)%2)?"#3a3a3a":"#2a2a2a";
+          sctx.fillRect(cxk,cyk,7,7);
+        }
+      }
+      for(var sxk=0;sxk<strip.width;sxk++){
+        var at=Math.round((sxk/(strip.width-1))*255)*4;
+        sctx.fillStyle="rgba("+rampData[at]+","+rampData[at+1]+","+
+                       rampData[at+2]+","+(rampData[at+3]/255)+")";
+        sctx.fillRect(sxk,0,1,strip.height);
+      }
+      pp.appendChild(strip);
+
+      stops.forEach(function(st,si){
+        var sr=document.createElement("div");
+        sr.className="props-row filter-stop";
+
+        var sw2=document.createElement("span");
+        sw2.className="props-swatch";
+        var shex=hexFromFilterColor(st.color,0xFFFFFF);
+        sw2.style.backgroundColor=shex;
+        sw2.title="This stop's colour";
+        sw2.addEventListener("click",function(ev){
+          ev.stopPropagation();
+          showCP(shex,function(nc){
+            pushUndo();st.color=filterColorFromHex(nc);fullRefresh();
+          });
+        });
+        sr.appendChild(sw2);
+
+        // Where along the ramp, 0 to 255 — Flash's own units for a stop.
+        var pos=document.createElement("input");
+        pos.className="props-input";pos.type="text";
+        pos.style.width="36px";
+        pos.value=Math.round(st.ratio==null?0:st.ratio);
+        pos.title="Position, 0 to 255";
+        pos.addEventListener("change",function(){
+          var v=parseFloat(pos.value);
+          if(isNaN(v))return;
+          pushUndo();
+          st.ratio=Math.max(0,Math.min(255,v));
+          fullRefresh();
+        });
+        sr.appendChild(pos);
+
+        var al2=document.createElement("input");
+        al2.type="range";al2.className="props-slider";
+        al2.min=0;al2.max=1;al2.step=0.01;
+        al2.value=st.alpha==null?1:st.alpha;
+        al2.title="This stop's opacity";
+        var pre2=null;
+        al2.addEventListener("pointerdown",function(){pre2=snap();});
+        al2.addEventListener("input",function(){
+          st.alpha=parseFloat(al2.value);render();
+        });
+        al2.addEventListener("change",function(){
+          if(pre2){pushUndoSnap(pre2);pre2=null;}else touchDoc();
+          updateProps();
+        });
+        sr.appendChild(al2);
+
+        var rm=document.createElement("button");
+        rm.className="props-btn-action";
+        rm.style.cssText="min-width:18px;padding:0 4px";
+        rm.textContent="✕";
+        // Two stops is the minimum a ramp can be; one is a flat colour, and a
+        // flat-coloured gradient glow is just the Glow filter.
+        rm.title=stops.length>2?"Remove this stop":"A ramp needs at least two stops";
+        rm.disabled=stops.length<=2;
+        rm.addEventListener("click",function(){
+          if(stops.length<=2)return;
+          pushUndo();
+          f.stops.splice(si,1);
+          fullRefresh();
+        });
+        sr.appendChild(rm);
+        pp.appendChild(sr);
+      });
+
+      var addStop=document.createElement("div");
+      addStop.className="props-row";
+      var asb=document.createElement("button");
+      asb.className="props-btn-action";
+      asb.textContent="+ Stop";
+      asb.title="Add a stop midway along the ramp";
+      asb.addEventListener("click",function(){
+        pushUndo();
+        /* Midway between the two widest-apart neighbours, taking the colour
+           the ramp already has there — so adding a stop does not change the
+           glow, it just gives you somewhere to grab. */
+        var sorted=f.stops.slice().sort(function(a,b){return a.ratio-b.ratio;});
+        var gapAt=0,gap=-1;
+        for(var gi=0;gi<sorted.length-1;gi++){
+          var d=sorted[gi+1].ratio-sorted[gi].ratio;
+          if(d>gap){gap=d;gapAt=gi;}
+        }
+        var mid=Math.round((sorted[gapAt].ratio+sorted[gapAt+1].ratio)/2);
+        var rd=Flashy.Filters.ramp(f);
+        f.stops.push({ratio:mid,
+          color:(rd[mid*4]<<16)|(rd[mid*4+1]<<8)|rd[mid*4+2],
+          alpha:rd[mid*4+3]/255});
+        f.stops.sort(function(a,b){return a.ratio-b.ratio;});
+        fullRefresh();
+      });
+      addStop.appendChild(asb);
+      pp.appendChild(addStop);
+    }
   });
 }
 
@@ -14139,7 +14300,40 @@ function penCommit(close){
 
 /** The pen's path as it is being drawn, with its handles. */
 function drawPenOverlay(cx){
-  if(!penPts||!penPts.length)return;
+  /* Nothing in progress: show what a click would EDIT instead. The anchors of
+     the paths on this frame, and a marker on the segment under the pointer —
+     without it, add-an-anchor is a click into the dark. */
+  if(!penPts||!penPts.length){
+    drawSubselectOverlay(cx);
+    if(stageHover){
+      var sh=pathSegHit(stageHover.x,stageHover.y);
+      var nh=nodeHitTest(stageHover.x,stageHover.y);
+      var onAnchor=nh&&nh.obj.type==="path"&&nh.node.kind==="anchor";
+      if(sh&&!onAnchor){
+        var rr=4/zoom;
+        cx.save();
+        cx.lineWidth=1.4/zoom;
+        // A plus: this click ADDS a point here.
+        cx.strokeStyle="rgba(80,200,120,0.95)";
+        cx.beginPath();
+        cx.moveTo(sh.x-rr,sh.y);cx.lineTo(sh.x+rr,sh.y);
+        cx.moveTo(sh.x,sh.y-rr);cx.lineTo(sh.x,sh.y+rr);
+        cx.stroke();
+        cx.restore();
+      }else if(onAnchor){
+        var r2=5/zoom;
+        cx.save();
+        cx.lineWidth=1.4/zoom;
+        // A ring: this click REMOVES this point.
+        cx.strokeStyle="rgba(255,140,120,0.95)";
+        cx.beginPath();
+        cx.arc(nh.node.x,nh.node.y,r2,0,Math.PI*2);
+        cx.stroke();
+        cx.restore();
+      }
+    }
+    return;
+  }
   var T=window.FlashyTrace;
   cx.save();
   cx.lineWidth=1/zoom;
@@ -14181,6 +14375,291 @@ function drawPenOverlay(cx){
     cx.stroke();
   });
   cx.restore();
+}
+
+/* ------------------------------------------------------------------ *
+ * Anchor editing
+ *
+ * Flash's Pen tool did three more things than draw: over a segment it added
+ * an anchor, over an anchor it removed one, and with Alt held it converted a
+ * corner to a curve and back. Without them a drawn path is final — the only
+ * repair is to delete it and draw again, which is the opposite of what a
+ * Bézier tool is for.
+ *
+ * Everything here works on the command stream in the object's own local
+ * coordinates, so an edited path keeps whatever transform it already had.
+ * ------------------------------------------------------------------ */
+
+/**
+ * A path's segments, each with both endpoints resolved.
+ *
+ * `at` is the command's index in the stream, which is what the editing
+ * functions splice against. A CLOSE segment carries the implicit line back to
+ * the loop's start, because that line is clickable and a user who clicks it
+ * expects an anchor there.
+ */
+function pathSegments(path){
+  var T=window.FlashyTrace;
+  if(!path||!path.length||!T)return [];
+  var out=[],k=0,cx=0,cy=0,sx=0,sy=0;
+  while(k<path.length){
+    var cmd=path[k];
+    if(cmd===T.CMD.MOVE){
+      cx=sx=path[k+1];cy=sy=path[k+2];
+      out.push({at:k,op:cmd,x0:cx,y0:cy,x1:cx,y1:cy});
+      k+=3;
+    }else if(cmd===T.CMD.LINE){
+      out.push({at:k,op:cmd,x0:cx,y0:cy,x1:path[k+1],y1:path[k+2]});
+      cx=path[k+1];cy=path[k+2];
+      k+=3;
+    }else if(cmd===T.CMD.QUAD){
+      out.push({at:k,op:cmd,x0:cx,y0:cy,cx:path[k+1],cy:path[k+2],
+                x1:path[k+3],y1:path[k+4]});
+      cx=path[k+3];cy=path[k+4];
+      k+=5;
+    }else{
+      out.push({at:k,op:cmd,x0:cx,y0:cy,x1:sx,y1:sy});
+      cx=sx;cy=sy;
+      k+=1;
+    }
+  }
+  return out;
+}
+
+/** The point on one segment nearest (x,y), sampled rather than solved. */
+function nearestOnSegment(seg,x,y){
+  var T=window.FlashyTrace;
+  var at=function(t){
+    if(seg.op===T.CMD.QUAD){
+      var u=1-t;
+      return {x:u*u*seg.x0+2*u*t*seg.cx+t*t*seg.x1,
+              y:u*u*seg.y0+2*u*t*seg.cy+t*t*seg.y1};
+    }
+    return {x:seg.x0+(seg.x1-seg.x0)*t,y:seg.y0+(seg.y1-seg.y0)*t};
+  };
+  /* A straight segment has a closed form; a quadratic's nearest point is a
+     cubic root, and 24 samples plus a local refinement lands well inside the
+     click tolerance for a fraction of the code. */
+  if(seg.op!==T.CMD.QUAD){
+    var dx=seg.x1-seg.x0,dy=seg.y1-seg.y0;
+    var len2=dx*dx+dy*dy;
+    var t0=len2?Math.max(0,Math.min(1,((x-seg.x0)*dx+(y-seg.y0)*dy)/len2)):0;
+    var q=at(t0);
+    return {t:t0,x:q.x,y:q.y,d2:(q.x-x)*(q.x-x)+(q.y-y)*(q.y-y)};
+  }
+  var best=null;
+  for(var i=0;i<=24;i++){
+    var t=i/24,pt=at(t);
+    var d2=(pt.x-x)*(pt.x-x)+(pt.y-y)*(pt.y-y);
+    if(!best||d2<best.d2)best={t:t,x:pt.x,y:pt.y,d2:d2};
+  }
+  var step=1/24;
+  for(var r=0;r<3;r++){
+    step/=3;
+    [best.t-step,best.t+step].forEach(function(tt){
+      if(tt<0||tt>1)return;
+      var pt2=at(tt);
+      var dd=(pt2.x-x)*(pt2.x-x)+(pt2.y-y)*(pt2.y-y);
+      if(dd<best.d2)best={t:tt,x:pt2.x,y:pt2.y,d2:dd};
+    });
+  }
+  return best;
+}
+
+/**
+ * The path segment nearest a stage point, within a screen-space tolerance.
+ *
+ * Returns the hit in LOCAL coordinates plus the stage point it maps to, so the
+ * caller can both edit the stream and mark where the click landed.
+ */
+function pathSegHit(x,y,tol){
+  var kf=CKF();
+  if(!kf)return null;
+  tol=(tol||7)/zoom;
+  var isPath=function(o){return o.type==="path"&&o.path&&o.path.length;};
+  var pool=selection.length?selection.filter(isPath):kf.objects.filter(isPath);
+  var best=null;
+  pool.forEach(function(o){
+    var m=artworkMatrix(o),inv=matInvert(m);
+    if(!inv)return;
+    var l=matApplyPoint(inv,x,y);
+    pathSegments(o.path).forEach(function(seg){
+      // A MOVE has no length, so there is nothing to click on.
+      if(seg.op===window.FlashyTrace.CMD.MOVE)return;
+      var n=nearestOnSegment(seg,l.x,l.y);
+      var sp=matApplyPoint(m,n.x,n.y);
+      var d2=(sp.x-x)*(sp.x-x)+(sp.y-y)*(sp.y-y);
+      if(d2<=tol*tol&&(!best||d2<best.d2)){
+        best={obj:o,seg:seg,t:n.t,lx:n.x,ly:n.y,x:sp.x,y:sp.y,d2:d2};
+      }
+    });
+  });
+  return best;
+}
+
+/**
+ * Split a segment at `t`, putting a new anchor exactly on the existing curve.
+ *
+ * A line splits at the obvious point; a quadratic splits by de Casteljau into
+ * two quadratics that trace the same curve. The shape must not change — the
+ * point of adding an anchor is to get somewhere to pull from, not to nudge the
+ * outline while you do it.
+ */
+function pathInsertAnchor(o,at,t){
+  var T=window.FlashyTrace;
+  if(!o||o.type!=="path"||!o.path||!T)return false;
+  var seg=null;
+  pathSegments(o.path).forEach(function(sg){if(sg.at===at)seg=sg;});
+  if(!seg)return false;
+  t=Math.max(0.02,Math.min(0.98,t==null?0.5:t));
+  if(seg.op===T.CMD.LINE||seg.op===T.CMD.CLOSE){
+    /* The closing line is implicit, so the new anchor goes in just BEFORE the
+       CLOSE — which leaves the loop closed and one point longer. A plain line
+       splices the same way, at its own command. */
+    var mx=seg.x0+(seg.x1-seg.x0)*t,my=seg.y0+(seg.y1-seg.y0)*t;
+    o.path.splice(seg.at,0,T.CMD.LINE,mx,my);
+    return true;
+  }
+  if(seg.op===T.CMD.QUAD){
+    var ax=seg.x0+(seg.cx-seg.x0)*t,ay=seg.y0+(seg.cy-seg.y0)*t;
+    var bx=seg.cx+(seg.x1-seg.cx)*t,by=seg.cy+(seg.y1-seg.cy)*t;
+    var px=ax+(bx-ax)*t,py=ay+(by-ay)*t;
+    o.path.splice(seg.at,5,T.CMD.QUAD,ax,ay,px,py,T.CMD.QUAD,bx,by,seg.x1,seg.y1);
+    return true;
+  }
+  return false;
+}
+
+/** The command that ENDS at the anchor whose coordinate index is `i`. */
+function pathCommandAtNode(path,i){
+  var T=window.FlashyTrace;
+  var found=null;
+  pathSegments(path).forEach(function(sg){
+    var coord=sg.op===T.CMD.QUAD?sg.at+3:sg.at+1;
+    if(coord===i)found=sg;
+  });
+  return found;
+}
+
+/** How many anchors the loop containing command `at` has. */
+function pathLoopAnchorCount(path,at){
+  var T=window.FlashyTrace;
+  var segs=pathSegments(path);
+  var start=0;
+  for(var i=0;i<segs.length;i++){
+    if(segs[i].op===T.CMD.MOVE&&segs[i].at<=at)start=i;
+  }
+  var n=0;
+  for(var j=start;j<segs.length;j++){
+    if(j>start&&segs[j].op===T.CMD.MOVE)break;
+    if(segs[j].op!==T.CMD.CLOSE)n++;
+  }
+  return n;
+}
+
+/**
+ * Remove an anchor, joining its neighbours.
+ *
+ * Refuses below three anchors in a loop, because two is a line and one is
+ * nothing — deleting into that leaves an object on the stage that cannot be
+ * seen or clicked, which is worse than refusing.
+ */
+function pathDeleteAnchor(o,i){
+  var T=window.FlashyTrace;
+  if(!o||o.type!=="path"||!o.path||!T)return {ok:false,why:"it is not a path"};
+  var seg=pathCommandAtNode(o.path,i);
+  if(!seg)return {ok:false,why:"there is no anchor there"};
+  if(pathLoopAnchorCount(o.path,seg.at)<=2)
+    return {ok:false,why:"a path needs at least two points"};
+  if(seg.op===T.CMD.MOVE){
+    /* The loop's first point. The segment after it becomes the new start, so
+       its endpoint is promoted to the MOVE and its curve handle, which no
+       longer has anything to curve away from, is dropped. */
+    var segs=pathSegments(o.path);
+    var next=null;
+    for(var k=0;k<segs.length;k++)if(segs[k].at===seg.at)next=segs[k+1]||null;
+    if(!next||next.op===T.CMD.CLOSE)return {ok:false,why:"nothing follows it"};
+    var span=next.op===T.CMD.QUAD?5:3;
+    o.path.splice(seg.at,3+span,T.CMD.MOVE,next.x1,next.y1);
+    return {ok:true};
+  }
+  o.path.splice(seg.at,seg.op===T.CMD.QUAD?5:3);
+  return {ok:true};
+}
+
+/**
+ * Toggle an anchor between a corner and a smooth curve.
+ *
+ * Smoothing points the tangent along the line between the anchor's two
+ * neighbours, which is what makes the join read as smooth rather than merely
+ * curved. The segments are quadratics, so each carries one handle, and the two
+ * handles go on opposite sides of the anchor.
+ */
+function pathConvertAnchor(o,i){
+  var T=window.FlashyTrace;
+  if(!o||o.type!=="path"||!o.path||!T)return {ok:false,why:"it is not a path"};
+  var segs=pathSegments(o.path);
+  var idx=-1;
+  for(var k=0;k<segs.length;k++){
+    var coord=segs[k].op===T.CMD.QUAD?segs[k].at+3:segs[k].at+1;
+    if(coord===i)idx=k;
+  }
+  if(idx<0)return {ok:false,why:"there is no anchor there"};
+  var inSeg=segs[idx],outSeg=segs[idx+1]||null;
+  var curved=inSeg.op===T.CMD.QUAD||(outSeg&&outSeg.op===T.CMD.QUAD);
+  if(curved){
+    // Straighten. Later command first, so the earlier splice keeps its index.
+    if(outSeg&&outSeg.op===T.CMD.QUAD)
+      o.path.splice(outSeg.at,5,T.CMD.LINE,outSeg.x1,outSeg.y1);
+    if(inSeg.op===T.CMD.QUAD)
+      o.path.splice(inSeg.at,5,T.CMD.LINE,inSeg.x1,inSeg.y1);
+    return {ok:true,kind:"corner"};
+  }
+  if(inSeg.op===T.CMD.MOVE||!outSeg||outSeg.op===T.CMD.CLOSE)
+    return {ok:false,why:"an end point has only one side to curve"};
+  var px=inSeg.x0,py=inSeg.y0;       // the previous anchor
+  var ax=inSeg.x1,ay=inSeg.y1;       // this anchor
+  var nx=outSeg.x1,ny=outSeg.y1;     // the next anchor
+  /* A quarter of the neighbour-to-neighbour span. Much larger bulges past the
+     neighbours and reads as a loop rather than a smoothed corner. */
+  var dx=(nx-px)*0.25,dy=(ny-py)*0.25;
+  o.path.splice(outSeg.at,3,T.CMD.QUAD,ax+dx,ay+dy,nx,ny);
+  o.path.splice(inSeg.at,3,T.CMD.QUAD,ax-dx,ay-dy,ax,ay);
+  return {ok:true,kind:"curve"};
+}
+
+/**
+ * One Pen click on an existing path: add, delete or convert.
+ *
+ * Returns what it did, or null when the click was not on a path at all — in
+ * which case the caller starts a new path, which is the Pen's other job.
+ */
+function penEditAt(x,y,alt){
+  var hit=nodeHitTest(x,y);
+  if(hit&&hit.obj.type==="path"&&hit.node.kind==="anchor"){
+    if(!layerEditable())return {action:"none"};
+    pushUndo();
+    var r=alt?pathConvertAnchor(hit.obj,hit.node.i)
+             :pathDeleteAnchor(hit.obj,hit.node.i);
+    if(!r.ok){
+      // Drop the snapshot nobody used, so the history has no empty step.
+      undo();
+      showMessage("Pen",(alt?"That point cannot be converted: "
+                            :"That point cannot be deleted: ")+r.why+".");
+      return {action:"none"};
+    }
+    selection=[hit.obj];
+    return {action:alt?"convert":"delete",kind:r.kind,obj:hit.obj};
+  }
+  var seg=pathSegHit(x,y);
+  if(seg){
+    if(!layerEditable())return {action:"none"};
+    pushUndo();
+    if(!pathInsertAnchor(seg.obj,seg.seg.at,seg.t)){undo();return {action:"none"};}
+    selection=[seg.obj];
+    return {action:"add",obj:seg.obj};
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -17444,6 +17923,48 @@ function _svgFilterFor(o) {
                 '" flood-opacity="0.6" result="' + hi + '"/>';
         src = hi;
       }
+    } else if (f.type === "gradientGlow" || f.type === "gradientBevel") {
+      /* A halo whose colour is a RAMP. No filter primitive maps alpha to a
+         colour directly, but three in a row do: blur the silhouette, copy the
+         blurred ALPHA into R, G and B with a colour matrix, then run each
+         channel through its own table. The tables come from
+         Flashy.Filters.rampTable, so the SVG and the canvas read the same
+         ramp rather than two approximations of it. */
+      var gbl = Math.abs(f.blur == null ? 8 : f.blur) / 2;
+      var gang = ((f.angle == null ? 45 : f.angle) * Math.PI) / 180;
+      var gd = f.type === "gradientBevel" ? (f.distance == null ? 4 : f.distance) : 0;
+      var tbl = Flashy.Filters.rampTable(f, 17);
+      var tv = function (tag, arr) {
+        return '<' + tag + ' type="table" tableValues="' + arr.join(" ") + '"/>';
+      };
+      body += '<feGaussianBlur in="SourceAlpha" stdDeviation="' + gbl +
+              '" result="' + out + 'b"/>';
+      if (gd) {
+        /* A bevel is the silhouette offset both ways along the light angle.
+           Two offsets and a merge, so the overlap in the middle lands on the
+           ramp's transparent centre and the edge reads as an edge. */
+        body += '<feOffset in="' + out + 'b" dx="' + (Math.cos(gang) * gd) +
+                '" dy="' + (Math.sin(gang) * gd) + '" result="' + out + 'o1"/>';
+        body += '<feOffset in="' + out + 'b" dx="' + (-Math.cos(gang) * gd) +
+                '" dy="' + (-Math.sin(gang) * gd) + '" result="' + out + 'o2"/>';
+        body += '<feMerge result="' + out + 'm"><feMergeNode in="' + out +
+                'o1"/><feMergeNode in="' + out + 'o2"/></feMerge>';
+      }
+      // Alpha into every colour channel, so each table sees it as its input.
+      body += '<feColorMatrix in="' + out + (gd ? 'm' : 'b') +
+              '" type="matrix" values="0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 1 0" result="' +
+              out + 'a"/>';
+      var gstr = Math.max(0, Math.min(4, f.strength == null ? 1 : f.strength));
+      body += '<feComponentTransfer in="' + out + 'a" result="' + out + 'c">' +
+              tv("feFuncR", tbl.r) + tv("feFuncG", tbl.g) + tv("feFuncB", tbl.b) +
+              tv("feFuncA", tbl.a.map(function (v) {
+                return +Math.min(1, v * gstr).toFixed(4);
+              })) +
+              '</feComponentTransfer>';
+      // The halo goes UNDER the artwork, which is what makes it a glow.
+      body += '<feMerge result="' + out + '"><feMergeNode in="' + out +
+              'c"/><feMergeNode in="' + src + '"/></feMerge>';
+      src = out;
     } else if (f.type === "adjustColor") {
       var sa = 1 + (f.saturation || 0) / 100;
       var hu = f.hue || 0;
@@ -19107,6 +19628,16 @@ function init(){
        Options panel edits and what a newly dragged shape inherits. */
     rectPrim: function(){ return rectPrim; },
     ovalPrim: function(){ return ovalPrim; },
+    /* Anchor editing: the Pen's other three jobs, and the stream surgery they
+       perform. Exposed because a spec can aim at them far more precisely than
+       it can point at a quadratic. */
+    pathSegments: pathSegments,
+    pathSegHit: pathSegHit,
+    pathInsertAnchor: pathInsertAnchor,
+    pathDeleteAnchor: pathDeleteAnchor,
+    pathConvertAnchor: pathConvertAnchor,
+    penEditAt: penEditAt,
+    objectNodes: objectNodes,
     /** Timeline pixels-per-frame — the timeline is zoomable. */
     tlFrameWidth: function(){ return TL_FW_(); },
     /** Timeline cell selection: a rectangle of layers x frames. */
