@@ -42,6 +42,64 @@
     }
   };
 
+  /**
+   * A custom easing curve, as a cubic Bézier on (0,0)→(1,1).
+   *
+   * Flash's Custom Ease In/Ease Out editor was a draggable curve, and a cubic
+   * Bézier is the same shape with four numbers — so a curve survives a save
+   * and can be evaluated identically by the editor and by the player, which a
+   * hand-drawn point list could not.
+   *
+   * Newton–Raphson on x, falling back to bisection: the curve is monotonic in
+   * x for sane control points, and the fallback keeps a silly one (x1 > 1, say)
+   * from spinning.
+   */
+  function cubicBezierEase(x1, y1, x2, y2) {
+    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+    const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+    const sampleX = t => ((ax * t + bx) * t + cx) * t;
+    const sampleY = t => ((ay * t + by) * t + cy) * t;
+    const slopeX = t => (3 * ax * t + 2 * bx) * t + cx;
+    return function (x) {
+      if (x <= 0) return 0;
+      if (x >= 1) return 1;
+      let t = x;
+      for (let i = 0; i < 8; i++) {
+        const d = sampleX(t) - x;
+        if (Math.abs(d) < 1e-6) return sampleY(t);
+        const s = slopeX(t);
+        if (Math.abs(s) < 1e-6) break;
+        t -= d / s;
+      }
+      let lo = 0, hi = 1;
+      t = x;
+      for (let i = 0; i < 24; i++) {
+        const v = sampleX(t);
+        if (Math.abs(v - x) < 1e-6) break;
+        if (v > x) hi = t; else lo = t;
+        t = (lo + hi) / 2;
+      }
+      return sampleY(t);
+    };
+  }
+
+  /**
+   * The easing function for a keyframe: a named preset, or its own curve.
+   *
+   * One resolver, used by the editor's stage and by the exported player, so a
+   * custom curve cannot ease one way while authoring and another way in the
+   * movie.
+   */
+  function resolveEasing(name, bezier) {
+    if (name === "custom" && bezier && bezier.length >= 4) {
+      return cubicBezierEase(bezier[0], bezier[1], bezier[2], bezier[3]);
+    }
+    return Easing[name] || Easing.linear;
+  }
+
+  Easing.cubicBezier = cubicBezierEase;
+  Easing.resolve = resolveEasing;
+
   // -------------------- color helpers --------------------
   function toRGBA(color, alpha) {
     if (alpha == null) alpha = 1;
@@ -435,6 +493,117 @@
       return e;
     },
     _release(e) { if (e) e.busy = false; },
+
+    /* ---- tweening ----------------------------------------------------
+     * Filters and the Colour Effect interpolate between keyframes — how a
+     * glow pulses and a tint fades. Here rather than in the editor because
+     * the exported player interpolates its own keyframes and would otherwise
+     * need a second copy of this, which is how the four renderers drifted
+     * apart in the first place.
+     * ------------------------------------------------------------------ */
+
+    /** Numeric fields each filter type interpolates. */
+    TWEEN_NUMS: {
+      blur: ["blurX", "blurY", "quality"],
+      dropShadow: ["distance", "angle", "blur", "alpha", "strength"],
+      glow: ["blur", "alpha", "strength"],
+      bevel: ["distance", "angle", "blur", "strength"],
+      adjustColor: ["brightness", "contrast", "saturation", "hue"]
+    },
+    /** Colour fields each filter type blends. */
+    TWEEN_COLORS: {
+      dropShadow: ["color"],
+      glow: ["color"],
+      bevel: ["highlightColor", "shadowColor"]
+    },
+
+    _num(a, b, t, dflt) {
+      const av = typeof a === "number" ? a : dflt;
+      const bv = typeof b === "number" ? b : dflt;
+      return av + (bv - av) * t;
+    },
+    _color(a, b, t) {
+      const n = v => typeof v === "string"
+        ? parseInt(String(v).replace("#", ""), 16) : (v | 0);
+      const an = n(a), bn = n(b);
+      const mix = sh => {
+        const av = (an >> sh) & 0xff, bv = (bn >> sh) & 0xff;
+        return Math.max(0, Math.min(255, Math.round(av + (bv - av) * t))) << sh;
+      };
+      return mix(16) | mix(8) | mix(0);
+    },
+    _clone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); },
+
+    /**
+     * Two filter stacks, blended.
+     *
+     * Only when they agree about the SHAPE of the stack — same filters, in the
+     * same order. There is no sensible interpolation between "blur" and "drop
+     * shadow", and guessing one produces a frame that is neither, so the start
+     * frame's stack holds instead.
+     */
+    lerpFilters(a, b, t) {
+      if (!a || !a.length) return (b && b.length) ? this._clone(b) : null;
+      if (!b || !b.length) return this._clone(a);
+      if (a.length !== b.length) return this._clone(a);
+      const out = [];
+      for (let i = 0; i < a.length; i++) {
+        if (!a[i] || !b[i] || a[i].type !== b[i].type) {
+          out.push(this._clone(a[i] || b[i]));
+          continue;
+        }
+        const f = this._clone(a[i]);
+        (this.TWEEN_NUMS[f.type] || []).forEach(k => {
+          if (a[i][k] != null || b[i][k] != null) f[k] = this._num(a[i][k], b[i][k], t, 0);
+        });
+        (this.TWEEN_COLORS[f.type] || []).forEach(k => {
+          if (a[i][k] != null && b[i][k] != null) f[k] = this._color(a[i][k], b[i][k], t);
+        });
+        out.push(f);
+      }
+      return out;
+    },
+
+    /** One colour effect at `t` of its full strength; 0 is no effect at all. */
+    rampColorEffect(e, t) {
+      if (!e || !e.mode || e.mode === "none") return null;
+      const out = this._clone(e);
+      if (e.mode === "brightness") out.brightness = (e.brightness || 0) * t;
+      else if (e.mode === "tint") out.amount = (e.amount == null ? 1 : e.amount) * t;
+      else if (e.mode === "advanced") {
+        ["rMul", "gMul", "bMul", "aMul"].forEach(k => {
+          const v = e[k] == null ? 1 : e[k];
+          out[k] = 1 + (v - 1) * t;
+        });
+        ["rOff", "gOff", "bOff", "aOff"].forEach(k => { out[k] = (e[k] || 0) * t; });
+      }
+      return out;
+    },
+
+    /**
+     * Two colour effects, blended.
+     *
+     * Fading INTO or OUT OF an effect is the common case and has an obvious
+     * answer: ramp the effect's strength from (or to) nothing. Between two
+     * different modes it does not, so the start frame's wins.
+     */
+    lerpColorEffect(a, b, t) {
+      const am = (a && a.mode) || "none", bm = (b && b.mode) || "none";
+      if (am === "none" && bm === "none") return null;
+      if (am === "none") return this.rampColorEffect(b, t);
+      if (bm === "none") return this.rampColorEffect(a, 1 - t);
+      if (am !== bm) return this._clone(a);
+      const out = this._clone(a);
+      if (am === "brightness") out.brightness = this._num(a.brightness, b.brightness, t, 0);
+      else if (am === "tint") {
+        out.amount = this._num(a.amount, b.amount, t, 1);
+        if (a.color != null && b.color != null) out.color = this._color(a.color, b.color, t);
+      } else if (am === "advanced") {
+        ["rMul", "gMul", "bMul", "aMul"].forEach(k => { out[k] = this._num(a[k], b[k], t, 1); });
+        ["rOff", "gOff", "bOff", "aOff"].forEach(k => { out[k] = this._num(a[k], b[k], t, 0); });
+      }
+      return out;
+    },
 
     /** Per-channel multiply and offset, over a whole scratch buffer. */
     applyColor(ctx, w, h, ct) {

@@ -19,8 +19,16 @@ EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=
 if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});/* `filters` is an array of OBJECTS, so the shallow slice above would hand the copy the same filter specs and editing one object's blur would change the other's. Same bug class as `children`. */if(Array.isArray(s.filters))c.filters=s.filters.map(function(f){return f?JSON.parse(JSON.stringify(f)):f;});if(s.colorEffect)c.colorEffect=JSON.parse(JSON.stringify(s.colorEffect));c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
-function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.sound=null;}
-KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.sound=this.sound?cloneSound(this.sound):null;return c;};
+/* `labelType` is Flash's three kinds of frame label and they are not
+   interchangeable: a NAME is a script target and reaches the export as a
+   timeline label; a COMMENT is an authoring note and must not; an ANCHOR is a
+   named browser-history point, which is a name with a different icon. Default
+   "name", which is what every `label` written before this meant.
+   `easeBezier` is a custom easing curve; `rotateDir`/`rotateTimes` make a
+   tween spin instead of taking the short way round; `tweenScale` is Flash's
+   Scale checkbox. All default to the behaviour documents already have. */
+function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;}
+KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;return c;};
 function cloneSound(s){return {asset:s.asset,sync:s.sync||"stream",volume:s.volume!=null?s.volume:1,loop:!!s.loop,offset:s.offset||0};}
 function Layer(n){this.name=n;this.visible=true;this.locked=false;this.keyframes=[new KeyFrame(1)];}
 Layer.prototype.getKeyframeAt=function(f){for(var i=this.keyframes.length-1;i>=0;i--){var k=this.keyframes[i];if(f>=k.index&&f<k.index+k.duration)return k;}return null;};
@@ -471,6 +479,10 @@ var menus=[
     {label:"Cut Frames",action:"cutFrames",shortcut:"Ctrl+Alt+X"},
     {label:"Copy Frames",action:"copyFrames",shortcut:"Ctrl+Alt+C"},
     {label:"Paste Frames",action:"pasteFrames",shortcut:"Ctrl+Alt+V"},
+    {label:"Reverse Frames",action:"reverseFrames"},
+    {type:"sep"},
+    {label:"Copy Motion",action:"copyMotion"},
+    {label:"Paste Motion",action:"pasteMotion"},
     {type:"sep"},
     {label:"Select All",action:"selectAll",shortcut:"Ctrl+A"},
     {type:"sep"},
@@ -493,6 +505,7 @@ var menus=[
     {type:"sep"},
     {label:"Onion Skin",action:"onionToggle",shortcut:"Alt+O"},
     {label:"Onion Skin Outlines",action:"onionOutlines",shortcut:"Alt+Shift+O"},
+    {label:"Edit Multiple Frames",action:"editMultiple",shortcut:"Alt+M"},
     {type:"sep"},
     {label:"Hide Other Layers",action:"hideOthers"},
     {label:"Show All Layers",action:"showAllLayers"}
@@ -1072,9 +1085,11 @@ function render(){
     ctx.strokeRect(0,0,doc.width,doc.height);
     ctx.setLineDash([]);
   }
-  // Onion skin sits UNDER the live drawing: the frames you are working from
-  // must never obscure the frame you are working on.
-  if(onionOn)drawOnionSkin();
+  /* Edit Multiple Frames replaces onion skin while it is on: those frames are
+     not references to work FROM any more, they are live and editable, so
+     ghosting them would be a lie about what a click will hit. */
+  if(editMultiple)drawEditMultiple();
+  else if(onionOn)drawOnionSkin();
   // Render layers bottom to top, rigs composed through their hierarchy, and
   // each masked run clipped to the silhouette of the mask above it.
   var groups=maskGroups(currentLayers());
@@ -1203,6 +1218,32 @@ function drawLayerOutlines(cx,objs,colour){
     cx.stroke();
   }
   cx.restore();
+}
+
+/**
+ * Every editable keyframe in the Edit Multiple Frames span, drawn solid.
+ *
+ * Solid, not ghosted: these frames are live, and ghosting them would be a lie
+ * about what a click is going to hit. The current frame is drawn last by the
+ * normal render pass, so it still reads as the one you are on.
+ */
+function drawEditMultiple(){
+  var span=editMultipleRange();
+  var layers=currentLayers().filter(layerShows).filter(function(l){
+    return !isFolderLayer(l)&&(l.layerType||"normal")!=="guide";
+  });
+  layers.forEach(function(l){
+    l.keyframes.forEach(function(kf){
+      if(kf.index<span.f0||kf.index>span.f1)return;
+      if(kf.index===curFrame)return;        // the normal pass draws this one
+      ctx.save();
+      // Slightly down, so you can still tell which frame you are actually on
+      // without it being a reference ghost.
+      ctx.globalAlpha=0.75;
+      rigDrawPlan(kf.objects).forEach(function(e){paintPlanned(ctx,e,{});});
+      ctx.restore();
+    });
+  });
 }
 
 /** Keep the timeline header's onion-skin controls in step with the state. */
@@ -1718,6 +1759,178 @@ function pasteFrames(opts){
 }
 
 /** Is there anything on the frame clipboard? */
+/* ------------------------------------------------------------------ *
+ * Reverse Frames
+ *
+ * Reverses the keyframes in the selected span. It is how a walk cycle becomes
+ * a walk-backwards cycle and how an opening animation becomes a closing one,
+ * and the alternative is cutting and re-pasting every keyframe by hand.
+ *
+ * The SPANS are reversed, not merely the list: keyframe 1 lasting 5 frames
+ * followed by keyframe 6 lasting 1 must come back as a 1-frame keyframe then a
+ * 5-frame one, or the timing mirrors wrongly.
+ * ------------------------------------------------------------------ */
+function reverseFrames(opts){
+  opts=opts||{};
+  var r=opts.range||tlRange();
+  var layers=currentLayers();
+  if(!r)return {done:0};
+  var done=0,pre=null;
+  for(var li=r.l0;li<=r.l1;li++){
+    var l=layers[li];
+    if(!l||l.locked||isFolderLayer(l))continue;
+    var inSpan=l.keyframes.filter(function(k){
+      return k.index>=r.f0&&k.index<=r.f1;
+    });
+    if(inSpan.length<2)continue;
+    if(!pre)pre=snap();
+    var first=inSpan[0].index;
+    var durations=inSpan.map(function(k){return k.duration;});
+    var clones=inSpan.map(function(k){return k.clone();}).reverse();
+    var at=first;
+    clones.forEach(function(k,i){
+      // Re-index with the durations also reversed, so the timing mirrors.
+      k.index=at;
+      k.duration=durations[durations.length-1-i];
+      at+=k.duration;
+    });
+    /* A tween lives on the keyframe it starts FROM, so reversing the order
+       leaves each tween attached to the wrong end — the last keyframe would
+       sprout a tween into nothing. Shift the tween settings back one. */
+    for(var ci=0;ci<clones.length;ci++){
+      var src=clones[ci+1];
+      clones[ci].tweenType=src?src.tweenType:"none";
+      clones[ci].easing=src?src.easing:"linear";
+      clones[ci].easeBezier=src&&src.easeBezier?src.easeBezier.slice():null;
+      clones[ci].rotateDir=src?src.rotateDir:"none";
+      clones[ci].rotateTimes=src?src.rotateTimes:1;
+      clones[ci].tweenScale=src?src.tweenScale!==false:true;
+    }
+    var rest=l.keyframes.filter(function(k){
+      return k.index<r.f0||k.index>r.f1;
+    });
+    l.keyframes=rest.concat(clones).sort(function(a,b){return a.index-b.index;});
+    done++;
+  }
+  if(pre)pushUndoSnap(pre);
+  return {done:done};
+}
+
+/* ------------------------------------------------------------------ *
+ * Copy Motion / Paste Motion
+ *
+ * Copies the TRANSFORM TRACK of a span — where something was, how big, how
+ * turned, how transparent, frame by frame — and applies it to something else.
+ * It is how one object inherits another's animation without redoing it, and
+ * it is the one copy operation that carries motion rather than artwork.
+ * ------------------------------------------------------------------ */
+var motionClipboard=null;
+
+function copyMotion(opts){
+  opts=opts||{};
+  var l=currentLayers()[opts.layerIdx!=null?opts.layerIdx:curLayer];
+  if(!l)return {ok:false,reason:"layer"};
+  var r=opts.range||tlRange();
+  var f0=r?r.f0:1,f1=r?r.f1:l.getFrameEnd();
+  // The whole span frame by frame, resolved through the real interpolator, so
+  // a pasted motion reproduces the easing as well as the positions.
+  var track=[];
+  for(var f=f0;f<=f1;f++){
+    var objs=frameObjects([l],f);
+    if(!objs.length){track.push(null);continue;}
+    var o=objs[0];
+    track.push({
+      x:o.x,y:o.y,width:o.width,height:o.height,
+      rotation:o.rotation||0,scaleX:o.scaleX||1,scaleY:o.scaleY||1,
+      skewX:o.skewX||0,skewY:o.skewY||0,
+      alpha:o.alpha!=null?o.alpha:1
+    });
+  }
+  if(!track.some(Boolean))return {ok:false,reason:"empty"};
+  motionClipboard={frames:track,startFrame:f0};
+  return {ok:true,frames:track.length};
+}
+
+function hasMotionClipboard(){
+  return !!(motionClipboard&&motionClipboard.frames&&motionClipboard.frames.length);
+}
+
+/**
+ * Apply the copied motion to the current layer, starting at the current frame.
+ *
+ * One keyframe per copied frame, because a track sampled frame by frame has no
+ * tweens left in it — it IS the tween, flattened. That is what makes the
+ * result identical to what was copied rather than an approximation of it.
+ */
+function pasteMotion(opts){
+  opts=opts||{};
+  if(!hasMotionClipboard())return {ok:false,reason:"empty"};
+  var l=currentLayers()[opts.layerIdx!=null?opts.layerIdx:curLayer];
+  if(!l||l.locked||isFolderLayer(l))return {ok:false,reason:"layer"};
+  var start=opts.frame!=null?opts.frame:curFrame;
+  var base=l.getKeyframeAt(start);
+  if(!base||!base.objects.length)return {ok:false,reason:"nothing"};
+  // The object whose motion is being replaced: the selected one if it is on
+  // this keyframe, otherwise the first.
+  var model=base.objects.filter(function(o){return selection.indexOf(o)>=0;})[0]||base.objects[0];
+  pushUndo();
+  var track=motionClipboard.frames;
+  for(var i=0;i<track.length;i++){
+    var t=track[i];
+    if(!t)continue;
+    var kf=l.insertKeyframe(start+i);
+    if(!kf)continue;
+    kf.duration=1;
+    kf.tweenType="none";
+    var o=model.clone();
+    o.x=t.x;o.y=t.y;o.width=t.width;o.height=t.height;
+    o.rotation=t.rotation;o.scaleX=t.scaleX;o.scaleY=t.scaleY;
+    o.skewX=t.skewX;o.skewY=t.skewY;o.alpha=t.alpha;
+    kf.objects=[o];
+  }
+  // Durations are recomputed by insertKeyframe as it splits spans; the last
+  // one is left holding whatever remained, which is correct.
+  l.keyframes.sort(function(a,b){return a.index-b.index;});
+  return {ok:true,frames:track.length};
+}
+
+/* ------------------------------------------------------------------ *
+ * Edit Multiple Frames
+ *
+ * Normally the stage shows and edits ONE frame. With this on, every keyframe
+ * in the onion-skin range is live: you can select across them and move them
+ * together. It is how a whole animation gets repositioned without touching
+ * forty keyframes one at a time.
+ *
+ * It works because selection is a list of object references and a drag writes
+ * straight to `o.x`/`o.y` — so the only parts that need to know are hit
+ * testing, marquee selection and what the stage draws.
+ * ------------------------------------------------------------------ */
+var editMultiple=false;
+
+/** The frame span Edit Multiple Frames covers. */
+function editMultipleRange(){
+  var lo=Math.max(1,curFrame-(onionBefore||0));
+  var hi=Math.min(currentMaxFrame(),curFrame+(onionAfter||0));
+  // With the onion counts at zero the mode would cover one frame and appear
+  // broken; a sensible span beats a no-op.
+  if(hi<=lo){lo=1;hi=currentMaxFrame();}
+  return {f0:lo,f1:hi};
+}
+
+/** Every keyframe in range on editable layers, as {layer, kf} pairs. */
+function editMultipleKeyframes(){
+  var span=editMultipleRange();
+  var out=[];
+  currentLayers().forEach(function(l){
+    if(!layerShows(l)||l.locked||isFolderLayer(l))return;
+    l.keyframes.forEach(function(kf){
+      if(kf.index>=span.f0&&kf.index<=span.f1)out.push({layer:l,kf:kf});
+    });
+  });
+  return out;
+}
+
 function hasFrameClipboard(){
   return !!(frameClipboard&&frameClipboard.layers&&frameClipboard.layers.length);
 }
@@ -3902,16 +4115,28 @@ function renderObj(o){paintObj(ctx,o,{chrome:true});}
  * made every tween arrive one frame early and then sit on the destination for
  * two frames; with one interpolator there is one answer.
  * ------------------------------------------------------------------ */
-function easeAmount(t,easing){
+function easeAmount(t,easing,bezier){
   t=Math.max(0,Math.min(1,t));
+  if(typeof Flashy!=="undefined"&&Flashy.Easing&&Flashy.Easing.resolve){
+    // One resolver, shared with the exported player, so a custom curve cannot
+    // ease one way while authoring and another way in the movie.
+    return Flashy.Easing.resolve(easing,bezier)(t);
+  }
   if(typeof Flashy!=="undefined"&&Flashy.Easing&&Flashy.Easing[easing])return Flashy.Easing[easing](t);
   if(easing==="easeIn"||easing==="quadIn")return t*t;
   if(easing==="easeOut"||easing==="quadOut")return 1-(1-t)*(1-t);
   if(easing==="easeInOut"||easing==="quadInOut")return t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
   return t;
 }
-function interpObj(a,b,t,easing){
-  var e=easeAmount(t,easing);
+/**
+ * One tweened frame between two keyframes.
+ *
+ * `kf` is the keyframe the tween starts on, and it carries the options Flash
+ * put on a motion tween: the easing curve, how many whole turns to spin
+ * through, and whether to interpolate size at all.
+ */
+function interpObj(a,b,t,easing,kf){
+  var e=easeAmount(t,easing,kf&&kf.easeBezier);
   var tmp=a.clone();
   var lerp=function(k,dflt){
     var av=a[k]!=null?a[k]:dflt,bv=b[k]!=null?b[k]:dflt;
@@ -3919,8 +4144,41 @@ function interpObj(a,b,t,easing){
   };
   tmp.x=lerp("x",0);tmp.y=lerp("y",0);
   tmp.width=lerp("width",0);tmp.height=lerp("height",0);
-  tmp.rotation=lerp("rotation",0);
-  tmp.scaleX=lerp("scaleX",1);tmp.scaleY=lerp("scaleY",1);
+  /* Rotate CW/CCW x n. Without it a tween always takes the short way round,
+     so a wheel cannot be made to turn: 0 to 350 degrees rolls backwards, and
+     0 to 360 does not move at all. */
+  var spin=kf&&kf.rotateDir&&kf.rotateDir!=="none"?kf.rotateDir:null;
+  if(spin){
+    var turns=Math.max(1,parseInt(kf.rotateTimes,10)||1);
+    var from=a.rotation||0;
+    var to=(b.rotation!=null?b.rotation:from);
+    /* Unwrap so the tween really travels, then add the whole turns.
+       `rotateTimes` is how many times it goes ROUND, counting a partial turn
+       as part of the first — so 0 to 350 clockwise once is 350 degrees, and 0
+       to 0 twice is 720. Equal endpoints have a zero delta, which has to
+       become a full turn or "spin twice" travels 360. */
+    if(spin==="cw"){
+      while(to<from)to+=360;
+      if(to===from)to+=360;
+      to+=360*(turns-1);
+    }else{
+      while(to>from)to-=360;
+      if(to===from)to-=360;
+      to-=360*(turns-1);
+    }
+    tmp.rotation=from+(to-from)*e;
+  }else{
+    tmp.rotation=lerp("rotation",0);
+  }
+  /* Flash's "Scale" checkbox: off means the object keeps its own size through
+     the tween and only moves. Default on, which is what every existing
+     document means. */
+  if(kf&&kf.tweenScale===false){
+    tmp.width=a.width;tmp.height=a.height;
+    tmp.scaleX=a.scaleX;tmp.scaleY=a.scaleY;
+  }else{
+    tmp.scaleX=lerp("scaleX",1);tmp.scaleY=lerp("scaleY",1);
+  }
   // Skew tweens like every other transform channel. It did not before, so a
   // motion tween between two differently skewed keyframes snapped at the end.
   tmp.skewX=lerp("skewX",0);tmp.skewY=lerp("skewY",0);
@@ -3935,103 +4193,17 @@ function interpObj(a,b,t,easing){
   return tmp;
 }
 
-/** Blend two numbers, or keep the first when the second is not a number. */
-function lerpNum(a,b,t,dflt){
-  var av=typeof a==="number"?a:dflt,bv=typeof b==="number"?b:dflt;
-  return av+(bv-av)*t;
-}
-
-/** Blend two 0xRRGGBB colours channel by channel. */
-function lerpColor(a,b,t){
-  var an=typeof a==="string"?parseInt(String(a).replace("#",""),16):(a|0);
-  var bn=typeof b==="string"?parseInt(String(b).replace("#",""),16):(b|0);
-  var mix=function(sh){
-    var av=(an>>sh)&0xff,bv=(bn>>sh)&0xff;
-    return Math.max(0,Math.min(255,Math.round(av+(bv-av)*t)))<<sh;
-  };
-  return mix(16)|mix(8)|mix(0);
-}
-
-/* Numeric fields of each filter type that a tween interpolates, and the colour
-   fields it blends. Listed rather than discovered, so a field added later has
-   to be considered rather than silently tweened to nonsense. */
-var FILTER_NUMS={
-  blur:["blurX","blurY","quality"],
-  dropShadow:["distance","angle","blur","alpha","strength"],
-  glow:["blur","alpha","strength"],
-  bevel:["distance","angle","blur","strength"],
-  adjustColor:["brightness","contrast","saturation","hue"]
-};
-var FILTER_COLORS={
-  dropShadow:["color"],
-  glow:["color"],
-  bevel:["highlightColor","shadowColor"]
-};
-
+/* Filter and colour-effect tweening lives in Flashy.Filters, not here: the
+   exported player interpolates its own keyframes and would otherwise need a
+   second copy of it — which is exactly how the four renderers drifted apart
+   before paintObj was the only painter. */
 function lerpFilters(a,b,t){
-  if(!a||!a.length)return b&&b.length?JSON.parse(JSON.stringify(b)):null;
-  if(!b||!b.length)return JSON.parse(JSON.stringify(a));
-  // Different stacks: hold the start frame's, rather than invent a hybrid.
-  if(a.length!==b.length)return JSON.parse(JSON.stringify(a));
-  var out=[];
-  for(var i=0;i<a.length;i++){
-    if(!a[i]||!b[i]||a[i].type!==b[i].type){
-      out.push(JSON.parse(JSON.stringify(a[i]||b[i])));
-      continue;
-    }
-    var f=JSON.parse(JSON.stringify(a[i]));
-    (FILTER_NUMS[f.type]||[]).forEach(function(k){
-      if(a[i][k]!=null||b[i][k]!=null)f[k]=lerpNum(a[i][k],b[i][k],t,0);
-    });
-    (FILTER_COLORS[f.type]||[]).forEach(function(k){
-      if(a[i][k]!=null&&b[i][k]!=null)f[k]=lerpColor(a[i][k],b[i][k],t);
-    });
-    out.push(f);
-  }
-  return out;
+  if(!window.Flashy||!Flashy.Filters)return a?JSON.parse(JSON.stringify(a)):null;
+  return Flashy.Filters.lerpFilters(a,b,t);
 }
-
 function lerpColorEffect(a,b,t){
-  var am=a&&a.mode?a.mode:"none",bm=b&&b.mode?b.mode:"none";
-  if(am==="none"&&bm==="none")return null;
-  /* Fading INTO or OUT OF an effect is the common case and has an obvious
-     answer: tween the effect's strength from (or to) nothing. Tweening
-     between two DIFFERENT modes does not, so the start frame's wins. */
-  if(am==="none")return rampColorEffect(b,t);
-  if(bm==="none")return rampColorEffect(a,1-t);
-  if(am!==bm)return JSON.parse(JSON.stringify(a));
-  var out=JSON.parse(JSON.stringify(a));
-  if(am==="brightness")out.brightness=lerpNum(a.brightness,b.brightness,t,0);
-  else if(am==="tint"){
-    out.amount=lerpNum(a.amount,b.amount,t,1);
-    if(a.color!=null&&b.color!=null)out.color=lerpColor(a.color,b.color,t);
-  }else if(am==="advanced"){
-    ["rMul","gMul","bMul","aMul"].forEach(function(k){
-      out[k]=lerpNum(a[k],b[k],t,1);
-    });
-    ["rOff","gOff","bOff","aOff"].forEach(function(k){
-      out[k]=lerpNum(a[k],b[k],t,0);
-    });
-  }
-  return out;
-}
-
-/** One colour effect at `t` of its full strength, 0 being no effect at all. */
-function rampColorEffect(e,t){
-  if(!e||!e.mode||e.mode==="none")return null;
-  var out=JSON.parse(JSON.stringify(e));
-  if(e.mode==="brightness")out.brightness=(e.brightness||0)*t;
-  else if(e.mode==="tint")out.amount=(e.amount==null?1:e.amount)*t;
-  else if(e.mode==="advanced"){
-    ["rMul","gMul","bMul","aMul"].forEach(function(k){
-      var v=e[k]==null?1:e[k];
-      out[k]=1+(v-1)*t;
-    });
-    ["rOff","gOff","bOff","aOff"].forEach(function(k){
-      out[k]=(e[k]||0)*t;
-    });
-  }
-  return out;
+  if(!window.Flashy||!Flashy.Filters)return a?JSON.parse(JSON.stringify(a)):null;
+  return Flashy.Filters.lerpColorEffect(a,b,t);
 }
 
 /**
@@ -4053,7 +4225,7 @@ function frameObjects(layers,frame){
         var t=(frame-kf.index)/kf.duration;
         for(var oi=0;oi<kf.objects.length;oi++){
           var b=nk.objects[oi];
-          out.push(withTiming(b?interpObj(kf.objects[oi],b,t,kf.easing):kf.objects[oi],kf,frame));
+          out.push(withTiming(b?interpObj(kf.objects[oi],b,t,kf.easing,kf):kf.objects[oi],kf,frame));
         }
         continue;
       }
@@ -4320,6 +4492,23 @@ function getStagePos(e){
   return s2s(e.clientX-r.left,e.clientY-r.top);
 }
 function hitTest(x,y){
+  /* Edit Multiple Frames: every keyframe in the onion range is live, so the
+     hit test searches all of them. Topmost-and-latest first, which is what
+     "the thing I can see under the pointer" means when several frames are on
+     screen at once. */
+  if(editMultiple){
+    var pairs=editMultipleKeyframes();
+    for(var pi=pairs.length-1;pi>=0;pi--){
+      var pobjs=pairs[pi].kf.objects;
+      for(var pj=pobjs.length-1;pj>=0;pj--){
+        var po=pobjs[pj];
+        var px0=Math.min(po.x,po.x+po.width),px1=Math.max(po.x,po.x+po.width);
+        var py0=Math.min(po.y,po.y+po.height),py1=Math.max(po.y,po.y+po.height);
+        if(x>=px0&&x<=px1&&y>=py0&&y<=py1)return po;
+      }
+    }
+    return null;
+  }
   var kf=CKF();if(!kf)return null;
   for(var i=kf.objects.length-1;i>=0;i--){
     var o=kf.objects[i];
@@ -4606,15 +4795,23 @@ function onMouseUp(e){
   if(curTool==="select"){
     if(dragPreview&&dragPreview.type==="select"){
       // marquee select
-      var kf=CKF();
-      if(kf){
-        var x1=Math.min(dragPreview.x1,dragPreview.x2),y1=Math.min(dragPreview.y1,dragPreview.y2);
-        var x2=Math.max(dragPreview.x1,dragPreview.x2),y2=Math.max(dragPreview.y1,dragPreview.y2);
-        selection=kf.objects.filter(function(o){
-          var ox0=Math.min(o.x,o.x+o.width),ox1=Math.max(o.x,o.x+o.width);
-          var oy0=Math.min(o.y,o.y+o.height),oy1=Math.max(o.y,o.y+o.height);
-          return ox1>x1&&ox0<x2&&oy1>y1&&oy0<y2;
+      var x1=Math.min(dragPreview.x1,dragPreview.x2),y1=Math.min(dragPreview.y1,dragPreview.y2);
+      var x2=Math.max(dragPreview.x1,dragPreview.x2),y2=Math.max(dragPreview.y1,dragPreview.y2);
+      var inBox=function(o){
+        var ox0=Math.min(o.x,o.x+o.width),ox1=Math.max(o.x,o.x+o.width);
+        var oy0=Math.min(o.y,o.y+o.height),oy1=Math.max(o.y,o.y+o.height);
+        return ox1>x1&&ox0<x2&&oy1>y1&&oy0<y2;
+      };
+      if(editMultiple){
+        // Across every live keyframe, which is the whole point of the mode:
+        // one marquee grabs the animation, not one frame of it.
+        selection=[];
+        editMultipleKeyframes().forEach(function(p){
+          p.kf.objects.forEach(function(o){if(inBox(o))selection.push(o);});
         });
+      }else{
+        var kf=CKF();
+        if(kf)selection=kf.objects.filter(inBox);
       }
       dragPreview=null;
     }else if(selection.length>0&&moveObjStarts.length>0){
@@ -5492,6 +5689,37 @@ function renderTLFrames(){
         tlCtx.fillRect(ex,y+2,2,fh-4);
       }
       if(kf.sound&&kf.sound.asset)drawWaveform(kf,y,fw,fh);
+      /* Frame labels, drawn as Flash drew them: a little flag at the keyframe
+         and the name trailing after it. A label you cannot see is a label you
+         forget you set — and the three kinds are coloured apart because a
+         comment behaves completely differently from a name. */
+      if(kf.label&&fw>=4){
+        var lx=(kf.index-1)*fw;
+        if(lx<=right&&lx+60>=sx){
+          var kind=kf.labelType||"name";
+          var col=kind==="comment"?"#7FD08A":(kind==="anchor"?"#C58BE8":"#E8C14A");
+          tlCtx.save();
+          tlCtx.fillStyle=col;
+          if(kind==="comment"){
+            // A comment gets a slash rather than a flag: it is not a target.
+            tlCtx.beginPath();
+            tlCtx.moveTo(lx+1,y+fh-3);tlCtx.lineTo(lx+5,y+3);
+            tlCtx.lineWidth=1.5;tlCtx.strokeStyle=col;tlCtx.stroke();
+          }else{
+            tlCtx.beginPath();
+            tlCtx.moveTo(lx+1.5,y+2);
+            tlCtx.lineTo(lx+1.5,y+9);
+            tlCtx.lineTo(lx+7,y+5.5);
+            tlCtx.closePath();
+            tlCtx.fill();
+          }
+          tlCtx.font="9px Tahoma,Arial,sans-serif";
+          tlCtx.fillStyle=col;
+          tlCtx.textBaseline="top";
+          tlCtx.fillText(kf.label,lx+9,y+1);
+          tlCtx.restore();
+        }
+      }
     });
     // layer separator line
     tlCtx.strokeStyle="#222";tlCtx.lineWidth=0.5;
@@ -6286,13 +6514,57 @@ function updateProps(){
       row("Objects",skf.objects.length,function(){},{type:"readonly"});
       row("Tween",skf.tweenType||"none",function(v){pushUndo();skf.tweenType=v;fullRefresh();},{type:"select",width:"90px",options:[["none","None"],["motion","Motion"],["shape","Shape"]]});
 
+      /* Frame label and its kind. `kf.label` has been stored, serialized and
+         read by the exporter since frame scripts arrived, and there was no way
+         to set one — which made `gotoAndPlay("menu")` unreachable from the
+         authoring side. */
+      row("Label",skf.label||"",function(v){
+        pushUndo();skf.label=String(v||"").trim();fullRefresh();
+      },{width:"90px"});
+      if(skf.label){
+        row("Label type",skf.labelType||"name",function(v){
+          pushUndo();skf.labelType=v;fullRefresh();
+        },{type:"select",width:"90px",options:[
+          ["name","Name"],["comment","Comment"],["anchor","Anchor"]
+        ]});
+        note((skf.labelType||"name")==="comment"
+          ? "A comment is an authoring note. It is not exported, so no script can jump to it."
+          : "Exported as a timeline label, so gotoAndPlay(\""+skf.label+"\") works.");
+      }
+
       if(skf.tweenType&&skf.tweenType!=="none"){
-        row("Easing",skf.easing||"linear",function(v){pushUndo();skf.easing=v;fullRefresh();},{type:"select",width:"100px",options:[
+        row("Easing",skf.easing||"linear",function(v){
+          pushUndo();
+          skf.easing=v;
+          // Switching to Custom needs a curve to edit; an ease-out-ish default
+          // beats a straight line that looks like nothing happened.
+          if(v==="custom"&&!skf.easeBezier)skf.easeBezier=[0.25,0.1,0.25,1];
+          fullRefresh();
+        },{type:"select",width:"100px",options:[
           ["linear","linear"],["quadIn","quadIn"],["quadOut","quadOut"],["quadInOut","quadInOut"],
           ["cubicIn","cubicIn"],["cubicOut","cubicOut"],["cubicInOut","cubicInOut"],
           ["sineIn","sineIn"],["sineOut","sineOut"],["sineInOut","sineInOut"],
-          ["expoOut","expoOut"],["backOut","backOut"],["elasticOut","elasticOut"],["bounceOut","bounceOut"]
+          ["expoOut","expoOut"],["backOut","backOut"],["elasticOut","elasticOut"],["bounceOut","bounceOut"],
+          ["custom","custom curve…"]
         ]});
+        if(skf.easing==="custom")buildEasingEditor(pp,skf,note);
+
+        /* Rotate CW/CCW x n. Without it a tween always takes the short way
+           round, so a wheel cannot be made to turn: 0 to 350 degrees rolls
+           backwards and 0 to 360 does not move at all. */
+        row("Rotate",skf.rotateDir||"none",function(v){
+          pushUndo();skf.rotateDir=v;fullRefresh();
+        },{type:"select",width:"90px",options:[
+          ["none","Auto (shortest)"],["cw","Clockwise"],["ccw","Counter-clockwise"]
+        ]});
+        if(skf.rotateDir&&skf.rotateDir!=="none"){
+          row("Turns",skf.rotateTimes||1,function(v){
+            pushUndo();skf.rotateTimes=Math.max(1,parseInt(v,10)||1);fullRefresh();
+          },{type:"number",width:"45px"});
+        }
+        row("Scale",skf.tweenScale!==false,function(v){
+          pushUndo();skf.tweenScale=v;fullRefresh();
+        },{type:"checkbox"});
       }
 
       // Keyframe action buttons
@@ -6965,6 +7237,102 @@ function updateTransformPanel(){
       selection.length+" objects.";
     host.appendChild(m);
   }
+}
+
+/**
+ * The custom easing editor: a draggable cubic-Bézier curve.
+ *
+ * Flash's Custom Ease In/Ease Out was exactly this — a curve you pulled about
+ * rather than a name you picked off a list — and it is the difference between
+ * an animation that moves and one that moves *well*. Four numbers, so a curve
+ * survives a save and the exported player can evaluate it identically, which
+ * a hand-drawn point list could not.
+ */
+function buildEasingEditor(pp,kf,note){
+  var size=118;
+  var wrap=document.createElement("div");
+  wrap.className="props-row";
+  wrap.style.cssText="justify-content:center;padding:4px 0";
+  var cv=document.createElement("canvas");
+  cv.className="ease-curve";
+  cv.width=size;cv.height=size;
+  cv.title="Drag either handle. The curve maps time (across) to progress (up).";
+  wrap.appendChild(cv);
+  pp.appendChild(wrap);
+
+  var cx=cv.getContext("2d");
+  var bez=function(){
+    if(!kf.easeBezier||kf.easeBezier.length<4)kf.easeBezier=[0.25,0.1,0.25,1];
+    return kf.easeBezier;
+  };
+  // Canvas y runs down, easing progress runs up.
+  var toPx=function(x,y){return {x:x*size,y:size-y*size};};
+  var draw=function(){
+    var b=bez();
+    cx.clearRect(0,0,size,size);
+    cx.fillStyle="#1E1E1E";
+    cx.fillRect(0,0,size,size);
+    // A faint diagonal: linear, for comparison.
+    cx.strokeStyle="#3A3A3A";cx.lineWidth=1;
+    cx.beginPath();cx.moveTo(0,size);cx.lineTo(size,0);cx.stroke();
+    var p1=toPx(b[0],b[1]),p2=toPx(b[2],b[3]);
+    // Handle tethers.
+    cx.strokeStyle="#55707F";
+    cx.beginPath();cx.moveTo(0,size);cx.lineTo(p1.x,p1.y);cx.stroke();
+    cx.beginPath();cx.moveTo(size,0);cx.lineTo(p2.x,p2.y);cx.stroke();
+    // The curve itself.
+    cx.strokeStyle="#6CC0FF";cx.lineWidth=2;
+    cx.beginPath();cx.moveTo(0,size);
+    cx.bezierCurveTo(p1.x,p1.y,p2.x,p2.y,size,0);
+    cx.stroke();
+    [[p1,"#FFD24A"],[p2,"#FF7FB0"]].forEach(function(h){
+      cx.beginPath();cx.arc(h[0].x,h[0].y,4,0,Math.PI*2);
+      cx.fillStyle=h[1];cx.fill();
+      cx.strokeStyle="#111";cx.lineWidth=1;cx.stroke();
+    });
+  };
+  draw();
+
+  var dragging=null,pre=null;
+  var at=function(e){
+    var r=cv.getBoundingClientRect();
+    return {
+      // x is time and is clamped to 0..1; y is progress and is NOT, because
+      // overshoot above 1 and undershoot below 0 are what make a curve snap
+      // and settle — the whole reason to draw one by hand.
+      x:Math.max(0,Math.min(1,(e.clientX-r.left)/size)),
+      y:Math.max(-0.5,Math.min(1.5,(r.bottom-e.clientY)/size))
+    };
+  };
+  cv.addEventListener("pointerdown",function(e){
+    var b=bez(),p=at(e);
+    var d1=Math.hypot(p.x-b[0],p.y-b[1]);
+    var d2=Math.hypot(p.x-b[2],p.y-b[3]);
+    dragging=d1<=d2?0:1;
+    pre=snap();
+    if(cv.setPointerCapture){try{cv.setPointerCapture(e.pointerId);}catch(err){}}
+    e.preventDefault();
+  });
+  cv.addEventListener("pointermove",function(e){
+    if(dragging==null)return;
+    var b=bez(),p=at(e);
+    b[dragging*2]=Math.round(p.x*1000)/1000;
+    b[dragging*2+1]=Math.round(p.y*1000)/1000;
+    draw();
+    render();
+  });
+  var end=function(){
+    if(dragging==null)return;
+    dragging=null;
+    // One undo per drag, not per pointer move.
+    if(pre){pushUndoSnap(pre);pre=null;}
+  };
+  cv.addEventListener("pointerup",end);
+  cv.addEventListener("pointercancel",end);
+
+  var b0=bez();
+  note("Curve "+b0.map(function(v){return Math.round(v*100)/100;}).join(", ")+
+       " — drag the yellow and pink handles.");
 }
 
 /**
@@ -8320,6 +8688,42 @@ function doAction(a){
   case "distributeToLayers":
     if(distributeToLayers())fullRefresh();
     else showMessage("Distribute to Layers","Select two or more objects first.");
+    break;
+  case "reverseFrames":
+    var rv=reverseFrames({});
+    if(rv.done)fullRefresh();
+    else showMessage("Reverse Frames",
+      "Select a span of two or more keyframes in the timeline first — drag "+
+      "across the frames you want reversed.");
+    break;
+  case "copyMotion":
+    var cm=copyMotion({});
+    if(cm.ok){
+      showMessage("Copy Motion",cm.frames+" frames of motion copied. "+
+        "Select another object and use Paste Motion to give it the same animation.");
+    }else{
+      showMessage("Copy Motion","Select a span on a layer that has something "+
+        "animated on it. Copy Motion takes the movement, not the artwork.");
+    }
+    break;
+  case "pasteMotion":
+    var pm=pasteMotion({});
+    if(pm.ok)fullRefresh();
+    else if(pm.reason==="empty")showMessage("Paste Motion","Use Copy Motion first.");
+    else if(pm.reason==="nothing")showMessage("Paste Motion",
+      "There is nothing on this frame to animate. Put an object on it first.");
+    else showMessage("Paste Motion","This layer is locked, or it is a folder.");
+    break;
+  case "editMultiple":
+    editMultiple=!editMultiple;
+    selection=[];
+    if(editMultiple&&!onionBefore&&!onionAfter){
+      // The mode's span comes from the onion counts; at zero it would cover
+      // one frame and look broken.
+      onionBefore=2;onionAfter=2;
+      updateOnionUI();
+    }
+    fullRefresh();
     break;
   case "onionToggle":
     onionOn=!onionOn;
@@ -11898,6 +12302,9 @@ function initKeys(){
     if(!ctrl&&e.altKey&&(e.key==="o"||e.key==="O")){
       e.preventDefault();doAction(e.shiftKey?"onionOutlines":"onionToggle");return;
     }
+    if(!ctrl&&e.altKey&&(e.key==="m"||e.key==="M")){
+      e.preventDefault();doAction("editMultiple");return;
+    }
     if(ctrl&&e.key==="z"){e.preventDefault();doAction("undo");return;}
     if(ctrl&&e.key==="y"){e.preventDefault();doAction("redo");return;}
     if(ctrl&&e.key==="s"){e.preventDefault();doAction("save");return;}
@@ -11986,8 +12393,13 @@ function serializeLayers(layers){
         return{
           index:kf.index,duration:kf.duration,
           tweenType:kf.tweenType,easing:kf.easing,
-          script:kf.script,label:kf.label||"",
+          script:kf.script,label:kf.label||"",labelType:kf.labelType||"name",
           sound:kf.sound?cloneSound(kf.sound):null,
+          // Tween options. Written always, so a round trip is lossless even
+          // for the defaults.
+          easeBezier:kf.easeBezier?kf.easeBezier.slice():null,
+          rotateDir:kf.rotateDir||"none",rotateTimes:kf.rotateTimes||1,
+          tweenScale:kf.tweenScale!==false,
           objects:kf.objects.map(plainObj)
         };
       })
@@ -12170,7 +12582,13 @@ function reviveKeyframe(kd){
   kf.easing=kd.easing||"linear";
   kf.script=kd.script||"";
   kf.label=kd.label||"";
+  kf.labelType=(kd.labelType==="comment"||kd.labelType==="anchor")?kd.labelType:"name";
   kf.sound=(kd.sound&&kd.sound.asset)?cloneSound(kd.sound):null;
+  kf.easeBezier=(Array.isArray(kd.easeBezier)&&kd.easeBezier.length>=4)
+    ? kd.easeBezier.slice(0,4).map(Number) : null;
+  kf.rotateDir=(kd.rotateDir==="cw"||kd.rotateDir==="ccw")?kd.rotateDir:"none";
+  kf.rotateTimes=Math.max(1,parseInt(kd.rotateTimes,10)||1);
+  kf.tweenScale=kd.tweenScale!==false;
   kf.objects=(kd.objects||[]).map(reviveObject);
   return kf;
 }
@@ -13133,7 +13551,9 @@ function exportRuntime(data, canvas, options) {
      scripts are the exception. */
   outLayers.forEach(function (la) {
     (la.keyframes || []).forEach(function (k) {
-      if (k.label) root.timeline.addLabel(k.label, k.index);
+      // A comment is an authoring note, not a script target: exporting it as a
+      // label would make `gotoAndPlay("fix this bit")` a working instruction.
+      if (k.label && (k.labelType || "name") !== "comment") root.timeline.addLabel(k.label, k.index);
     });
   });
 
@@ -13176,7 +13596,12 @@ function exportRuntime(data, canvas, options) {
     }
   }
 
-  function easeAt(t, name) {
+  function easeAt(t, name, bezier) {
+    // Through the engine's resolver when it is there, so a custom curve eases
+    // in the movie exactly as it did on the authoring stage.
+    if (Flashy.Easing && Flashy.Easing.resolve) {
+      return Flashy.Easing.resolve(name, bezier)(Math.min(1, Math.max(0, t)));
+    }
     var ef = easing[name || "linear"] || easing.linear;
     return ef(Math.min(1, Math.max(0, t)));
   }
@@ -13289,7 +13714,7 @@ function exportRuntime(data, canvas, options) {
       ? la.keyframes[la.keyframes.indexOf(kf) + 1] : null;
     // Divide by duration (not duration-1) so the frame holding the next
     // keyframe is the one that shows the destination — same as the stage.
-    var t = nk ? easeAt((fr - kf.index) / kf.duration, kf.easing) : 0;
+    var t = nk ? easeAt((fr - kf.index) / kf.duration, kf.easing, kf.easeBezier) : 0;
     var out = [];
     for (var oi = 0; oi < kf.objects.length; oi++) {
       var a = kf.objects[oi];
@@ -13300,11 +13725,48 @@ function exportRuntime(data, canvas, options) {
         for (var prop in a) o[prop] = a[prop];
         o.x = a.x + (b.x - a.x) * t;
         o.y = a.y + (b.y - a.y) * t;
-        o.width = a.width + (b.width - a.width) * t;
-        o.height = a.height + (b.height - a.height) * t;
-        o.rotation = (a.rotation || 0) + ((b.rotation || 0) - (a.rotation || 0)) * t;
-        o.scaleX = (a.scaleX || 1) + ((b.scaleX || 1) - (a.scaleX || 1)) * t;
-        o.scaleY = (a.scaleY || 1) + ((b.scaleY || 1) - (a.scaleY || 1)) * t;
+        /* Flash's "Scale" checkbox: off means the object keeps its own size
+           through the tween and only moves. */
+        if (kf.tweenScale === false) {
+          o.width = a.width; o.height = a.height;
+          o.scaleX = a.scaleX; o.scaleY = a.scaleY;
+        } else {
+          o.width = a.width + (b.width - a.width) * t;
+          o.height = a.height + (b.height - a.height) * t;
+          o.scaleX = (a.scaleX || 1) + ((b.scaleX || 1) - (a.scaleX || 1)) * t;
+          o.scaleY = (a.scaleY || 1) + ((b.scaleY || 1) - (a.scaleY || 1)) * t;
+        }
+        /* Rotate CW/CCW x n: a tween otherwise always takes the short way
+           round, so 0 to 350 degrees rolls backwards and 0 to 360 does not
+           move at all. */
+        if (kf.rotateDir && kf.rotateDir !== "none") {
+          var turns = Math.max(1, parseInt(kf.rotateTimes, 10) || 1);
+          var rf = a.rotation || 0;
+          var rt = b.rotation != null ? b.rotation : rf;
+          if (kf.rotateDir === "cw") {
+            while (rt < rf) rt += 360;
+            if (rt === rf) rt += 360;
+            rt += 360 * (turns - 1);
+          } else {
+            while (rt > rf) rt -= 360;
+            if (rt === rf) rt -= 360;
+            rt -= 360 * (turns - 1);
+          }
+          o.rotation = rf + (rt - rf) * t;
+        } else {
+          o.rotation = (a.rotation || 0) + ((b.rotation || 0) - (a.rotation || 0)) * t;
+        }
+        /* Skew, filters and the colour effect tween here too. They did not,
+           which meant a glow that pulsed on the authoring stage held still in
+           the export — the exact divergence class paintObj exists to prevent,
+           reappearing because this function is the runtime's own copy of the
+           interpolator. */
+        o.skewX = (a.skewX || 0) + ((b.skewX || 0) - (a.skewX || 0)) * t;
+        o.skewY = (a.skewY || 0) + ((b.skewY || 0) - (a.skewY || 0)) * t;
+        if (Flashy.Filters) {
+          o.filters = Flashy.Filters.lerpFilters(a.filters, b.filters, t);
+          o.colorEffect = Flashy.Filters.lerpColorEffect(a.colorEffect, b.colorEffect, t);
+        }
         var aa = a.alpha != null ? a.alpha : 1, ba = b.alpha != null ? b.alpha : 1;
         o.alpha = aa + (ba - aa) * t;
         o.__tween = true;              // the timeline is driving this one
@@ -15025,6 +15487,23 @@ function init(){
       return tlRange();
     },
     tlRange: function(){ return tlRange(); },
+    /**
+     * Select a keyframe the way clicking its timeline cell does.
+     *
+     * tlSelect() sets the cell RANGE; this sets `selectedKF`, which is what
+     * the Property inspector's keyframe section reads.
+     */
+    selectKeyframe: function(layerIdx,frame){
+      var l=currentLayers()[layerIdx];
+      if(!l)return null;
+      curLayer=layerIdx;
+      curFrame=frame;
+      var kf=l.getKeyframeAt(frame);
+      selectedKF=kf?{layerIdx:layerIdx,frameIdx:kf.index,kf:kf}:null;
+      selection=[];
+      fullRefresh();
+      return kf;
+    },
     framesToSymbol: createSymbolFromFrames,
     /** Frame clipboard, the same entry points the menu uses. */
     copyFrames: copyFrames,
@@ -15068,6 +15547,22 @@ function init(){
       return {objects:snapObjects,guides:snapGuides,grid:snapGrid,rulers:showRulers};
     },
     snapBox: snapBox,
+    /* Tween control and the frame commands. */
+    reverseFrames: reverseFrames,
+    copyMotion: copyMotion,
+    pasteMotion: pasteMotion,
+    hasMotionClipboard: hasMotionClipboard,
+    editMultiple: function(v){
+      if(v!=null){editMultiple=!!v;selection=[];fullRefresh();}
+      return editMultiple;
+    },
+    editMultipleRange: editMultipleRange,
+    easeAmount: easeAmount,
+    /** The one tween interpolator every render path reads. */
+    interpObj: interpObj,
+    /** The stage hit test, which Edit Multiple Frames widens. */
+    hitTest: hitTest,
+    editMultipleKeyframes: editMultipleKeyframes,
     /* Scenes. The alias discipline matters here: doc.layers IS the current
        scene's layer array, never a copy, so a spec that reaches doc.layers is
        reaching the live scene. */

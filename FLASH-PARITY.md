@@ -65,14 +65,14 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Keyframes, blank keyframes, frames, spans | ✅ | — |
 | Motion tween | ✅ | — |
 | Shape tween | ◐ | Interpolates, but no shape hints (above). |
-| Easing (named presets) | ◐ | Preset list only — no custom easing curve editor. |
-| Tween ▸ Rotate CW/CCW × n | ⬜ | A tween cannot be told to spin; it always takes the short path. |
-| Tween ▸ Orient to Path, Snap, Sync, Scale | ⬜ | Missing. |
+| Easing (named presets + custom curve) | ✅ | Fourteen presets plus a draggable cubic-Bézier curve. One resolver (`Flashy.Easing.resolve`) shared with the exported player, so a custom curve cannot ease one way while authoring and another way in the movie. |
+| Tween ▸ Rotate CW/CCW × n | ✅ | `rotateTimes` is how many times it goes round, counting a partial turn as part of the first — so 0°→350° clockwise once is 350°, and 0°→0° twice is 720°. |
+| Tween ▸ Scale | ✅ | Off means the object keeps its own size through the tween and only moves. Orient to Path, Snap and Sync are still missing. |
 | **Onion skinning** (+ outlines, marker modes) | ✅ | `drawOnionSkin`, with frame counts either side, ghost and outline modes, and controls in the timeline header. Edit Multiple Frames is still missing. |
-| Frame labels | ◐ | `kf.label` is stored and serialized; no UI to set it, no anchor/comment label types. |
-| Reverse Frames | ⬜ | Missing. |
-| Copy Motion / Paste Motion | ⬜ | Missing. |
-| Edit Multiple Frames | ⬜ | Missing. |
+| Frame labels (+ name / comment / anchor) | ✅ | It was stored, serialized and read by the exporter, and there was no way to set one — so `gotoAndPlay("menu")` was unreachable from the authoring side. Labels now draw on the timeline as flags, and a COMMENT is deliberately not exported: making `gotoAndPlay("fix this bit")` work would be wrong. |
+| Reverse Frames | ✅ | Reverses the spans, not merely the list, and shifts each tween back one — a tween belongs to the pair of keyframes it spans and is stored on the earlier one, so reversing without the shift leaves the last keyframe tweening into nothing. |
+| Copy Motion / Paste Motion | ✅ | Samples the transform track frame by frame through the real interpolator, so a pasted motion reproduces the easing as well as the positions. The artwork is not copied — that is Paste Frames. |
+| Edit Multiple Frames | ✅ | Every keyframe in the onion range becomes live and selectable at once, sharing the onion markers as Flash's did. It works because selection is a list of object references and a drag writes straight to `o.x`/`o.y`. |
 | Layer folders | ✅ | The same flat-list-with-a-run idiom mask layers already use: a layer of type `folder`, and the layers beneath it at a greater `indent` are its contents. No tree to keep consistent, and reordering cannot orphan anything. Collapsing hides rows, never artwork. |
 | Guide layers | ✅ | Marked, shown on the stage and in onion skin, and stripped from every output — including out of the published file, not merely skipped by the player. |
 | Mask / Masked layers | ✅ | `maskGroups`, `applyMaskClip`. |

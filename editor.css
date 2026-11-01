@@ -1319,3 +1319,13 @@ input[type="range"].props-input {
 }
 .scene-btn:hover:not(:disabled) { color: #fff; }
 .scene-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* ── Custom easing editor ──
+   A draggable curve, not a name off a list: it is the difference between an
+   animation that moves and one that moves well. */
+.ease-curve {
+  border: 1px solid #111;
+  border-top-color: #555; border-left-color: #555;
+  border-radius: 2px; cursor: crosshair;
+  touch-action: none;
+}
