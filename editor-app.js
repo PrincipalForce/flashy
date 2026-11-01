@@ -24063,7 +24063,25 @@ function buildSWF(){
   // The whole movie, scenes laid end to end — the same document every other
   // export path publishes.
   var data=exportDocData();
-  var out=FlashySWFWriter.write(data,{});
+  /* The writer never loads anything: a decode is asynchronous and `write` is
+     not, so the already-decoded images, audio buffers and traced font faces
+     are handed over. Anything missing from these is reported as skipped
+     rather than silently dropped. */
+  var images={};
+  Object.keys(data.bitmaps||{}).forEach(function(n){
+    var img=bitmapImage(n);
+    if(img)images[n]=img;
+  });
+  var buffers={};
+  if(window.Flashy&&Flashy.Sound&&Flashy.Sound._buffers){
+    Object.keys(data.sounds||{}).forEach(function(n){
+      var b=Flashy.Sound._buffers[n];
+      if(b)buffers[n]=b;
+    });
+  }
+  var out=FlashySWFWriter.write(data,{
+    images:images, buffers:buffers, fonts:docFonts()
+  });
   return {ok:true,bytes:out.bytes,report:out.report,
           missing:FlashySWFWriter.reportText(out.report)};
 }

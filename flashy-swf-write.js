@@ -36,8 +36,561 @@
   var TAG = {
     End: 0, ShowFrame: 1, SetBackgroundColor: 9, DefineShape3: 32,
     PlaceObject2: 26, RemoveObject2: 28, DefineSprite: 39, FrameLabel: 43,
-    FileAttributes: 69
+    FileAttributes: 69,
+    /* The rest of what a real movie needs: scripts, sound, bitmaps, fonts and
+       text, and PlaceObject3 for the filter list. Every one of these is
+       already understood by the reader in flashy-swf.js, which is what makes
+       it a usable oracle for the writer. */
+    DoAction: 12, DefineSound: 14, StartSound: 15,
+    DefineBitsLossless2: 36, DefineBitsJPEG2: 21,
+    DefineFont2: 48, DefineText2: 33, PlaceObject3: 70,
+    DefineShape4: 83
   };
+
+  /* ------------------------------------------------------------------ *
+   * zlib, by the shortest honest route
+   *
+   * DefineBitsLossless wants its pixels zlib-compressed, and there is no
+   * compressor here. But deflate has a STORED block type -- literally "the
+   * next N bytes, uncompressed" -- and a stream of stored blocks is a valid
+   * deflate stream. Wrapped in a zlib header and an Adler-32 it is a zlib
+   * stream every inflater accepts, including the reader in flashy-swf.js that
+   * these tests check against.
+   *
+   * It compresses nothing, which is the honest trade: a 32-bit bitmap comes
+   * out the size of its pixels. Writing a real deflate encoder is a project
+   * of its own, and shipping a file that cannot be opened at all would be
+   * worse than shipping a big one.
+   * ------------------------------------------------------------------ */
+  function adler32(bytes) {
+    var a = 1, b = 0;
+    for (var i = 0; i < bytes.length; i++) {
+      a = (a + bytes[i]) % 65521;
+      b = (b + a) % 65521;
+    }
+    return ((b * 65536) + a) >>> 0;
+  }
+
+  function zlibStore(bytes) {
+    var out = [];
+    // CMF 0x78: deflate with a 32K window. FLG 0x01 makes the pair's checksum
+    // a multiple of 31, which the spec requires.
+    out.push(0x78, 0x01);
+    var MAX = 65535;                 // the largest a stored block can be
+    var at = 0;
+    do {
+      var len = Math.min(MAX, bytes.length - at);
+      var last = (at + len >= bytes.length) ? 1 : 0;
+      out.push(last);                // BFINAL in bit 0, BTYPE 00 = stored
+      out.push(len & 0xff, (len >> 8) & 0xff);
+      out.push(~len & 0xff, (~len >> 8) & 0xff);
+      for (var i = 0; i < len; i++) out.push(bytes[at + i]);
+      at += len;
+    } while (at < bytes.length);
+    var sum = adler32(bytes);
+    out.push((sum >>> 24) & 0xff, (sum >>> 16) & 0xff,
+             (sum >>> 8) & 0xff, sum & 0xff);
+    return out;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Bitmaps
+   *
+   * Two routes, and which is used depends on what the document holds. A JPEG
+   * goes in as DefineBitsJPEG2 BYTE FOR BYTE -- it is already compressed and
+   * re-encoding it would only lose quality. Anything else is decoded to
+   * pixels and written as DefineBitsLossless2, the only format in the file
+   * that is lossless and the only one that carries alpha.
+   * ------------------------------------------------------------------ */
+
+  /**
+   * The bytes of a bitmap asset.
+   *
+   * A document stores RAW base64 plus a separate `mediaType` -- the data URL
+   * is assembled on demand by the editor -- so both shapes are accepted
+   * here. Taking only one would work until the day the other turned up.
+   */
+  function base64Bytes(b64) {
+    var s = String(b64 || '');
+    var at = s.indexOf(',');
+    if (/^data:/.test(s) && at >= 0) s = s.slice(at + 1);
+    var bin;
+    try { bin = atob(s); } catch (e) { return null; }
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  /**
+   * An image's pixels, by drawing it.
+   *
+   * Synchronous, which a decode is not -- so the image has to be loaded
+   * already. The editor keeps decoded images for the stage and hands one in;
+   * this writer never loads anything itself.
+   */
+  function bitmapPixels(img) {
+    if (!img || typeof document === 'undefined') return null;
+    var w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    if (!w || !h) return null;
+    var cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    var ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    try { return { w: w, h: h, data: ctx.getImageData(0, 0, w, h).data }; }
+    catch (e) { return null; }       // a cross-origin image: nothing to read
+  }
+
+  /** DefineBitsLossless2: 32-bit ARGB, premultiplied, zlib-wrapped. */
+  function losslessBody(id, px) {
+    var w = new Writer();
+    w.u16(id);
+    w.u8(5);                         // format 5: 32-bit ARGB
+    w.u16(px.w);
+    w.u16(px.h);
+    var raw = new Uint8Array(px.w * px.h * 4);
+    for (var i = 0, n = px.w * px.h; i < n; i++) {
+      var a = px.data[i * 4 + 3];
+      /* SWF's ARGB is PREMULTIPLIED and canvas's is not. Skipping this makes
+         every semi-transparent pixel too bright -- a 50% red reads as pink
+         over black instead of dark red. */
+      var k = a / 255;
+      raw[i * 4] = a;
+      raw[i * 4 + 1] = Math.round(px.data[i * 4] * k);
+      raw[i * 4 + 2] = Math.round(px.data[i * 4 + 1] * k);
+      raw[i * 4 + 3] = Math.round(px.data[i * 4 + 2] * k);
+    }
+    w.bytesOf(zlibStore(raw));
+    return w;
+  }
+
+  /** DefineBitsJPEG2: the original bytes, untouched. */
+  function jpegBody(id, bytes) {
+    var w = new Writer();
+    w.u16(id);
+    w.bytesOf(bytes);
+    return w;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Sound
+   *
+   * DefineSound with uncompressed PCM. No MP3 encoder is needed, because SWF
+   * has always allowed raw samples -- format 0 -- and the decoded buffer is
+   * already there for the stage to play.
+   *
+   * Big, like the bitmaps, and for the same reason: the alternative is a .swf
+   * with no audio in it at all.
+   * ------------------------------------------------------------------ */
+
+  /* SWF has four sample rates and they are an enum, not a number. Anything
+     else has to be resampled, so the nearest is chosen and the samples are
+     stretched to match. */
+  var SWF_RATES = [5512, 11025, 22050, 44100];
+
+  function nearestSWFRate(rate) {
+    var best = 0;
+    for (var i = 1; i < SWF_RATES.length; i++) {
+      if (Math.abs(SWF_RATES[i] - rate) < Math.abs(SWF_RATES[best] - rate)) best = i;
+    }
+    return best;
+  }
+
+  /** DefineSound: 16-bit PCM, little-endian, at one of SWF's four rates. */
+  function soundBody(id, buffer) {
+    var rateIdx = nearestSWFRate(buffer.sampleRate);
+    var rate = SWF_RATES[rateIdx];
+    var stereo = buffer.numberOfChannels > 1 ? 1 : 0;
+    var chans = [];
+    for (var c = 0; c <= stereo; c++) chans.push(buffer.getChannelData(c));
+    var ratio = rate / buffer.sampleRate;
+    var count = Math.max(1, Math.floor(chans[0].length * ratio));
+
+    var w = new Writer();
+    w.u16(id);
+    /* One packed byte: format, rate, size, type. Written as bit fields rather
+       than arithmetic so the order is visible and checkable against the
+       spec. */
+    w.ub(4, 0);                      // format 0: uncompressed, little-endian
+    w.ub(2, rateIdx);
+    w.ub(1, 1);                      // 16-bit
+    w.ub(1, stereo);
+    w.align();
+    w.u32(count);                    // sample COUNT, per channel
+    for (var i = 0; i < count; i++) {
+      for (var ch = 0; ch < chans.length; ch++) {
+        var at = i / ratio;
+        var i0 = Math.floor(at), i1 = Math.min(chans[ch].length - 1, i0 + 1);
+        var t = at - i0;
+        var v = chans[ch][i0] * (1 - t) + chans[ch][i1] * t;
+        v = Math.max(-1, Math.min(1, v));
+        w.i16(v < 0 ? Math.round(v * 0x8000) : Math.round(v * 0x7fff));
+      }
+    }
+    return { writer: w, samples: count, rate: rate, stereo: !!stereo };
+  }
+
+  /** StartSound: play a defined sound on this frame. */
+  function startSoundBody(id, opts) {
+    opts = opts || {};
+    var w = new Writer();
+    w.u16(id);
+    // SOUNDINFO. Everything optional is left out.
+    var loops = Math.max(0, Math.min(65535, opts.loops || 0));
+    w.ub(2, 0);                      // reserved
+    w.ub(1, 0);                      // SyncStop
+    w.ub(1, opts.noMultiple ? 1 : 0);
+    w.ub(1, 0);                      // HasEnvelope
+    w.ub(1, loops > 1 ? 1 : 0);      // HasLoops
+    w.ub(1, 0);                      // HasOutPoint
+    w.ub(1, 0);                      // HasInPoint
+    w.align();
+    if (loops > 1) w.u16(loops);
+    return w;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Fonts and text
+   *
+   * DefineFont2 carries glyph outlines as shape records, and Flashy already
+   * has those: embedding traces each glyph into a 0..1 em path with the
+   * project's own tracer. So the font tag is a unit conversion -- em
+   * fractions into SWF's 1024-per-em grid -- rather than a font parser.
+   *
+   * A field whose face has not been embedded cannot be written: the glyphs
+   * ARE the text in a DefineText, so there is nothing to emit. That is
+   * reported, with the fix named, rather than silently dropping the words.
+   * ------------------------------------------------------------------ */
+
+  var EM_UNITS = 1024;               // SWF's em square for DefineFont2
+
+  /**
+   * One glyph's outline as a SWF SHAPE.
+   *
+   * No style arrays: a glyph's fill comes from the DefineText that uses it,
+   * which is why both counts are zero and the fill index is one bit wide
+   * carrying the value 1.
+   */
+  function glyphShape(path) {
+    var w = new Writer();
+    w.ub(4, 0);                      // FillStyleCount
+    w.ub(4, 0);                      // LineStyleCount
+    w.ub(4, 1);                      // NumFillBits
+    w.ub(4, 0);                      // NumLineBits
+
+    var penX = 0, penY = 0;
+    var em = function (v) { return Math.round(v * EM_UNITS); };
+    var first = true;
+
+    var cmds = path || [];
+    for (var i = 0; i < cmds.length;) {
+      var op = cmds[i];
+      if (op === 0) {                // moveTo
+        var mx = em(cmds[i + 1]), my = em(cmds[i + 2]);
+        var dx = mx - penX, dy = my - penY;
+        var bits = Math.max(Writer.bitsFor(dx), Writer.bitsFor(dy));
+        w.ub(1, 0);                  // a style-change record
+        w.ub(1, 0);                  // StateNewStyles
+        w.ub(1, 0);                  // StateLineStyle
+        w.ub(1, 0);                  // StateFillStyle1
+        w.ub(1, first ? 1 : 0);      // StateFillStyle0, set once
+        w.ub(1, 1);                  // StateMoveTo
+        w.ub(5, bits);
+        w.sb(bits, dx);
+        w.sb(bits, dy);
+        if (first) { w.ub(1, 1); first = false; }   // FillStyle0 = index 1
+        penX = mx; penY = my;
+        i += 3;
+      } else if (op === 1) {          // lineTo
+        var lx = em(cmds[i + 1]), ly = em(cmds[i + 2]);
+        var ldx = lx - penX, ldy = ly - penY;
+        i += 3;
+        if (!ldx && !ldy) continue;
+        var lb = Math.max(2, Math.max(Writer.bitsFor(ldx), Writer.bitsFor(ldy)));
+        w.ub(1, 1);                  // an edge
+        w.ub(1, 1);                  // straight
+        w.ub(4, lb - 2);
+        if (ldx && ldy) { w.ub(1, 1); w.sb(lb, ldx); w.sb(lb, ldy); }
+        else if (ldx) { w.ub(1, 0); w.ub(1, 0); w.sb(lb, ldx); }
+        else { w.ub(1, 0); w.ub(1, 1); w.sb(lb, ldy); }
+        penX = lx; penY = ly;
+      } else if (op === 2) {          // quadTo
+        var cx = em(cmds[i + 1]), cy = em(cmds[i + 2]);
+        var ax = em(cmds[i + 3]), ay = em(cmds[i + 4]);
+        /* Both deltas are relative to where the pen has got to: the control
+           from the pen, and the anchor from the CONTROL. Measuring the second
+           from the pen instead is the classic way to get a curve that
+           overshoots by exactly the control offset. */
+        var c1x = cx - penX, c1y = cy - penY;
+        var a1x = ax - cx, a1y = ay - cy;
+        var cb = Math.max(2, Math.max(
+          Writer.bitsFor(c1x), Writer.bitsFor(c1y),
+          Writer.bitsFor(a1x), Writer.bitsFor(a1y)));
+        w.ub(1, 1);                  // an edge
+        w.ub(1, 0);                  // curved
+        w.ub(4, cb - 2);
+        w.sb(cb, c1x); w.sb(cb, c1y);
+        w.sb(cb, a1x); w.sb(cb, a1y);
+        penX = ax; penY = ay;
+        i += 5;
+      } else {
+        i += 1;                      // close: implicit in a glyph outline
+      }
+    }
+    w.ub(1, 0);                      // end record: not an edge
+    w.ub(5, 0);                      // with no state flags
+    w.align();
+    return w;
+  }
+
+  /**
+   * DefineFont2 for a set of traced glyphs.
+   *
+   * The offset table is the fiddly part: byte offsets from the START of the
+   * offset table to each glyph, plus one more marking the end of the last.
+   * Getting it wrong does not fail loudly -- the glyphs simply come back as
+   * other glyphs.
+   */
+  function fontBody(id, name, glyphs) {
+    var chars = Object.keys(glyphs).filter(function (c) {
+      return glyphs[c] && glyphs[c].path && glyphs[c].path.length;
+    });
+    if (!chars.length) return null;
+    var shapes = chars.map(function (c) { return glyphShape(glyphs[c].path); });
+
+    var w = new Writer();
+    w.u16(id);
+    /* Wide offsets and wide codes both on. A font with more than a handful of
+       glyphs needs the first, and mixing the two widths per font is a bug
+       waiting to happen. HasLayout is off: the advances travel in the text
+       records, which is where Flashy measures them anyway. */
+    w.ub(1, 0);                      // HasLayout
+    w.ub(1, 0);                      // ShiftJIS
+    w.ub(1, 0);                      // SmallText
+    w.ub(1, 0);                      // ANSI
+    w.ub(1, 1);                      // WideOffsets
+    w.ub(1, 1);                      // WideCodes
+    w.ub(1, 0);                      // Italic
+    w.ub(1, 0);                      // Bold
+    w.align();
+    w.u8(0);                         // LanguageCode: none
+    var nm = String(name || 'Font').slice(0, 100);
+    w.u8(nm.length);
+    for (var i = 0; i < nm.length; i++) w.u8(nm.charCodeAt(i) & 0xff);
+    w.u16(chars.length);
+
+    /* Offsets run from the start of the offset table, which begins at the
+       next byte. With wide offsets each entry is 4 bytes and there are n+1
+       of them, the last marking where the glyphs end. */
+    var at = (chars.length + 1) * 4;
+    var offsets = [];
+    shapes.forEach(function (sh) { offsets.push(at); at += sh.bytes.length; });
+    offsets.push(at);
+    offsets.forEach(function (o) { w.u32(o); });
+    shapes.forEach(function (sh) { w.bytesOf(sh.bytes); });
+    chars.forEach(function (c) { w.u16(c.charCodeAt(0)); });
+    return { writer: w, chars: chars };
+  }
+
+  /**
+   * DefineText2 for one text object.
+   *
+   * One record carrying the font, colour, position and the glyph advances.
+   * The advances come from the traced face, so the spacing in the .swf is the
+   * spacing Flashy laid out rather than the player's guess.
+   */
+  function textBody(id, opts) {
+    var index = {};
+    opts.chars.forEach(function (c, i) { index[c] = i; });
+    var text = String(opts.text || '');
+    var used = [];
+    for (var i = 0; i < text.length; i++) {
+      // A character the face has no glyph for is dropped from this record;
+      // the caller counts it so the report can say how many went.
+      if (index[text[i]] != null) used.push(text[i]);
+    }
+    if (!used.length) return null;
+
+    var w = new Writer();
+    w.u16(id);
+    /* Bounds, generous rather than exact. A tight box that is slightly wrong
+       clips the text; a loose one costs nothing. `rect` takes pixels. */
+    w.rect(opts.x - 2, opts.y - opts.size - 2,
+           opts.x + opts.width + 2, opts.y + opts.size + 2);
+    w.matrix({});                    // identity: the glyphs carry the offsets
+    var GLYPH_BITS = 16, ADVANCE_BITS = 16;
+    w.u8(GLYPH_BITS);
+    w.u8(ADVANCE_BITS);
+
+    w.ub(1, 1);                      // TextRecordType 1
+    w.ub(3, 0);                      // reserved
+    w.ub(1, 1);                      // HasFont
+    w.ub(1, 1);                      // HasColor
+    w.ub(1, 1);                      // HasYOffset
+    w.ub(1, 1);                      // HasXOffset
+    w.align();
+    w.u16(opts.fontId);
+    w.rgba(opts.color, 1);           // DefineText2 carries alpha
+    w.i16(Math.round(opts.x * TWIPS));
+    w.i16(Math.round((opts.y + opts.size) * TWIPS));   // baseline, not top
+    w.u16(Math.round(opts.size * TWIPS));
+
+    w.u8(used.length);
+    used.forEach(function (c) {
+      w.ub(GLYPH_BITS, index[c]);
+      var adv = Math.round((opts.glyphs[c].advance || 0.5) * opts.size * TWIPS);
+      w.sb(ADVANCE_BITS, adv);
+    });
+    w.align();
+    w.u8(0);                         // end of records
+    return { writer: w, drawn: used.length, dropped: text.length - used.length };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Filters
+   *
+   * PlaceObject3 carries a filter list, and the four filters Flashy shares
+   * with Flash map onto SWF's own four. The gradient pair do not: their ramp
+   * is a different record with its own stop list, so they are reported as
+   * unwritten rather than approximated by a plain glow that would look wrong.
+   * ------------------------------------------------------------------ */
+
+  var SWF_FILTER = { dropShadow: 0, blur: 1, glow: 2, bevel: 3 };
+
+  function filterListBody(filters) {
+    var all = (filters || []).filter(function (f) { return f && f.enabled !== false; });
+    var usable = all.filter(function (f) { return SWF_FILTER[f.type] != null; });
+    if (!usable.length) return null;
+    var w = new Writer();
+    w.u8(usable.length);
+    usable.forEach(function (f) {
+      w.u8(SWF_FILTER[f.type]);
+      var rgba = function (c, a) {
+        var n = typeof c === 'string' ? parseInt(String(c).replace('#', ''), 16)
+                                      : (c | 0);
+        w.u8((n >> 16) & 0xff); w.u8((n >> 8) & 0xff); w.u8(n & 0xff);
+        w.u8(Math.round(Math.max(0, Math.min(1, a == null ? 1 : a)) * 255));
+      };
+      var q = Math.max(1, Math.min(15, f.quality || 1));
+      if (f.type === 'blur') {
+        w.fixed(Math.abs(f.blurX == null ? 4 : f.blurX));
+        w.fixed(Math.abs(f.blurY == null ? 4 : f.blurY));
+        w.ub(5, q);
+        w.ub(3, 0);                  // reserved
+        w.align();
+      } else if (f.type === 'glow') {
+        rgba(f.color == null ? 0xff0000 : f.color, f.alpha);
+        var gb = Math.abs(f.blur == null ? 6 : f.blur);
+        w.fixed(gb); w.fixed(gb);
+        w.fixed8(f.strength == null ? 1 : f.strength);
+        w.ub(1, 0);                  // InnerGlow
+        w.ub(1, 0);                  // Knockout
+        w.ub(1, 1);                  // CompositeSource
+        w.ub(5, q);
+        w.align();
+      } else if (f.type === 'dropShadow') {
+        rgba(f.color == null ? 0 : f.color, f.alpha == null ? 0.6 : f.alpha);
+        var db = Math.abs(f.blur == null ? 4 : f.blur);
+        w.fixed(db); w.fixed(db);
+        w.fixed((f.angle == null ? 45 : f.angle) * Math.PI / 180);
+        w.fixed(f.distance == null ? 4 : f.distance);
+        w.fixed8(f.strength == null ? 1 : f.strength);
+        w.ub(1, 0);                  // InnerShadow
+        w.ub(1, 0);                  // Knockout
+        w.ub(1, 1);                  // CompositeSource
+        w.ub(5, q);
+        w.align();
+      } else {
+        // Bevel: shadow colour first, as the spec orders them.
+        rgba(f.shadowColor == null ? 0 : f.shadowColor, 0.6);
+        rgba(f.highlightColor == null ? 0xffffff : f.highlightColor, 0.6);
+        var bb = Math.abs(f.blur == null ? 4 : f.blur);
+        w.fixed(bb); w.fixed(bb);
+        w.fixed((f.angle == null ? 45 : f.angle) * Math.PI / 180);
+        w.fixed(f.distance == null ? 4 : f.distance);
+        w.fixed8(f.strength == null ? 1 : f.strength);
+        w.ub(1, 0);                  // InnerShadow
+        w.ub(1, 0);                  // Knockout
+        w.ub(1, 1);                  // CompositeSource
+        w.ub(1, 1);                  // OnTop
+        w.ub(4, q);
+        w.align();
+      }
+    });
+    return { writer: w, count: usable.length,
+             skipped: all.length - usable.length };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Actions
+   *
+   * An assembler for the five verbs a Flashy frame script actually uses. Not
+   * a compiler: the script is matched against five shapes and anything else
+   * is reported as unwritten, with the offending line named.
+   *
+   * That is a deliberate line to draw. A real AS2 compiler is a parser, a
+   * scope model and a bytecode generator -- a project of its own -- and a
+   * .swf carrying half-compiled scripts would be worse than one that says
+   * which scripts it left out and why.
+   * ------------------------------------------------------------------ */
+
+  var ACTION = {
+    Play: 0x06, Stop: 0x07, GotoFrame: 0x81, GotoLabel: 0x8C,
+    Push: 0x96, Trace: 0x26
+  };
+
+  /** Assemble one script, or report the line that stopped it. */
+  function assembleActions(src) {
+    var lines = String(src == null ? '' : src).split('\n');
+    var out = [];
+    var u16 = function (v) { out.push(v & 0xff, (v >> 8) & 0xff); };
+    var str = function (s) {
+      for (var i = 0; i < s.length; i++) out.push(s.charCodeAt(i) & 0xff);
+      out.push(0);
+    };
+    var inBlockComment = false;
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (inBlockComment) {
+        if (/\*\//.test(line)) inBlockComment = false;
+        continue;
+      }
+      if (!line || /^\/\//.test(line)) continue;
+      if (/^\/\*/.test(line)) {
+        if (!/\*\//.test(line)) inBlockComment = true;
+        continue;
+      }
+      var m;
+      if (/^stop\s*\(\s*\)\s*;?$/.test(line)) { out.push(ACTION.Stop); continue; }
+      if (/^play\s*\(\s*\)\s*;?$/.test(line)) { out.push(ACTION.Play); continue; }
+      if ((m = /^gotoAndStop\s*\(\s*(\d+)\s*\)\s*;?$/.exec(line))) {
+        // GotoFrame is zero-based and stops there by definition.
+        out.push(ACTION.GotoFrame); u16(2);
+        u16(Math.max(0, parseInt(m[1], 10) - 1));
+        continue;
+      }
+      if ((m = /^gotoAndPlay\s*\(\s*(\d+)\s*\)\s*;?$/.exec(line))) {
+        out.push(ACTION.GotoFrame); u16(2);
+        u16(Math.max(0, parseInt(m[1], 10) - 1));
+        out.push(ACTION.Play);
+        continue;
+      }
+      if ((m = /^(gotoAndStop|gotoAndPlay)\s*\(\s*["'](.+?)["']\s*\)\s*;?$/.exec(line))) {
+        out.push(ACTION.GotoLabel); u16(m[2].length + 1); str(m[2]);
+        if (m[1] === 'gotoAndPlay') out.push(ACTION.Play);
+        continue;
+      }
+      if ((m = /^trace\s*\(\s*["'](.*?)["']\s*\)\s*;?$/.exec(line))) {
+        // Push a string constant, then Trace.
+        out.push(ACTION.Push); u16(m[1].length + 2); out.push(0); str(m[1]);
+        out.push(ACTION.Trace);
+        continue;
+      }
+      return { unsupported: line };
+    }
+    out.push(0);                     // End of actions
+    return { bytes: out };
+  }
 
   /* ------------------------------------------------------------------ *
    * The writer
@@ -572,6 +1125,12 @@
     opts = opts || {};
     var report = {
       shapes: 0, sprites: 0, frames: 0, placed: 0,
+      /* What was WRITTEN, not only what was left out. The old report could
+         only say what it had failed at, which made it impossible to tell a
+         movie with no sound from one whose sound had been dropped. */
+      texts: 0, fonts: 0, bitmaps: 0, sounds: 0, filters: 0, scripts: 0,
+      glyphsDropped: 0,
+      unsupportedScript: null,
       skipped: { text: 0, bitmap: 0, sound: 0, filter: 0, script: 0, group: 0, other: 0 }
     };
     var nextId = 1;
@@ -581,6 +1140,159 @@
       var t = (l && l.layerType) || 'normal';
       return t !== 'guide' && t !== 'folder' && t !== 'motionguide';
     });
+
+    /* Preloaded images and decoded audio, handed in by the editor. This
+       writer never loads anything: a decode is asynchronous and `write` is
+       not, so the alternative would be a promise running through every layer
+       of this file. */
+    var images = opts.images || null;        // name -> HTMLImageElement
+    var buffers = opts.buffers || null;      // name -> AudioBuffer
+    var fonts = opts.fonts || null;          // faceKey -> traced glyph table
+
+    /** A bitmap asset as a character, by whichever route suits its bytes. */
+    var bitmapCache = Object.create(null);
+    var defineBitmap = function (name) {
+      if (bitmapCache[name] !== undefined) return bitmapCache[name];
+      var asset = (doc.bitmaps || {})[name];
+      if (!asset || !asset.data) { bitmapCache[name] = null; return null; }
+      var id = null;
+      /* A JPEG goes in byte for byte: it is already compressed, and decoding
+         and re-encoding it would only lose quality. */
+      var jpegBytes = /jpe?g/i.test(asset.mediaType || '')
+        ? base64Bytes(asset.data) : null;
+      if (jpegBytes && jpegBytes.length) {
+        id = nextId++;
+        defs.push(tag(TAG.DefineBitsJPEG2, jpegBody(id, jpegBytes).bytes));
+      } else {
+        var px = images ? bitmapPixels(images[name]) : null;
+        if (!px) { bitmapCache[name] = null; return null; }
+        id = nextId++;
+        defs.push(tag(TAG.DefineBitsLossless2, losslessBody(id, px).bytes));
+      }
+      report.bitmaps++;
+      bitmapCache[name] = id;
+      return id;
+    };
+
+    /**
+     * A bitmap placed on the stage.
+     *
+     * A bitmap character cannot be placed directly at a size: SWF scales it
+     * through a shape that uses it as a FILL, which is also how Flash did it.
+     * So the bitmap becomes a clipped-bitmap fill on a rectangle the size the
+     * object asks for.
+     */
+    var bitmapShapeCache = new Map();
+    var defineBitmapShape = function (o) {
+      if (bitmapShapeCache.has(o)) return bitmapShapeCache.get(o);
+      var bid = defineBitmap(o.bitmapAsset);
+      if (bid == null) { bitmapShapeCache.set(o, null); return null; }
+      var asset = (doc.bitmaps || {})[o.bitmapAsset] || {};
+      var natW = asset.width || (images && images[o.bitmapAsset]
+        ? (images[o.bitmapAsset].naturalWidth || 1) : 1);
+      var natH = asset.height || (images && images[o.bitmapAsset]
+        ? (images[o.bitmapAsset].naturalHeight || 1) : 1);
+      var id = nextId++;
+      var w = Math.abs(o.width || natW), h = Math.abs(o.height || natH);
+      var hw = w / 2, hh = h / 2;
+
+      var body = new Writer();
+      body.u16(id);
+      body.rect(-hw, -hh, hw, hh);
+      // One fill style: a clipped bitmap, with the matrix that maps the
+      // image's own pixels onto the rectangle.
+      body.u8(1);
+      body.u8(0x41);                 // clipped bitmap fill
+      body.u16(bid);
+      /* The fill matrix is in TWIPS per image pixel, which is the one place
+         this is easy to get wrong: a scale of 1 means one twip per pixel and
+         the image comes out a twentieth of its size. */
+      body.matrix({ a: (w / natW) * TWIPS, d: (h / natH) * TWIPS,
+                    tx: -hw, ty: -hh });
+      body.u8(0);                    // no line styles
+      body.ub(4, 1);                 // NumFillBits
+      body.ub(4, 0);                 // NumLineBits
+      // A rectangle, drawn as four straight edges from the top-left.
+      var tw = Math.round(w * TWIPS), th = Math.round(h * TWIPS);
+      var x0 = -Math.round(hw * TWIPS), y0 = -Math.round(hh * TWIPS);
+      body.ub(1, 0);                 // style change
+      body.ub(1, 0); body.ub(1, 0); body.ub(1, 0); body.ub(1, 1); body.ub(1, 1);
+      var mb = Math.max(Writer.bitsFor(x0), Writer.bitsFor(y0));
+      body.ub(5, mb);
+      body.sb(mb, x0); body.sb(mb, y0);
+      body.ub(1, 1);                 // FillStyle0 = 1
+      var edge = function (dx, dy) {
+        var b = Math.max(2, Math.max(Writer.bitsFor(dx), Writer.bitsFor(dy)));
+        body.ub(1, 1); body.ub(1, 1); body.ub(4, b - 2);
+        if (dx && dy) { body.ub(1, 1); body.sb(b, dx); body.sb(b, dy); }
+        else if (dx) { body.ub(1, 0); body.ub(1, 0); body.sb(b, dx); }
+        else { body.ub(1, 0); body.ub(1, 1); body.sb(b, dy); }
+      };
+      edge(tw, 0); edge(0, th); edge(-tw, 0); edge(0, -th);
+      body.ub(1, 0); body.ub(5, 0);
+      body.align();
+      defs.push(tag(TAG.DefineShape3, body.bytes));
+      bitmapShapeCache.set(o, id);
+      return id;
+    };
+
+    /** A sound asset as a DefineSound character. */
+    var soundCache = Object.create(null);
+    var defineSound = function (name) {
+      if (soundCache[name] !== undefined) return soundCache[name];
+      var buf = buffers ? buffers[name] : null;
+      if (!buf || !buf.getChannelData) { soundCache[name] = null; return null; }
+      var id = nextId++;
+      var built = soundBody(id, buf);
+      defs.push(tag(TAG.DefineSound, built.writer.bytes));
+      report.sounds++;
+      soundCache[name] = id;
+      return id;
+    };
+
+    /** A traced face as a DefineFont2 character. */
+    var fontCache = Object.create(null);
+    var defineFont = function (key, face) {
+      if (fontCache[key] !== undefined) return fontCache[key];
+      var table = fonts ? fonts[key] : null;
+      if (!table || !table.glyphs) { fontCache[key] = null; return null; }
+      var id = nextId++;
+      var built = fontBody(id, face, table.glyphs);
+      if (!built) { nextId--; fontCache[key] = null; return null; }
+      defs.push(tag(TAG.DefineFont2, built.writer.bytes));
+      report.fonts++;
+      fontCache[key] = { id: id, chars: built.chars, glyphs: table.glyphs };
+      return fontCache[key];
+    };
+
+    /** A text object as a DefineText2 character. */
+    var textCache = new Map();
+    var defineText = function (o) {
+      if (textCache.has(o)) return textCache.get(o);
+      var key = String(o.font || 'Arial') + (o.fontBold ? '|b' : '') +
+                (o.fontItalic ? '|i' : '');
+      var face = defineFont(key, o.font || 'Arial');
+      if (!face) {
+        /* The glyphs ARE the text in a DefineText, so a face that was never
+           embedded leaves nothing to write. Reported with the fix named. */
+        report.skipped.text++;
+        textCache.set(o, null);
+        return null;
+      }
+      var id = nextId++;
+      var built = textBody(id, {
+        chars: face.chars, glyphs: face.glyphs, fontId: face.id,
+        text: o.text, size: o.fontSize || 24,
+        color: o.fillColor == null ? '#000000' : o.fillColor,
+        x: 0, y: -(o.fontSize || 24) / 2, width: Math.abs(o.width || 0)
+      });
+      if (!built) { nextId--; report.skipped.text++; textCache.set(o, null); return null; }
+      defs.push(tag(TAG.DefineText2, built.writer.bytes));
+      report.texts++;
+      report.glyphsDropped += built.dropped;
+      textCache.set(o, id);
+      return id;
+    };
 
     /* A cache keyed by the object's own identity: the same object placed on
        forty frames should define one shape, not forty. */
@@ -650,18 +1362,67 @@
       function placeOne(o, d) {
         var cid = characterFor(o);
         if (cid == null) return false;
-        inner.push(tag(TAG.PlaceObject2, placeBody(d, cid, o, true)));
+        var p3 = place3(d, cid, o, true);
+        inner.push(p3 ? tag(TAG.PlaceObject3, p3)
+                      : tag(TAG.PlaceObject2, placeBody(d, cid, o, true)));
         report.placed++;
         return true;
       }
     };
 
+    /**
+     * PlaceObject3, when the object has filters SWF can express.
+     *
+     * Returns null when PlaceObject2 will do, which is almost always: a tag
+     * the player has to parse further costs something, and a movie with no
+     * filters in it should not pay for the ones it does not have.
+     */
+    function place3(depth, charId, o, fresh) {
+      var fl = filterListBody(o.filters);
+      if (!fl) {
+        if (o.filters && o.filters.length) report.skipped.filter++;
+        return null;
+      }
+      report.filters += fl.count;
+      report.skipped.filter += fl.skipped;
+      var w = new Writer();
+      /* The first flag byte is PlaceObject2's, and the second is
+         PlaceObject3's own. Writing one byte and forgetting the other is how
+         a filter list ends up being read as a blend mode. */
+      w.ub(1, 0);                    // HasClipActions
+      w.ub(1, 0);                    // HasClipDepth
+      w.ub(1, 0);                    // HasName
+      w.ub(1, 0);                    // HasRatio
+      w.ub(1, 1);                    // HasColorTransform
+      w.ub(1, 1);                    // HasMatrix
+      w.ub(1, 1);                    // HasCharacter
+      w.ub(1, fresh ? 0 : 1);        // Move
+      w.ub(1, 0);                    // reserved
+      w.ub(1, 0);                    // OpaqueBackground
+      w.ub(1, 0);                    // HasVisible
+      w.ub(1, 0);                    // HasImage
+      w.ub(1, 0);                    // HasClassName
+      w.ub(1, 0);                    // HasCacheAsBitmap
+      w.ub(1, 0);                    // HasBlendMode
+      w.ub(1, 1);                    // HasFilterList
+      w.align();
+      w.u16(depth);
+      w.u16(charId);
+      w.matrix(placeMatrix(o));
+      w.cxform(o.alpha == null ? 1 : o.alpha);
+      w.bytesOf(fl.writer.bytes);
+      return w.bytes;
+    }
+
     /** The character id for an object, defining it if need be. */
     function characterFor(o) {
       if (!o) return null;
-      if (o.filters && o.filters.length) report.skipped.filter++;
-      if (o.type === 'text') { report.skipped.text++; return null; }
-      if (o.type === 'bitmap') { report.skipped.bitmap++; return null; }
+      if (o.type === 'text') return defineText(o);
+      if (o.type === 'bitmap') {
+        var bid = defineBitmapShape(o);
+        if (bid == null) report.skipped.bitmap++;
+        return bid;
+      }
       if (o.type === 'group') {
         /* A group could be a sprite, but its children carry their own
            transforms relative to the group box and composing those into
@@ -698,8 +1459,6 @@
     layers.forEach(function (l) {
       (l.keyframes || []).forEach(function (k) {
         totalFrames = Math.max(totalFrames, k.index + k.duration - 1);
-        if (k.script && k.script.trim()) report.skipped.script++;
-        if (k.sound && k.sound.asset) report.skipped.sound++;
       });
     });
     if (doc.totalFrames) totalFrames = Math.max(totalFrames, doc.totalFrames);
@@ -717,6 +1476,37 @@
           timeline.push(tag(TAG.FrameLabel, lw.bytes));
         });
       });
+      /* Frame scripts, as DoAction. The assembler handles five verbs and
+         names the line that stopped it on anything else -- a .swf carrying
+         half-compiled scripts would be worse than one that says which it
+         left out. */
+      layers.forEach(function (l) {
+        (l.keyframes || []).forEach(function (k) {
+          if (k.index !== f || !k.script || !k.script.trim()) return;
+          var asm = assembleActions(k.script);
+          if (asm.unsupported) {
+            report.skipped.script++;
+            if (!report.unsupportedScript) report.unsupportedScript = asm.unsupported;
+            return;
+          }
+          timeline.push(tag(TAG.DoAction, asm.bytes));
+          report.scripts++;
+        });
+      });
+      /* Sounds, as StartSound on the frame they begin. Event sounds only:
+         a stream sound is interleaved with the frames through
+         SoundStreamBlock, which means re-chunking the samples per frame and
+         is a different piece of work. */
+      layers.forEach(function (l) {
+        (l.keyframes || []).forEach(function (k) {
+          if (k.index !== f || !k.sound || !k.sound.asset) return;
+          var sid = defineSound(k.sound.asset);
+          if (sid == null) { report.skipped.sound++; return; }
+          timeline.push(tag(TAG.StartSound, startSoundBody(sid, {
+            loops: k.sound.loop ? 65535 : (k.sound.repeat || 0)
+          }).bytes));
+        });
+      });
       liveDepths.forEach(function (d) {
         var rw = new Writer();
         rw.u16(d);
@@ -727,7 +1517,9 @@
       objectsAt(layers, f).forEach(function (o) {
         var cid = characterFor(o);
         if (cid == null) return;
-        timeline.push(tag(TAG.PlaceObject2, placeBody(depth, cid, o, true)));
+        var rp3 = place3(depth, cid, o, true);
+          timeline.push(rp3 ? tag(TAG.PlaceObject3, rp3)
+                            : tag(TAG.PlaceObject2, placeBody(depth, cid, o, true)));
         liveDepths.push(depth);
         depth++;
         report.placed++;
@@ -780,12 +1572,42 @@
     add(s.script, 'frame script', 'frame scripts');
     add(s.filter, 'filtered object', 'filtered objects');
     add(s.other, 'other object', 'other objects');
+    /* The one case worth naming rather than counting: a script was left out
+       because of a specific line, and knowing which line is the difference
+       between fixing it and guessing. */
+    if (report.unsupportedScript) {
+      parts.push('a script stopped at: ' + report.unsupportedScript);
+    }
+    return parts.join(', ');
+  }
+
+  /** What the writer DID produce, for the export dialog to show. */
+  function wroteText(report) {
+    var parts = [];
+    var add = function (n, one, many) {
+      if (n) parts.push(n + ' ' + (n === 1 ? one : many));
+    };
+    add(report.shapes, 'shape', 'shapes');
+    add(report.sprites, 'symbol', 'symbols');
+    add(report.texts, 'text block', 'text blocks');
+    add(report.fonts, 'embedded font', 'embedded fonts');
+    add(report.bitmaps, 'bitmap', 'bitmaps');
+    add(report.sounds, 'sound', 'sounds');
+    add(report.filters, 'filter', 'filters');
+    add(report.scripts, 'frame script', 'frame scripts');
     return parts.join(', ');
   }
 
   global.FlashySWFWriter = {
     write: write,
     reportText: reportText,
+    wroteText: wroteText,
+    /* The assembler and the glyph writer, exposed so a spec can check them
+       without building a whole movie round them. */
+    assembleActions: assembleActions,
+    glyphShape: glyphShape,
+    zlibStore: zlibStore,
+    adler32: adler32,
     Writer: Writer,
     TAG: TAG,
     TWIPS: TWIPS,

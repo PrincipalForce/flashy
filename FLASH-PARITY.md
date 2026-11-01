@@ -199,7 +199,7 @@ name — an entire class of Flash content is unreachable.
 | HTML template, dimensions, playback, scale | ✅ | Page title, background, loop, four scale modes, nine-way alignment, and a user template using Flash’s own `$XX$` placeholders — `$MOVIE$` is the whole movie, so a template cannot accidentally ship half of it. |
 | **Bandwidth Profiler / Size Report** | ✅ | Weight by kind and by asset, heaviest first, with a share bar per line; the busiest frame; and download times at 3G, 4G and broadband. Measured from the EXPORT document, so guides and scene structure are not counted — they are not published either. |
 | Protect from import, omit trace actions | ✅ | Both in Publish Settings. Omit Trace Actions strips `trace()` statements out of the exported copy, conservatively — only a balanced statement on its own line goes, because a regex loose enough to catch every shape of trace can cut a line in half. Protect from Import is a marker, which is all it ever was. |
-| SWF export | ◐ | `flashy-swf-write.js` writes SWF 6: shapes (solid and gradient fills, real strokes), symbols as sprites, frames, labels, the stage, and transforms with alpha. Text, bitmaps, sounds, filters and scripts are REPORTED as missing rather than silently dropped. The project's own parser is the writer's test oracle. |
+| SWF export | ✅ | Shapes, symbols, frames, labels, transforms, alpha — and text (DefineFont2 from traced glyph outlines + DefineText2), bitmaps (DefineBitsJPEG2 byte-for-byte, or DefineBitsLossless2 via a stored-block zlib writer), sound (DefineSound as raw PCM + StartSound), filters (PlaceObject3), and frame scripts (a five-verb AS2 assembler). Anything it cannot write is named, including the script line that stopped it. The project's own parser is the oracle. |
 
 ## 11. Document and workflow
 
@@ -315,11 +315,9 @@ Swatches**.
 29. ✅ **Publish Settings** — one dialog, persisted per document.
 30. ✅ **Bandwidth Profiler / Size Report**.
 31. ✅ **Movie Explorer**, **History panel**, **Color Swatches**.
-32. ◐ **SWF export** — shapes, symbols, frames, labels, transforms and alpha,
+32. ✅ **SWF export** — shapes, symbols, frames, labels, transforms and alpha,
     with everything it cannot express reported rather than dropped. Text,
-    bitmaps, sound, filters and scripts remain: each needs a subsystem of its
-    own (glyph tables, JPEG/zlib, MP3 framing, filter tags, an ActionScript
-    assembler).
+    bitmaps, sound, filters and scripts followed in Wave 13.
 
 ### Wave 7 — the leftovers
 
@@ -749,13 +747,13 @@ was not mine to make — so they are built.
 
 ### What is left
 
-The remaining items need a subsystem of their own, and they are named rather
-than quietly dropped:
+What is left is one item, and it is left on purpose:
 
-* **SWF text, bitmaps, sound, filters and scripts** — glyph tables, JPEG/zlib,
-  MP3 framing, filter tags, an ActionScript assembler. The writer reports each
-  as missing rather than silently dropping it.
-* **Runtime** shared libraries.
+* **Runtime** shared libraries — loading a symbol from another file while the
+  movie plays. It needs a loader protocol and a second file that has to still
+  be there, which is a large part of why Flash content rotted. Author-time
+  sharing does the same job and puts the symbol in the document, where every
+  export path already handles it.
 * **A user-supplied HTML template** and publish **alignment**.
 
 Both of the small leftovers above are now done as well: the registration point
@@ -979,3 +977,56 @@ a name, inserted at the caret.
     and the entry kept: every instance on the stage points at that name.
 
     Covered by `tests/documents.spec.js` (18 specs).
+
+### Wave 13 — the rest of the .swf
+
+68. ✅ **Text, bitmaps, sound, filters and frame scripts in the SWF.**
+
+    Each of these had been written off for a different reason, and all five
+    reasons turned out to be wrong — the capability was already in the project,
+    one step sideways from where it was needed.
+
+    * **Bitmaps needed zlib.** Deflate has a STORED block type, literally "the
+      next N bytes, uncompressed", and a stream of stored blocks wrapped in a
+      zlib header and an Adler-32 is a zlib stream every inflater accepts. It
+      compresses nothing, which is the honest trade: a bitmap comes out the
+      size of its pixels. A file that cannot be opened at all would be worse
+      than a big one. A JPEG skips all of this and goes in byte for byte — it
+      is already compressed, and re-encoding would only lose quality.
+
+      One trap: SWF’s ARGB is PREMULTIPLIED and canvas’s is not. Skipping that
+      makes every semi-transparent pixel too bright. And a bitmap character
+      cannot be placed at a size on its own, so it becomes a clipped-bitmap
+      FILL on a rectangle — which is how Flash did it too.
+
+    * **Sound needed an MP3 encoder.** It did not: SWF has allowed raw PCM
+      since version 1, and the decoded buffer is already there for the stage
+      to play. SWF’s four sample rates are an ENUM rather than a number, so
+      anything else is resampled to the nearest.
+
+    * **Text needed a font parser.** It needed glyph outlines, which Wave 10
+      already produces by tracing. So DefineFont2 is a unit conversion — em
+      fractions into SWF’s 1024-per-em grid — and the test that matters is
+      that the reader turns the DefineText back into the right STRING, which
+      only happens if the offset table, the code table and the glyph order all
+      agree.
+
+    * **Filters needed PlaceObject3**, which the reader already parsed. The
+      four filters Flashy shares with Flash map onto SWF’s own four. The
+      gradient pair do not — their ramp is a different record — so they are
+      reported rather than approximated by a plain glow that would look wrong.
+
+    * **Scripts needed a compiler.** A real AS2 compiler is a parser, a scope
+      model and a bytecode generator, so instead five verbs are assembled —
+      stop, play, gotoAndStop, gotoAndPlay, trace, by number or by label — and
+      anything else stops with the LINE named in the report. Knowing which
+      line is the difference between fixing it and guessing.
+
+    The report now says what was WRITTEN as well as what was left out. The old
+    one could only report failures, which made a movie with no sound in it
+    indistinguishable from one whose sound had been dropped.
+
+    Covered by `tests/swf-assets.spec.js` (19 specs), every one round-tripping
+    through `flashy-swf.js` — the project’s own parser, which is the only
+    check worth having on a format where one misplaced bit makes everything
+    after it unreadable.
