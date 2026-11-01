@@ -86,7 +86,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Feature | Flashy | Gap |
 | --- | --- | --- |
 | Movie Clip / Graphic / Button behaviours | ✅ | `symbolBehaviorOf`, `BUTTON_STATES`. |
-| Button Up/Over/Down/Hit authoring | ◐ | The frames are interpreted, but there is no state-labelled editing view and no interactive preview. |
+| Button Up/Over/Down/Hit authoring | ✅ | The timeline names frames 1–4 Up/Over/Down/Hit while a Button symbol is open, and Control ▸ Enable Simple Buttons makes buttons respond to the pointer on the stage. The Hit frame is never drawn — it says where the button can be clicked. |
 | Convert to Symbol, Convert Frames to Symbol | ✅ | — |
 | Duplicate Symbol | ✅ | A deep copy through the serializer — anything shallower leaves the duplicate sharing structure with the original, which is the bug group children and filter stacks both had. |
 | Swap Symbol (instance → another symbol) | ✅ | The instance keeps its position, size and transform: swapping is replacing what is drawn, not where it is. |
@@ -154,7 +154,7 @@ name — an entire class of Flash content is unreachable.
 | Movie Explorer | ✅ | Every scene, layer, frame, object and library item, with Flash's five filters and a search. Click a row to go to it. Reaches parked scenes, not just the open one. |
 | Debugger (breakpoints, watch, variable inspector) | ⬜ | Missing. |
 | Behaviors panel (scriptless interactivity) | ✅ | Eleven behaviours across six events, written as Flash's own `on(release) { … }` handlers — which flashy-as2.js already runs. They stack rather than replacing each other, and stay editable as code in the Actions panel. |
-| Components (Button, CheckBox, RadioButton, TextInput, Slider, ProgressBar) | ◐ | Built as ordinary library symbols with handlers, the way Flash's own were — so a component is editable, exports through the existing paths and needs no new runtime. ComboBox and a dropdown list remain. |
+| Components (Button, CheckBox, RadioButton, TextInput, Slider, ProgressBar, ComboBox) | ✅ | Built as ordinary library symbols with handlers, the way Flash’s own were — so a component is editable, exports through the existing paths and needs no new runtime. The ComboBox’s dropdown is its second frame, which is where Flash put one too. |
 | Code snippets library | ◐ | The API chips insert working calls at the caret. A saved, user-editable snippet library is still missing. |
 | Button event wiring without code | ✅ | The Behaviors panel. |
 
@@ -169,7 +169,7 @@ name — an entire class of Flash content is unreachable.
 | **Align** | ✅ | — |
 | **Info** (x/y/w/h readout, cursor position) | ✅ | Selection box, pointer position, whether the pointer is on the stage. Colour under cursor is still missing. |
 | **Transform** (numeric scale/rotate/skew) | ✅ | Applies to a whole selection, which Properties does not. Copy-and-apply is still missing. |
-| **History** (+ replay steps, save as command) | ◐ | The stack is listed, named after the command that made each step, and clicking one steps back to it. Replay and save-as-command are still missing. |
+| **History** (+ replay steps, save as command) | ✅ | The stack is listed, named after the command that made each step, and clicking one steps back to it. Replay re-runs the COMMANDS behind recent steps against the document as it is now, and a run can be saved as a named command. |
 | **Output** | ✅ | §7. |
 | **Scene** | ✅ | §3. |
 | Color Swatches (+ load/save palettes, web-safe) | ✅ | Three palettes: the colours this document already uses (most-used first, gathered from fills, strokes, gradient stops, filters and every symbol), the web-safe 216, and your own. Click for fill, Shift-click for stroke — and a selected object is recoloured too. |
@@ -198,7 +198,7 @@ name — an entire class of Flash content is unreachable.
 | **Publish Settings** (one dialog, multiple targets, remembered per document) | ✅ | One dialog, saved with the document, and a Publish command (Ctrl+F12) that produces every ticked target in sequence — sequentially because five downloads fired at one instant is how a browser decides to block four of them. |
 | HTML template, dimensions, playback, scale | ◐ | Page title, background, loop, and four scale modes (match movie, fit, fill, percent) — all in CSS, so the canvas keeps its pixel size and the drawing stays sharp. A user-supplied HTML template and alignment remain. |
 | **Bandwidth Profiler / Size Report** | ✅ | Weight by kind and by asset, heaviest first, with a share bar per line; the busiest frame; and download times at 3G, 4G and broadband. Measured from the EXPORT document, so guides and scene structure are not counted — they are not published either. |
-| Protect from import, omit trace actions | ⬜ | Missing. |
+| Protect from import, omit trace actions | ✅ | Both in Publish Settings. Omit Trace Actions strips `trace()` statements out of the exported copy, conservatively — only a balanced statement on its own line goes, because a regex loose enough to catch every shape of trace can cut a line in half. Protect from Import is a marker, which is all it ever was. |
 | SWF export | ◐ | `flashy-swf-write.js` writes SWF 6: shapes (solid and gradient fills, real strokes), symbols as sprites, frames, labels, the stage, and transforms with alpha. Text, bitmaps, sounds, filters and scripts are REPORTED as missing rather than silently dropped. The project's own parser is the writer's test oracle. |
 
 ## 11. Document and workflow
@@ -207,9 +207,9 @@ name — an entire class of Flash content is unreachable.
 | --- | --- | --- |
 | Document Settings (size, fps, background) | ✅ | — |
 | Match stage size to contents / printer | ◐ | Match Stage Size to Contents measures every frame of the scene through each object’s own matrix, resizes the stage and shifts the artwork to the origin. No printer support. |
-| Templates / New from Template | ⬜ | Missing. |
+| Templates / New from Template | ✅ | Three built-ins — banner, slideshow, looping sprite — each a real document loaded through the ordinary path, not a list of settings. |
 | Recent files | ◐ | Desktop shell only. |
-| Save As / Save a Copy / Revert | ◐ | Save As and Revert; no Save a Copy. Revert keeps a copy of the saved document rather than relying on undo history, which is bounded. |
+| Save As / Save a Copy / Revert | ✅ | Save As, Save a Copy (which deliberately does NOT mark the document saved) and Revert, which keeps a copy of the saved document rather than relying on undo history. |
 | Preferences | ✅ | — |
 | Keyboard shortcut customisation | ✅ | Any menu command bindable to a chord, stored in localStorage. Overrides are consulted BEFORE the built-in chain rather than replacing it, so the defaults keep their careful ordering. |
 | Multiple documents / tabs in one window | ◐ | Desktop opens one document per window. |
@@ -614,3 +614,86 @@ History replay and save-as-command.
     other instance’s.
 
     Covered by `tests/rich-text-tint.spec.js` (24 specs).
+
+### Wave 7e — the ones that needed something else first
+
+48. ✅ **Button authoring.** A Button symbol’s frames 1–4 are Up, Over, Down
+    and Hit, and the runtime has always known that. The authoring side did
+    not: inside a button you saw four bare numbers, and on the stage a button
+    sat inert showing its Up frame.
+
+    The timeline now names the four states while a button is open, and
+    Control ▸ Enable Simple Buttons makes buttons react to the pointer. Off by
+    default, because a button that reacts cannot be selected or dragged —
+    which is exactly why Flash made it a toggle rather than the default.
+
+    The Hit frame is never drawn in any state. It says where the button can be
+    clicked, which is precisely why drawing it would be wrong. And none of
+    this reaches an export: a hover state is authoring chrome, so a sprite
+    sheet recorded mid-hover would be a bug.
+
+    One real bug surfaced here. The hovered instance was first tracked by
+    object reference, and `frameObjects` hands out a fresh `Object.create`
+    view per call — so the object the hit test found was never the reference
+    the next render inspected, and the hover never showed. It is tracked by
+    the object’s `id` instead, which is also the right granularity: two
+    instances of one symbol are two buttons.
+
+49. ✅ **New from Template.** Three built-ins, each a real document loaded
+    through the ordinary path. A template that is a list of settings teaches
+    nothing; the point is to open something that already works and take it
+    apart — so the banner ships with a motion tween and a `stop()` on its last
+    frame rather than a note saying it should have one.
+
+50. ✅ **ComboBox.** The last component, and last for a reason: a dropdown
+    needs somewhere to BE. A second frame is that somewhere, and it is how
+    Flash’s own components did it — the closed box is frame 1, the open list
+    is frame 2 with one named row per item, and the clip simply goes to the
+    other frame. No new runtime, no overlay layer, and it exports through the
+    paths that already exist.
+
+51. ✅ **History replay, and Save as Command.** These needed each undo step to
+    record the ACTION that caused it, not only a label. A snapshot is a
+    *state*, and replaying a state against a different document means nothing;
+    replaying the command that produced it means exactly what the user
+    expects — apply the same three commands to the next shape.
+
+    So `doAction` now stamps its id onto the step it causes, Replay re-runs a
+    chosen tail of those ids, and a run can be saved under a name in
+    localStorage. A step with no command behind it — a stroke, a slider drag —
+    is a state change rather than an instruction and is counted out of the
+    replay rather than silently dropped. The stored list is re-validated on
+    read, so a hand-edited store cannot make the editor run something it does
+    not recognise.
+
+52. ✅ **Save a Copy**, which deliberately does not mark the document saved or
+    move Revert’s target: the point is to put a copy aside and carry on in
+    the original.
+
+53. ✅ **Omit Trace Actions and Protect from Import.** The strip is
+    deliberately conservative — only a `trace( … )` that is a balanced
+    statement on its own line goes, with quotes respected — because a regex
+    loose enough to catch every shape of trace is also loose enough to cut a
+    line in half, and a released movie with broken scripts is far worse than
+    one that logs. It runs on the exported COPY, so the document keeps its
+    traces. Protect from Import is a marker, which is all Flash’s was.
+
+    Covered by `tests/buttons-commands.spec.js` (19 specs).
+
+### What is left
+
+The enumeration is now complete except for items that need a subsystem of
+their own, and they are named rather than quietly dropped:
+
+* **SWF text, bitmaps, sound, filters and scripts** — glyph tables, JPEG/zlib,
+  MP3 framing, filter tags, an ActionScript assembler. The writer reports each
+  as missing rather than silently dropping it.
+* **Device fonts and character embedding ranges** — needs font parsing.
+* **A debugger** — breakpoints, watches, a variable inspector.
+* **Shared libraries and runtime sharing**, **per-sound compression**,
+  **Accessibility**, **Strings/localisation**, **spell check**, **Timeline
+  Effects** (which Adobe deprecated too), **multiple documents in one window**,
+  and **Edit in New Window** on the web build.
+* **A user-supplied HTML template** and publish **alignment**.
+* **An on-stage handle** for dragging the registration point, and a saved,
+  user-editable **code snippet library** beyond the API chips.

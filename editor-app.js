@@ -202,6 +202,7 @@ function pushUndoSnap(s){
      it is about to run and this picks the name up, so a command added later is
      labelled without anyone having to remember to label it. */
   if(!s.label)s.label=undoLabelFor();
+  if(s.actionId==null)s.actionId=currentActionId;
   undoStack.push(s);
   if(undoStack.length>50)undoStack.shift();
   redoStack.length=0;
@@ -243,6 +244,7 @@ function doUndo(){
      shows a different label from undoing it. */
   var forward=snap();
   forward.label=step.label;
+  forward.actionId=step.actionId;
   redoStack.push(forward);
   restoreSnap(step);
   touchDoc();
@@ -252,6 +254,7 @@ function doRedo(){
   var step=redoStack.pop();
   var back=snap();
   back.label=step.label;
+  back.actionId=step.actionId;
   undoStack.push(back);
   restoreSnap(step);
   touchDoc();
@@ -495,8 +498,10 @@ function svgIcon(content){
 var menus=[
   {label:"File",items:[
     {label:"New",action:"new",shortcut:"Ctrl+N"},
+    {label:"New from Template...",action:"newFromTemplate"},
     {label:"Open...",action:"open",shortcut:"Ctrl+O"},
     {label:"Save",action:"save",shortcut:"Ctrl+S"},
+    {label:"Save a Copy...",action:"saveCopy"},
     {type:"sep"},
     {label:"Export as HTML...",action:"export",shortcut:"Ctrl+Shift+S"},
     {label:"Export as Sprite Sheet...",action:"exportGIF"},
@@ -543,6 +548,8 @@ var menus=[
     {label:"Select All",action:"selectAll",shortcut:"Ctrl+A"},
     {type:"sep"},
     {label:"Find and Replace...",action:"findReplace",shortcut:"Ctrl+F"},
+    {type:"sep"},
+    {label:"Commands...",action:"commands"},
     {type:"sep"},
     {label:"Keyboard Shortcuts...",action:"shortcuts"},
     {label:"Preferences...",action:"prefs"}
@@ -656,6 +663,8 @@ var menus=[
     {label:"Stop",action:"stop"},
     {type:"sep"},
     {label:"Test Movie",action:"test",shortcut:"Ctrl+Enter"},
+    {type:"sep"},
+    {label:"Enable Simple Buttons",action:"simpleButtons",shortcut:"Ctrl+Alt+B"},
     {type:"sep"},
     {label:"Go to First Frame",action:"gotoFirst",shortcut:"Home"},
     {label:"Go to Last Frame",action:"gotoLast",shortcut:"End"},
@@ -4276,7 +4285,13 @@ function paintObjRaw(cx,o,opts){
     if(sym&&depth<SYMBOL_MAX_DEPTH){
       // A Graphic instance tracks the parent playhead; frameObjects() stamps
       // the timing context onto the view object it hands us.
-      var symGroups=symbolFrameGroups(sym,symbolDisplayFrame(o,sym,o._parentFrame||1,o._startFrame||1));
+      /* A live button shows Up, Over or Down depending on the pointer, when
+         Enable Simple Buttons is on. Off, it shows Up -- which is what it
+         always did, and what lets it be selected and dragged. */
+      var symFrame=(chrome&&simpleButtons&&symbolBehaviorOf(o,sym)==="button")
+        ? buttonStateFrame(o)
+        : symbolDisplayFrame(o,sym,o._parentFrame||1,o._startFrame||1);
+      var symGroups=symbolFrameGroups(sym,symFrame);
       var symObjs=[];
       for(var gq=0;gq<symGroups.length;gq++)symObjs=symObjs.concat(symGroups[gq].objects);
       if(symObjs.length){
@@ -4999,9 +5014,16 @@ function initMouse(){
   canvas.addEventListener("pointermove",function(e){
     stageHover=getStagePos(e);
     updateInfoPanel();
+    /* A live button has to know when the pointer arrives and leaves, or it
+       could never show its Over state. */
+    if(simpleButtons&&!dragging){
+      var wasId=buttonHoverId;
+      setButtonHover(buttonAt(stageHover.x,stageHover.y));
+      if(buttonHoverId!==wasId)render();
+    }
     /* The Pen tool marks the segment or anchor under the pointer, so it needs
        the repaint whether or not the rulers are showing. */
-    if((showRulers||curTool==="pen")&&!dragging)render();
+    if((showRulers||curTool==="pen"||simpleButtons)&&!dragging)render();
     // Hovering a ruler is how a guide is discovered, so say so.
     var r=canvas.getBoundingClientRect();
     var ax=rulerHitAxis(e.clientX-r.left,e.clientY-r.top);
@@ -5122,6 +5144,19 @@ function onDblClick(e){
 function onMouseDown(e){
   if(e.button===2)return;
   var p=getStagePos(e);
+  /* A live button takes the press and nothing else does: that is what Enable
+     Simple Buttons means, and it is why Flash made it a toggle rather than
+     the default -- a button that reacts cannot be selected or dragged. */
+  if(simpleButtons){
+    var hitBtn=buttonAt(p.x,p.y);
+    if(hitBtn){
+      setButtonHover(hitBtn);
+      buttonDown=true;
+      dragging=false;
+      render();
+      return;
+    }
+  }
   /* A press that starts on a ruler pulls out a guide, whatever tool is
      selected — the rulers are stage furniture, not a tool mode. */
   var rc=canvas.getBoundingClientRect();
@@ -5390,6 +5425,12 @@ function onMouseMove(e){
   render();
 }
 function onMouseUp(e){
+  // Releasing over a live button returns it to Over, not to Up.
+  if(simpleButtons&&buttonDown){
+    buttonDown=false;
+    render();
+    return;
+  }
   if(guideDrag){
     var gp=getStagePos(e);
     var at=guideDrag.axis==="v"?gp.x:gp.y;
@@ -6247,9 +6288,19 @@ function renderTLFrames(){
   tlCtx.font="9px Tahoma,Arial,sans-serif";
   // Label every 5 frames while there is room, thinning out as you zoom out.
   var every=fw>=12?5:(fw>=6?10:(fw>=3?25:(fw>=1?50:(fw>=0.5?250:500))));
+  /* Inside a button, frames 1-4 are Up, Over, Down and Hit. The runtime has
+     always known that; the authoring side showed four bare numbers, which is
+     the one place a button looks exactly like every other symbol and is not
+     one. Only when the columns are wide enough to read. */
+  var btnStates=editingButton()&&fw>=26;
   for(var f=firstF;f<=lastF;f++){
     var fx=(f-1)*fw;
-    if(f%every===0||f===1)tlCtx.fillText(f,fx+2,sy+11);
+    if(btnStates&&f<=4){
+      tlCtx.fillStyle=f===4?"#9A8A6A":"#AFCCE0";
+      tlCtx.fillText(buttonStateName(f),fx+2,sy+11);
+      tlCtx.fillStyle="#888";
+    }
+    else if(f%every===0||f===1)tlCtx.fillText(f,fx+2,sy+11);
     if(f%every===0){
       tlCtx.strokeStyle="#555";tlCtx.lineWidth=0.5;
       tlCtx.beginPath();tlCtx.moveTo(fx+fw,sy+TL_HDR);tlCtx.lineTo(fx+fw,bottom);tlCtx.stroke();
@@ -8628,6 +8679,14 @@ function initOutputPanel(){
 
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
+  commands:"Commands",
+  findReplace:"Find and Replace",
+  matchStage:"Match Stage Size",
+  newFromTemplate:"New from Template",
+  revert:"Revert",
+  saveCopy:"Save a Copy",
+  shortcuts:"Keyboard Shortcuts",
+  simpleButtons:"Enable Simple Buttons",
   group:"Group",ungroup:"Ungroup",breakApart:"Break Apart",
   bringFront:"Bring to Front",bringForward:"Bring Forward",
   sendBackward:"Send Backward",sendBack:"Send to Back",
@@ -8671,6 +8730,12 @@ var ACTION_LABELS={
 /* What is being done right now, if anything. Set around a doAction() call and
    read by pushUndo(); a tool that commits a drag sets it directly. */
 var currentActionLabel=null;
+/* The action id behind the step being pushed, not just its label. A label is
+   for reading; an id is what Replay and Save as Command re-run. A step with no
+   id -- a slider drag, a stroke, a direct edit -- is a state change with no
+   command behind it and cannot be replayed, which the UI says rather than
+   silently skipping. */
+var currentActionId=null;
 
 /** Name the next undo step. Tools call this before committing. */
 function labelNextUndo(label){currentActionLabel=label;}
@@ -8682,6 +8747,115 @@ function undoLabelFor(){
   var t=TOOLS.filter(function(x){return x.id===curTool;})[0];
   if(t&&curTool!=="select")return t.label.replace(/\s*\(.*$/,"").replace(/\s*—.*$/,"");
   return "Edit";
+}
+
+/* ------------------------------------------------------------------ *
+ * Replay, and Save as Command
+ *
+ * Flash could replay the selected history steps against whatever is selected
+ * now, and save that run as a named command on the Commands menu. The two are
+ * the same machinery: a list of action ids, run in order.
+ *
+ * Which is why each undo step records the action that CAUSED it rather than
+ * only a label. A snapshot is a state, and replaying a state against a
+ * different document means nothing -- replaying the command that produced it
+ * means exactly what the user expects.
+ * ------------------------------------------------------------------ */
+var COMMAND_STORE="flashy_commands";
+
+/** The replayable steps of the history, oldest first. */
+function replayableSteps(){
+  return undoStack.map(function(st,i){
+    return {index:i,label:st.label||"Edit",action:st.actionId||null};
+  });
+}
+
+/** Run a list of action ids in order; returns how many ran. */
+function replayActions(ids){
+  var n=0;
+  (ids||[]).forEach(function(id){
+    if(!id)return;
+    doAction(id);
+    n++;
+  });
+  if(n)fullRefresh();
+  return n;
+}
+
+function savedCommands(){
+  try{
+    var raw=localStorage.getItem(COMMAND_STORE);
+    if(!raw)return {};
+    var o=JSON.parse(raw);
+    if(!o||typeof o!=="object"||Array.isArray(o))return {};
+    var out={};
+    // A stale store must not be able to run something unrecognisable, so only
+    // lists of known action ids survive the read.
+    Object.keys(o).forEach(function(k){
+      if(Array.isArray(o[k])&&o[k].every(function(id){
+        return typeof id==="string"&&ACTION_LABELS[id]!=null;
+      }))out[k]=o[k].slice();
+    });
+    return out;
+  }catch(e){return {};}
+}
+
+function saveCommand(name,ids){
+  name=String(name||"").trim();
+  var real=(ids||[]).filter(Boolean);
+  if(!name)return {ok:false,why:"a command needs a name"};
+  if(!real.length)return {ok:false,why:"none of those steps came from a command"};
+  var all=savedCommands();
+  all[name]=real;
+  try{localStorage.setItem(COMMAND_STORE,JSON.stringify(all));}
+  catch(e){return {ok:false,why:"this browser would not store it"};}
+  return {ok:true,name:name,steps:real.length};
+}
+
+function deleteCommand(name){
+  var all=savedCommands();
+  if(!(name in all))return false;
+  delete all[name];
+  try{localStorage.setItem(COMMAND_STORE,JSON.stringify(all));}catch(e){}
+  return true;
+}
+
+function runCommand(name){
+  var all=savedCommands();
+  if(!all[name])return 0;
+  return replayActions(all[name]);
+}
+
+function showCommandsDialog(){
+  var all=savedCommands();
+  var names=Object.keys(all).sort();
+  if(!names.length){
+    showMessage("Commands",
+      "No saved commands yet.\n\nMake some changes, then use Replay in the "+
+      "History panel to save a run of them under a name.");
+    return;
+  }
+  showDialog({
+    title:"Commands",
+    message:"Run a saved sequence of commands against the document as it is "+
+            "now.",
+    fields:[{name:"which",label:"Command",type:"select",value:names[0],
+             options:names.map(function(n){
+               return [n,n+" ("+all[n].length+" step"+(all[n].length===1?"":"s")+")"];
+             })}],
+    okLabel:"Run",
+    extraButtons:[{label:"Delete",onClick:function(v,close){
+      deleteCommand(v.which);
+      close();
+      showMessage("Commands","Deleted \u201c"+v.which+"\u201d.");
+    }}],
+    onOk:function(v){
+      var n=runCommand(v.which);
+      showMessage("Commands",n
+        ? "Ran "+n+" step"+(n===1?"":"s")+"."
+        : "Nothing ran.");
+    }
+  });
 }
 
 function updateHistoryPanel(){
@@ -8756,6 +8930,60 @@ function updateHistoryPanel(){
     b.addEventListener("click",function(){doAction(p[1]);updateHistoryPanel();});
     acts.appendChild(b);
   });
+
+  /* Replay runs the commands behind the recent steps AGAIN, against whatever
+     is selected now -- which is what makes it useful: apply the same three
+     commands to the next shape. Steps with no command behind them (a stroke,
+     a slider drag) are a state change rather than an instruction and are
+     counted out rather than silently dropped. */
+  var steps=replayableSteps();
+  var withAction=steps.filter(function(st){return st.action;});
+  var replayBtn=document.createElement("button");
+  replayBtn.className="props-btn-action";
+  replayBtn.textContent="Replay\u2026";
+  replayBtn.disabled=!withAction.length;
+  replayBtn.title=withAction.length
+    ? "Run the commands behind recent steps again"
+    : "None of these steps came from a command, so there is nothing to replay";
+  replayBtn.addEventListener("click",function(){
+    var recent=withAction.slice(-10);
+    showDialog({
+      title:"Replay Steps",
+      message:"Runs these commands again, against the document as it is now. "+
+              steps.length+" step"+(steps.length===1?"":"s")+" in the history, "+
+              withAction.length+" of them from a command.",
+      fields:[
+        {name:"count",label:"How many",type:"number",
+         value:Math.min(3,recent.length),min:1,max:recent.length},
+        {name:"name",label:"Save as",value:"",
+         placeholder:"blank = just run it once",
+         hint:recent.map(function(st){return st.label;}).join(" \u2192 ")}
+      ],
+      okLabel:"Replay",
+      onOk:function(v){
+        var n=Math.max(1,Math.min(recent.length,parseInt(v.count,10)||1));
+        var ids=recent.slice(-n).map(function(st){return st.action;});
+        if(String(v.name||"").trim()){
+          var r=saveCommand(v.name,ids);
+          if(!r.ok){showMessage("Commands","Not saved: "+r.why+".");return;}
+        }
+        var ran=replayActions(ids);
+        updateHistoryPanel();
+        showMessage("Replay Steps",ran
+          ? "Ran "+ran+" step"+(ran===1?"":"s")+" again."
+          : "Nothing ran.");
+      }
+    });
+  });
+  acts.appendChild(replayBtn);
+
+  var cmdBtn=document.createElement("button");
+  cmdBtn.className="props-btn-action";
+  cmdBtn.textContent="Commands\u2026";
+  cmdBtn.title="Run a command you saved earlier";
+  cmdBtn.addEventListener("click",showCommandsDialog);
+  acts.appendChild(cmdBtn);
+
   host.appendChild(acts);
   note(undoStack.length+" of 50 steps kept. Older changes are dropped, which "+
        "is why the list has a ceiling rather than growing without limit.");
@@ -9880,8 +10108,85 @@ var COMPONENTS=[
              "  };\n"+
              "}";
     }
+  },
+  {
+    id:"combo",label:"Combo Box",
+    width:160,height:22,
+    describe:"A closed box on frame 1 and the open list on frame 2, with the "+
+             "items as named rows.",
+    /* The dropdown is the reason this was the last component left: a list that
+       appears over everything else needs somewhere to BE. A second frame is
+       that somewhere, and it is how Flash's own components did it -- the
+       closed state and the open state are two frames of one movie clip, and
+       the clip simply goes to the other one. */
+    build:function(w,h,opts){
+      var items=comboItems(opts.items);
+      var rowH=Math.max(14,h-4);
+      var face=function(text,arrow){
+        return [
+          compShape("rect",0,0,w,h,"#FFFFFF","#777777",1),
+          compText(4,Math.round(h/2-7),w-22,14,text,{size:11,align:"left"}),
+          compShape("rect",w-16,Math.round(h/2-2),8,5,arrow,null,0)
+        ];
+      };
+      var openFrame=face(items[0]||"",["#333333"][0]);
+      items.forEach(function(it,i){
+        openFrame.push(compShape("rect",0,h+i*rowH,w,rowH,
+          i%2?"#F4F4F4":"#FFFFFF","#AAAAAA",1));
+        var t=compText(4,h+i*rowH+Math.round(rowH/2-7),w-8,14,it,
+                       {size:11,align:"left"});
+        // Named, so a handler can read which row was picked back out.
+        t.instanceName="item"+i;
+        openFrame.push(t);
+      });
+      return {
+        behavior:"movieclip",
+        frames:[face(items[0]||"","#333333"),openFrame]
+      };
+    },
+    script:function(opts){
+      var items=comboItems(opts.items);
+      var list=items.map(function(i){
+        return '"'+behaviorEscape(i)+'"';
+      }).join(", ");
+      return "onClipEvent (load) {\n"+
+             "  items = ["+list+"];\n"+
+             "  selectedIndex = 0;\n"+
+             "  open = false;\n"+
+             "  stop();\n"+
+             "  // Frame 1 is the closed box, frame 2 the open list.\n"+
+             "  toggle = function () {\n"+
+             "    open = !open;\n"+
+             "    gotoAndStop(open ? 2 : 1);\n"+
+             "  };\n"+
+             "  select = function (i) {\n"+
+             "    if (i < 0 || i >= items.length) return;\n"+
+             "    selectedIndex = i;\n"+
+             "    open = false;\n"+
+             "    gotoAndStop(1);\n"+
+             "    trace(\"selected \" + items[i]);\n"+
+             "  };\n"+
+             "}\n"+
+             "on (release) {\n"+
+             "  toggle();\n"+
+             "}";
+    }
   }
 ];
+
+/**
+ * A combo box's items, from whatever the dialog was given.
+ *
+ * Comma-separated, because that is what someone types into a one-line field,
+ * and an empty list still produces one row -- a combo box with no rows would
+ * be an empty frame 2 and would look broken rather than empty.
+ */
+function comboItems(src){
+  var parts=String(src==null?"":src).split(",")
+    .map(function(s){return s.trim();})
+    .filter(function(s){return s.length;});
+  return parts.length?parts.slice(0,12):["Item 1","Item 2","Item 3"];
+}
 
 /**
  * Put a component on the stage.
@@ -9954,7 +10259,9 @@ function showComponentsDialog(){
       {name:"height",label:"Height",type:"number",value:COMPONENTS[0].height,min:8,max:2000},
       {name:"gotoFrame",label:"Button goes to frame",value:"",
        placeholder:"blank = trace instead"},
-      {name:"group",label:"Radio group",value:"group1"}
+      {name:"group",label:"Radio group",value:"group1"},
+      {name:"items",label:"Combo box items",value:"",
+       placeholder:"One, Two, Three"}
     ],
     footnote:COMPONENTS.map(function(c){return c.label+" — "+c.describe;}).join("\n"),
     onOk:function(v){
@@ -9964,7 +10271,8 @@ function showComponentsDialog(){
         width:parseInt(v.width,10)||0,
         height:parseInt(v.height,10)||0,
         gotoFrame:v.gotoFrame,
-        group:v.group
+        group:v.group,
+        items:v.items
       });
       if(r.ok){
         fullRefresh();
@@ -11205,11 +11513,14 @@ function doAction(a){
      afterwards rather than cleared, because a command can call another and the
      inner one must not leave the outer one anonymous. */
   var prevActionLabel=currentActionLabel;
+  var prevActionId=currentActionId;
   currentActionLabel=ACTION_LABELS[a]||null;
+  currentActionId=a;
   try{
     return doActionInner(a);
   }finally{
     currentActionLabel=prevActionLabel;
+    currentActionId=prevActionId;
     updateHistoryPanel();
   }
 }
@@ -11258,6 +11569,27 @@ function doActionInner(a){
     if(desktopHost){desktopHost.saveDocAs();break;}
     dlFile(JSON.stringify(serializeDoc(),null,2),"animation.flashy","application/json");
     markSaved();
+    rememberSavedDoc();
+    break;
+  case "saveCopy":
+    /* Save a Copy writes a file and deliberately does NOT mark the document
+       saved or change what Revert goes back to: the point is to put a copy
+       aside while carrying on in the original. */
+    dlFile(JSON.stringify(serializeDoc(),null,2),"animation-copy.flashy",
+           "application/json");
+    break;
+  case "newFromTemplate":
+    showTemplateDialog();
+    break;
+  case "simpleButtons":
+    simpleButtons=!simpleButtons;
+    if(!simpleButtons)setButtonHover(null);
+    render();
+    showMessage("Enable Simple Buttons",simpleButtons
+      ? "Buttons on the stage now respond to the pointer. They cannot be "+
+        "selected or dragged while this is on \u2014 turn it off to go back to "+
+        "editing them."
+      : "Buttons are inert again, and can be selected and dragged.");
     break;
   case "newWindow":
     if(desktopHost)desktopHost.newWindow();
@@ -11323,6 +11655,9 @@ function doActionInner(a){
     break;
   case "findReplace":
     showFindReplaceDialog();
+    break;
+  case "commands":
+    showCommandsDialog();
     break;
   case "revert":
     revertDocument();
@@ -15933,6 +16268,209 @@ function bucketFillAt(x, y) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Button authoring
+ *
+ * A Button symbol's frames 1-4 are Up, Over, Down and Hit, and the runtime has
+ * always known that. The AUTHORING side did not: inside a button you saw
+ * frames numbered 1, 2, 3, 4 like any other symbol, with nothing to say which
+ * was which, and on the stage a button sat inert showing its Up frame.
+ *
+ * Two things fix that, and they are the two Flash had: name the frames while
+ * you are inside a button, and let buttons respond on the stage when you ask
+ * them to.
+ * ------------------------------------------------------------------ */
+
+var BUTTON_STATES = ["Up", "Over", "Down", "Hit"];
+
+/** The symbol currently open for editing, or null on the main timeline. */
+function editingSymbol() {
+  if (!editStack.length) return null;
+  return doc.library[editStack[editStack.length - 1].name] || null;
+}
+
+/** True while a Button symbol is open for editing. */
+function editingButton() {
+  var sym = editingSymbol();
+  return !!sym && symbolBehaviorOf({}, sym) === "button";
+}
+
+/** The state a frame is, inside a button; "" for frames past the fourth. */
+function buttonStateName(frame) {
+  return BUTTON_STATES[frame - 1] || "";
+}
+
+/* Flash's Control ▸ Enable Simple Buttons. Off by default, because a button
+   that reacts to the pointer cannot be selected or dragged -- which is why
+   Flash made it a toggle rather than the default. */
+var simpleButtons = false;
+
+/* Which button instance the pointer is over and whether it is held, so the
+   stage can show Over and Down.
+   
+   Held by the object's `id`, not by the object: frameObjects hands out a fresh
+   Object.create view per call, so the thing buttonAt() found is never the same
+   reference the next render inspects. An id is per-INSTANCE, which is what is
+   wanted -- two instances of the same symbol are two buttons. */
+var buttonHover = null;
+var buttonHoverId = null;
+var buttonDown = false;
+
+function setButtonHover(o) {
+  buttonHover = o || null;
+  buttonHoverId = o ? (o.id || null) : null;
+  if (!buttonHover) buttonDown = false;
+}
+
+/**
+ * The frame a button instance should show on the authoring stage.
+ *
+ * 1 Up, 2 Over, 3 Down. Frame 4 is the Hit area and is never drawn -- it
+ * exists to say where the button can be clicked, which is exactly why drawing
+ * it would be wrong.
+ */
+function buttonStateFrame(o) {
+  if (!simpleButtons || !o) return 1;
+  if (buttonHoverId == null || o.id !== buttonHoverId) return 1;
+  return buttonDown ? 3 : 2;
+}
+
+/**
+ * The object under the pointer that is a live button, or null.
+ *
+ * Uses the Hit frame's artwork when the symbol has one, which is the whole
+ * point of a Hit frame: a text-only button needs a clickable area bigger than
+ * its glyphs.
+ */
+function buttonAt(x, y) {
+  if (!simpleButtons) return null;
+  var kf = CKF();
+  if (!kf) return null;
+  var objs = frameObjects(currentLayers(), curFrame);
+  for (var i = objs.length - 1; i >= 0; i--) {
+    var o = objs[i];
+    if (o.type !== "symbol") continue;
+    var sym = doc.library[o.symbolName];
+    if (!sym || symbolBehaviorOf(o, sym) !== "button") continue;
+    if (x >= o.x && x <= o.x + o.width && y >= o.y && y <= o.y + o.height) return o;
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Templates
+ *
+ * Flash's New from Template: a starting document rather than an empty one.
+ * The built-in set is deliberately small and each one is a real document,
+ * because a template that is a list of settings teaches nothing -- the point
+ * is to open something that already works and take it apart.
+ * ------------------------------------------------------------------ */
+
+function docTemplates() {
+  var blankLayer = function (name, objects) {
+    return {
+      name: name, visible: true, locked: false,
+      keyframes: [{ index: 1, duration: 1, tweenType: "none", easing: "linear",
+                    script: "", objects: objects || [] }]
+    };
+  };
+  var box = function (x, y, w, h, color) {
+    return {
+      type: "rect", x: x, y: y, width: w, height: h,
+      rotation: 0, scaleX: 1, scaleY: 1, alpha: 1,
+      fillColor: color, fillAlpha: 1, fillType: "solid",
+      strokeColor: "#000000", strokeAlpha: 1, strokeWidth: 0, strokeStyle: "none"
+    };
+  };
+  var caption = function (x, y, w, t, size) {
+    return {
+      type: "text", x: x, y: y, width: w, height: (size || 24) * 1.6,
+      rotation: 0, scaleX: 1, scaleY: 1, alpha: 1,
+      text: t, font: "Arial", fontSize: size || 24, textAlign: "center",
+      lineHeight: 1.2, textType: "static",
+      fillColor: "#FFFFFF", fillAlpha: 1, fillType: "solid",
+      strokeColor: "#000000", strokeAlpha: 1, strokeWidth: 0, strokeStyle: "none"
+    };
+  };
+
+  return {
+    "Banner 468x60": {
+      hint: "The old standard banner, with a stop() so it holds on the last frame.",
+      doc: {
+        width: 468, height: 60, fps: 24, backgroundColor: "#1B1B2E", totalFrames: 24,
+        library: {},
+        layers: [
+          Object.assign(blankLayer("Background", [box(0, 0, 468, 60, "#1B1B2E")]),
+            { keyframes: [{ index: 1, duration: 24, tweenType: "none",
+                            easing: "linear", script: "", objects: [box(0, 0, 468, 60, "#1B1B2E")] }] }),
+          { name: "Headline", visible: true, locked: false, keyframes: [
+            { index: 1, duration: 23, tweenType: "motion", easing: "easeOut",
+              script: "", objects: [caption(-460, 18, 460, "Your message here", 28)] },
+            { index: 24, duration: 1, tweenType: "none", easing: "linear",
+              script: "stop();", objects: [caption(4, 18, 460, "Your message here", 28)] }
+          ] }
+        ]
+      }
+    },
+    "Slideshow 800x600": {
+      hint: "Three held frames and a stop(), ready for Insert ▸ Keyframe per slide.",
+      doc: {
+        width: 800, height: 600, fps: 12, backgroundColor: "#101014", totalFrames: 36,
+        library: {},
+        layers: [
+          { name: "Slides", visible: true, locked: false, keyframes: [
+            { index: 1, duration: 12, tweenType: "none", easing: "linear", script: "",
+              objects: [box(60, 60, 680, 420, "#2E4A6B"), caption(60, 500, 680, "Slide one", 32)] },
+            { index: 13, duration: 12, tweenType: "none", easing: "linear", script: "",
+              objects: [box(60, 60, 680, 420, "#6B2E4A"), caption(60, 500, 680, "Slide two", 32)] },
+            { index: 25, duration: 12, tweenType: "none", easing: "linear",
+              script: "stop();",
+              objects: [box(60, 60, 680, 420, "#4A6B2E"), caption(60, 500, 680, "Slide three", 32)] }
+          ] }
+        ]
+      }
+    },
+    "Looping sprite 64x64": {
+      hint: "A four-frame cycle at 12fps, the shape a game sprite usually wants.",
+      doc: {
+        width: 64, height: 64, fps: 12, backgroundColor: "#00000000", totalFrames: 4,
+        library: {},
+        layers: [
+          { name: "Cycle", visible: true, locked: false, keyframes: [1, 2, 3, 4].map(function (i) {
+            return { index: i, duration: 1, tweenType: "none", easing: "linear", script: "",
+                     objects: [box(8 + (i - 1) * 4, 16, 32, 32, "#CC3344")] };
+          }) }
+        ]
+      }
+    }
+  };
+}
+
+function showTemplateDialog() {
+  var all = docTemplates();
+  var names = Object.keys(all);
+  showDialog({
+    title: "New from Template",
+    message: "Each template is a real document, not a list of settings: open " +
+             "one and take it apart.",
+    fields: [{
+      name: "which", label: "Template", type: "select", value: names[0],
+      options: names.map(function (n) { return [n, n]; }),
+      hint: all[names[0]].hint
+    }],
+    okLabel: "Create",
+    onOk: function (v) {
+      var t = all[v.which];
+      if (!t) return;
+      if (isDirty() && !confirm("Start a new document? Unsaved changes will be lost.")) return;
+      // Through the normal load path, so a template is exactly a document --
+      // there is no second way for one to get onto the stage.
+      loadDocFromObject(JSON.parse(JSON.stringify(t.doc)));
+      showMessage("New from Template", v.which + ". " + t.hint);
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -17310,6 +17848,53 @@ function serializeDoc(){
  * is one timeline. Keeping these apart is what stops a save from flattening
  * the document and a publish from showing only the first scene.
  */
+/**
+ * Strip trace() calls out of one script.
+ *
+ * Deliberately conservative: only a trace( ... ) that is a STATEMENT on its own
+ * goes, and only when its parentheses balance on the same line. A regex loose
+ * enough to catch every shape of trace is also loose enough to cut a line in
+ * half, and a released movie with broken scripts is far worse than one that
+ * logs.
+ */
+function stripTraceCalls(src){
+  if(!src)return src;
+  return String(src).split("\n").map(function(line){
+    var m=/^(\s*)trace\s*\((.*)\)\s*;?\s*$/.exec(line);
+    if(!m)return line;
+    // Balanced on this line, and no stray quote left open.
+    var depth=0,inStr=null;
+    for(var i=0;i<m[2].length;i++){
+      var c=m[2][i];
+      if(inStr){ if(c===inStr&&m[2][i-1]!=="\\")inStr=null; continue; }
+      if(c==='"'||c==="'")inStr=c;
+      else if(c==="(")depth++;
+      else if(c===")")depth--;
+      if(depth<0)return line;
+    }
+    if(depth!==0||inStr)return line;
+    return m[1]+"/* trace omitted */";
+  }).join("\n");
+}
+
+/** Every script in an exported document, through one transform. */
+function mapExportScripts(d,fn){
+  var doLayers=function(layers){
+    (layers||[]).forEach(function(l){
+      (l.keyframes||[]).forEach(function(k){
+        if(k.script)k.script=fn(k.script);
+        (k.objects||[]).forEach(function walkObj(o){
+          if(o.clipScript)o.clipScript=fn(o.clipScript);
+          (o.children||[]).forEach(walkObj);
+        });
+      });
+    });
+  };
+  doLayers(d.layers);
+  Object.keys(d.library||{}).forEach(function(n){ doLayers(d.library[n].layers); });
+  return d;
+}
+
 function exportDocData(){
   var d=serializeDoc();
   var scenes=docScenes();
@@ -17327,6 +17912,14 @@ function exportDocData(){
   // player build every scene twice.
   delete d.scenes;
   delete d.sceneIndex;
+  var pub=docPublish();
+  /* Omit Trace Actions: the debugging chatter comes out of the released
+     movie. Done on the exported COPY, so the document keeps its traces. */
+  if(pub.omitTrace)mapExportScripts(d,stripTraceCalls);
+  /* Protect from Import: a marker, which is all it ever was. Flash's own was
+     a bit in the header that cooperating tools honoured and decompilers
+     ignored, so claiming more than this would be a lie. */
+  if(pub.protect)d.protect=true;
   return d;
 }
 function serializeCharacters(cs){
@@ -18884,6 +19477,12 @@ function docPublish(){
   if(p.background==null)p.background="";    // "" = the document's own colour
   if(p.spriteColumns==null)p.spriteColumns=8;
   if(p.videoFps==null)p.videoFps=doc.fps||24;
+  /* Flash's two publish switches that change the OUTPUT rather than the
+     format. Omit Trace Actions strips the debugging chatter from a released
+     movie; Protect from Import was Flash's (easily defeated) marker asking
+     other tools not to decompile it. */
+  if(p.omitTrace==null)p.omitTrace=false;
+  if(p.protect==null)p.protect=false;
   return p;
 }
 
@@ -18911,6 +19510,15 @@ function showPublishSettingsDialog(){
       {name:"swf",label:"SWF (Flash movie)",type:"checkbox",value:!!p.targets.swf},
       {name:"title",label:"Page title",value:p.title},
       {name:"loop",label:"Loop playback",type:"checkbox",value:!!p.loop},
+      {name:"omitTrace",label:"Omit trace actions",type:"checkbox",
+       value:!!p.omitTrace,
+       hint:"Strips trace() calls out of the exported scripts. A released "+
+            "movie logging to the console is noise at best."},
+      {name:"protect",label:"Protect from import",type:"checkbox",
+       value:!!p.protect,
+       hint:"Marks the output as not-for-import. It was always a request "+
+            "rather than a lock, in Flash too \u2014 the artwork is still in "+
+            "the file."},
       {name:"scaleMode",label:"Scale",type:"select",value:p.scaleMode,
        options:[["movie","Match movie size"],["fit","Fit in window"],
                 ["fill","Fill window"],["percent","Percent"]]},
@@ -18939,6 +19547,8 @@ function showPublishSettingsDialog(){
       p.background=String(v.background||"").trim();
       p.spriteColumns=Math.max(1,Math.min(32,parseInt(v.spriteColumns,10)||8));
       p.videoFps=Math.max(1,Math.min(60,parseInt(v.videoFps,10)||24));
+      p.omitTrace=!!v.omitTrace;
+      p.protect=!!v.protect;
       touchDoc();
       outputLog("Publish settings saved.");
     }
@@ -21354,6 +21964,42 @@ function init(){
     /* Anchor editing: the Pen's other three jobs, and the stream surgery they
        perform. Exposed because a spec can aim at them far more precisely than
        it can point at a quadratic. */
+    /* Button authoring: which state a frame is, and which one an instance
+       shows while Enable Simple Buttons is on. */
+    /* History replay and saved commands, and the two publish switches that
+       change the output rather than the format. */
+    replayableSteps: replayableSteps,
+    replayActions: replayActions,
+    savedCommands: savedCommands,
+    saveCommand: saveCommand,
+    deleteCommand: deleteCommand,
+    runCommand: runCommand,
+    stripTraceCalls: stripTraceCalls,
+    exportDocData: exportDocData,
+    docPublish: docPublish,
+    comboItems: comboItems,
+    addComponent: addComponent,
+    BUTTON_STATES: BUTTON_STATES,
+    /* Opening a symbol for editing, which is what a double-click does. There
+       was no way to reach it except through the stage. */
+    enterSymbol: enterSymbol,
+    exitSymbol: exitSymbol,
+    buttonStateName: buttonStateName,
+    editingButton: editingButton,
+    buttonStateFrame: buttonStateFrame,
+    buttonAt: buttonAt,
+    simpleButtons: function(){ return simpleButtons; },
+    setSimpleButtons: function(on){
+      simpleButtons=!!on;
+      if(!simpleButtons)setButtonHover(null);
+      render();
+    },
+    setButtonPointer: function(o,down){
+      setButtonHover(o);
+      buttonDown=!!down&&!!o;
+      render();
+    },
+    docTemplates: docTemplates,
     regPoint: regPoint,
     symbolDisplayFrame: symbolDisplayFrame,
     pathSegments: pathSegments,
