@@ -154,7 +154,7 @@ name — an entire class of Flash content is unreachable.
 | Movie Explorer | ✅ | Every scene, layer, frame, object and library item, with Flash's five filters and a search. Click a row to go to it. Reaches parked scenes, not just the open one. |
 | Debugger (breakpoints, watch, variable inspector) | ⬜ | Missing. |
 | Behaviors panel (scriptless interactivity) | ✅ | Eleven behaviours across six events, written as Flash's own `on(release) { … }` handlers — which flashy-as2.js already runs. They stack rather than replacing each other, and stay editable as code in the Actions panel. |
-| Components (Button, CheckBox, ComboBox, …) | ⬜ | Missing. |
+| Components (Button, CheckBox, RadioButton, TextInput, Slider, ProgressBar) | ◐ | Built as ordinary library symbols with handlers, the way Flash's own were — so a component is editable, exports through the existing paths and needs no new runtime. ComboBox and a dropdown list remain. |
 | Code snippets library | ◐ | The API chips insert working calls at the caret. A saved, user-editable snippet library is still missing. |
 | Button event wiring without code | ✅ | The Behaviors panel. |
 
@@ -172,7 +172,7 @@ name — an entire class of Flash content is unreachable.
 | **History** (+ replay steps, save as command) | ◐ | The stack is listed, named after the command that made each step, and clicking one steps back to it. Replay and save-as-command are still missing. |
 | **Output** | ✅ | §7. |
 | **Scene** | ✅ | §3. |
-| Color Swatches (+ load/save palettes, web-safe) | ⬜ | Missing. |
+| Color Swatches (+ load/save palettes, web-safe) | ✅ | Three palettes: the colours this document already uses (most-used first, gathered from fills, strokes, gradient stops, filters and every symbol), the web-safe 216, and your own. Click for fill, Shift-click for stroke — and a selected object is recoloured too. |
 | Movie Explorer | ✅ | §7. |
 | Accessibility | ⬜ | Missing (low value). |
 | Strings / localisation | ⬜ | Missing (low value). |
@@ -297,16 +297,23 @@ shape tween, did something — just not the thing it is named after.
 Covered by `tests/layers-scenes.spec.js` (16), `tests/tween-frames.spec.js`
 (15) and `tests/morph-guide.spec.js` (13).
 
-### Wave 5 — text and interactivity
-23. **Dynamic and input text**, instance/variable names, selectable, HTML, border, line type, letter spacing, anti-alias mode, break apart text.
-24. **Output panel** and a `trace()` that reaches it.
-25. **Actions panel upgrade** — line numbers, syntax highlighting, error marking, code hints.
-26. **Behaviors panel** and a **component set**.
+### ✅ Wave 5 — text and interactivity (shipped)
+23. ✅ **Dynamic and input text**, instance/variable names, selectable, border,
+    line type, letter spacing, anti-alias mode, break apart text. (Render as
+    HTML remains.)
+24. ✅ **Output panel** and a `trace()` that reaches it.
+25. ✅ **Actions panel upgrade** — line numbers, syntax highlighting, error marking, code hints.
+26. ✅ **Behaviors panel** and a **component set**.
+
+Also in this wave: the **Movie Explorer**, the **History panel** and **Color
+Swatches**.
 
 ### Wave 6 — library, sound, publishing
-27. **Library folders**, search, duplicate symbol, swap symbol, unused items, linkage names.
-28. **Sound Edit Envelope** + effect presets, sync Stop, repeat count.
-29. **Publish Settings** — one dialog, persisted per document.
-30. **Bandwidth Profiler / Size Report**.
-31. **Movie Explorer**, **History panel**, **Color Swatches**.
-32. **SWF export** — close the loop on the importer.
+27. ✅ **Library folders**, search, duplicate symbol, swap symbol, unused items,
+    linkage names — and `attachMovie`, which was a stub.
+28. ✅ **Sound Edit Envelope** + effect presets, sync Stop, repeat count.
+29. ✅ **Publish Settings** — one dialog, persisted per document.
+30. ✅ **Bandwidth Profiler / Size Report**.
+31. ✅ **Movie Explorer**, **History panel**, **Color Swatches**.
+32. ⬜ **SWF export** — close the loop on the importer. The one headline item
+    still outstanding.

@@ -70,7 +70,10 @@
     /* The Movie Explorer is a list you browse, so it joins the Library's
        group; Behaviors edits one object, so it joins Properties'. */
     { id: "explorer", title: "Movie Explorer", home: "right", with: "library", closed: true },
-    { id: "behaviors", title: "Behaviors", home: "right", with: "props", closed: true }
+    { id: "behaviors", title: "Behaviors", home: "right", with: "props", closed: true },
+    /* Swatches join the Color Mixer's group: they are two answers to the same
+       question, and you want one or the other rather than both. */
+    { id: "swatches", title: "Color Swatches", home: "right", with: "color", closed: true }
   ];
 
   var ZONES = ["right", "bottom"];

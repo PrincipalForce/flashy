@@ -668,6 +668,8 @@ var menus=[
     {label:"History",action:"winHistory",shortcut:"Ctrl+F10"},
     {label:"Movie Explorer",action:"winExplorer",shortcut:"Alt+F3"},
     {label:"Behaviors",action:"winBehaviors",shortcut:"Shift+F3"},
+    {label:"Color Swatches",action:"winSwatches",shortcut:"Ctrl+F9"},
+    {label:"Components...",action:"components",shortcut:"Ctrl+F7"},
     {label:"AI Assistant",action:"winAI"},
     {type:"sep"},
     {label:"Workspace: Animation",action:"wsAnimation"},
@@ -8703,6 +8705,591 @@ function updateScenePanel(){
   host.appendChild(n);
 }
 
+/* ------------------------------------------------------------------ *
+ * Color Swatches
+ *
+ * A palette you click rather than a picker you open. Picking a colour was
+ * always three actions — open the picker, find the colour, confirm — and for
+ * the twenty colours a drawing actually uses that is twenty times too many.
+ *
+ * Two palettes: the web-safe 216, which is what Flash shipped, and the colours
+ * THIS document already uses, gathered from the artwork. The second is the one
+ * people want: a cartoon is drawn from its own palette, and finding a colour
+ * you already used by eye is how it stays consistent.
+ * ------------------------------------------------------------------ */
+
+var swatchMode="document";        // document | websafe | custom
+var customSwatches=null;          // user palette, or null until one is made
+
+/** The web-safe 216, in Flash's own row order. */
+function webSafePalette(){
+  var steps=["00","33","66","99","CC","FF"];
+  var out=[];
+  for(var r=0;r<6;r++){
+    for(var g=0;g<6;g++){
+      for(var b=0;b<6;b++){
+        out.push("#"+steps[r]+steps[g]+steps[b]);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Every colour this document actually uses, most-used first.
+ *
+ * Gathered from fills, strokes, gradient stops, text and filter colours across
+ * every scene and every symbol — a colour used only inside a symbol is still
+ * one of the document's colours.
+ */
+function documentPalette(){
+  var counts={};
+  var add=function(c){
+    if(c==null)return;
+    var hex=typeof c==="string"
+      ? c : ("#"+("000000"+((c|0)&0xffffff).toString(16)).slice(-6));
+    if(!/^#[0-9a-fA-F]{6}$/.test(hex))return;
+    hex=hex.toUpperCase();
+    counts[hex]=(counts[hex]||0)+1;
+  };
+  var visit=function(objs){
+    (objs||[]).forEach(function(o){
+      add(o.fillColor);
+      add(o.strokeColor);
+      if(Array.isArray(o.fillStops)){
+        for(var i=1;i<o.fillStops.length;i+=3)add(o.fillStops[i]);
+      }
+      if(o.textBorder)add(o.textBorderColor);
+      if(o.textBackground)add(o.textBackgroundColor);
+      (o.filters||[]).forEach(function(f){
+        if(!f)return;
+        add(f.color);add(f.highlightColor);add(f.shadowColor);
+      });
+      if(o.colorEffect&&o.colorEffect.mode==="tint")add(o.colorEffect.color);
+      if(o.children)visit(o.children);
+    });
+  };
+  docScenes().forEach(function(scene,si){
+    var layers=(si===doc.sceneIndex)?doc.layers:scene.layers;
+    (layers||[]).forEach(function(l){
+      add(l.outlineColor);
+      (l.keyframes||[]).forEach(function(kf){visit(kf.objects);});
+    });
+  });
+  Object.keys(doc.library||{}).forEach(function(n){
+    var sym=doc.library[n];
+    if(!sym)return;
+    visit(sym.objects);
+    (sym.layers||[]).forEach(function(l){
+      (l.keyframes||[]).forEach(function(kf){visit(kf.objects);});
+    });
+  });
+  add(doc.backgroundColor);
+  return Object.keys(counts).sort(function(a,b){
+    return counts[b]-counts[a]||(a<b?-1:1);
+  });
+}
+
+function currentSwatches(){
+  if(swatchMode==="websafe")return webSafePalette();
+  if(swatchMode==="custom")return (customSwatches||[]).slice();
+  return documentPalette();
+}
+
+/** Add the current fill colour to the custom palette. */
+function addCustomSwatch(hex){
+  if(!customSwatches)customSwatches=[];
+  var up=String(hex||fillColor).toUpperCase();
+  // No duplicates: a palette with the same colour three times is a palette
+  // three colours smaller than it looks.
+  if(customSwatches.indexOf(up)<0)customSwatches.push(up);
+  swatchMode="custom";
+  return customSwatches.length;
+}
+
+function updateSwatchesPanel(){
+  var host=document.getElementById("swatchesPanel");
+  if(!host)return;
+  host.textContent="";
+
+  var bar=document.createElement("div");
+  bar.className="swatch-bar";
+  [["document","Document"],["websafe","Web safe"],["custom","Custom"]]
+    .forEach(function(m){
+      var b=document.createElement("button");
+      b.type="button";
+      b.className="swatch-tab"+(swatchMode===m[0]?" active":"");
+      b.textContent=m[1];
+      b.title=m[0]==="document"
+        ? "The colours this document already uses, most-used first"
+        : (m[0]==="websafe"?"The web-safe 216, as Flash shipped":"Your own palette");
+      b.addEventListener("click",function(){
+        swatchMode=m[0];
+        updateSwatchesPanel();
+      });
+      bar.appendChild(b);
+    });
+  host.appendChild(bar);
+
+  var list=currentSwatches();
+  if(!list.length){
+    var n=document.createElement("div");
+    n.className="props-note";
+    n.textContent=swatchMode==="custom"
+      ? "No custom colours yet. Press “Add current” to start a palette."
+      : "Nothing has been drawn yet, so the document has no colours of its own.";
+    host.appendChild(n);
+  }else{
+    var grid=document.createElement("div");
+    grid.className="swatch-grid";
+    list.forEach(function(hex){
+      var cell=document.createElement("button");
+      cell.type="button";
+      cell.className="swatch"+(String(fillColor).toUpperCase()===hex?" sel":"");
+      cell.style.backgroundColor=hex;
+      cell.dataset.color=hex;
+      cell.title=hex+"  —  click for fill, Shift-click for stroke";
+      cell.addEventListener("click",function(e){
+        /* Click sets the fill, Shift-click the stroke. Two gestures rather
+           than two palettes, because the colour you want is the same one
+           either way and a second grid would double the panel. */
+        if(e.shiftKey)strokeColor=hex; else fillColor=hex;
+        updateColorUI();
+        // A selected object takes the colour too: picking a swatch with
+        // something selected and having nothing happen is the commonest
+        // confusion with a palette.
+        if(selection.length){
+          pushUndo();
+          selection.forEach(function(o){
+            if(e.shiftKey)o.strokeColor=hex;
+            else{o.fillColor=hex;if((o.fillType||"solid")==="none")o.fillType="solid";}
+          });
+          fullRefresh();
+        }else{
+          updateSwatchesPanel();
+        }
+      });
+      grid.appendChild(cell);
+    });
+    host.appendChild(grid);
+  }
+
+  var acts=document.createElement("div");
+  acts.className="props-row";
+  acts.style.cssText="gap:2px;flex-wrap:wrap";
+  var mk=function(label,fn,title){
+    var b=document.createElement("button");
+    b.className="props-btn-action";
+    b.textContent=label;
+    if(title)b.title=title;
+    b.addEventListener("click",fn);
+    acts.appendChild(b);
+  };
+  mk("Add current",function(){
+    addCustomSwatch(fillColor);
+    updateSwatchesPanel();
+  },"Add the current fill colour to your own palette");
+  mk("Save…",function(){
+    /* A plain JSON list, not Flash's .act: an .act is 768 raw bytes with no
+       room for a name or a comment, and nothing else can read one. */
+    var pal=currentSwatches();
+    dlFile(JSON.stringify({name:"Flashy palette",colors:pal},null,2),
+           "palette.json","application/json");
+    outputLog("Saved a palette of "+pal.length+" colours.");
+  },"Save this palette as a file");
+  mk("Load…",function(){
+    var inp=document.createElement("input");
+    inp.type="file";
+    inp.accept=".json,application/json";
+    inp.addEventListener("change",function(){
+      if(!inp.files[0])return;
+      var r=new FileReader();
+      r.onload=function(){
+        try{
+          var parsed=JSON.parse(r.result);
+          var cols=Array.isArray(parsed)?parsed:(parsed&&parsed.colors);
+          if(!Array.isArray(cols))throw new Error("no colours in that file");
+          customSwatches=cols.map(function(c){return String(c).toUpperCase();})
+            .filter(function(c){return /^#[0-9A-F]{6}$/.test(c);});
+          if(!customSwatches.length)throw new Error("no usable colours in that file");
+          swatchMode="custom";
+          updateSwatchesPanel();
+          outputLog("Loaded a palette of "+customSwatches.length+" colours.");
+        }catch(err){
+          showMessage("Load Palette",
+            "That file could not be read as a palette.\n\n"+
+            ((err&&err.message)||err)+
+            "\n\nA palette is a JSON list of #RRGGBB strings, or an object "+
+            "with a `colors` array.");
+        }
+      };
+      r.readAsText(inp.files[0]);
+    });
+    inp.click();
+  },"Load a palette from a file");
+  if(swatchMode==="custom"&&customSwatches&&customSwatches.length){
+    mk("Clear",function(){
+      customSwatches=[];
+      updateSwatchesPanel();
+    },"Empty your palette");
+  }
+  host.appendChild(acts);
+
+  var hint=document.createElement("div");
+  hint.className="props-note";
+  hint.textContent=list.length
+    ? list.length+" colour"+(list.length===1?"":"s")+
+      ". Click for fill, Shift-click for stroke — and with something selected, "+
+      "it is recoloured too."
+    : "";
+  host.appendChild(hint);
+}
+
+/* ------------------------------------------------------------------ *
+ * Components
+ *
+ * Ready-made interactive pieces: a button, a checkbox, a radio button, a text
+ * input, a slider, a progress bar. There were none, so anything with a user
+ * interface in it had to be drawn from scratch and wired by hand every time.
+ *
+ * Built the way Flash's own components were built — as ordinary library
+ * symbols made of ordinary shapes and text, with handlers on them. That
+ * matters more than it sounds: a component is therefore editable (open it and
+ * change the corner radius), exportable through the paths that already exist,
+ * and needs no new runtime. A component implemented as a special object type
+ * would have needed a branch in all four renderers and would resist being
+ * restyled, which is the first thing anyone wants to do to one.
+ * ------------------------------------------------------------------ */
+
+/** A plain shape object, for building a component's artwork. */
+function compShape(type,x,y,w,h,fill,stroke,strokeW){
+  var o=new EditorObject(type);
+  o.x=x;o.y=y;o.width=w;o.height=h;
+  o.fillColor=fill||"#DDDDDD";
+  o.fillType=fill?"solid":"none";
+  o.fillAlpha=1;
+  o.strokeColor=stroke||"#555555";
+  o.strokeWidth=strokeW==null?1:strokeW;
+  o.strokeStyle=o.strokeWidth>0?"solid":"none";
+  return o;
+}
+
+/** A label, for a component's text. */
+function compText(x,y,w,h,text,opts){
+  opts=opts||{};
+  var o=new EditorObject("text");
+  o.x=x;o.y=y;o.width=w;o.height=h;
+  o.text=text;
+  o.font="Arial";
+  o.fontSize=opts.size||12;
+  o.fillColor=opts.color||"#222222";
+  o.textAlign=opts.align||"center";
+  o.lineHeight=1.2;
+  if(opts.textType){
+    o.textType=opts.textType;
+    o.instanceName=opts.instanceName||"";
+    o.lineType=opts.lineType||"single";
+    o.selectable=true;
+    if(opts.textType==="input"){o.textBorder=false;o.textBackground=false;}
+  }
+  return o;
+}
+
+/**
+ * The component catalogue.
+ *
+ * Each entry builds a symbol as a list of keyframes, and says what handler to
+ * put on the instance. The handler is ActionScript in Flash's own form,
+ * because that is what flashy-as2.js runs — and because a user who opens the
+ * Actions panel to change the behaviour finds something they can read.
+ */
+var COMPONENTS=[
+  {
+    id:"button",label:"Button",
+    width:100,height:28,
+    describe:"Up, Over and Down states on frames 1–3, as a Button symbol.",
+    build:function(w,h,opts){
+      var label=opts.label||"Button";
+      var frame=function(face,text){
+        return [
+          compShape("rect",0,0,w,h,face,"#555555",1),
+          compText(0,Math.round(h/2-8),w,16,text,{size:12})
+        ];
+      };
+      return {
+        behavior:"button",
+        frames:[
+          frame("#E4E4E4",label),      // up
+          frame("#F2F2F2",label),      // over
+          frame("#C8C8C8",label),      // down
+          // The hit area: frame 4, as Flash's Button symbols had.
+          [compShape("rect",0,0,w,h,"#000000",null,0)]
+        ]
+      };
+    },
+    script:function(opts){
+      var target=opts.gotoFrame||"";
+      return target
+        ? "on (release) {\n  _root.gotoAndStop("+behaviorFrameArg(target)+");\n}"
+        : "on (release) {\n  trace(\""+behaviorEscape(opts.label||"Button")+" clicked\");\n}";
+    }
+  },
+  {
+    id:"checkbox",label:"Check Box",
+    width:120,height:20,
+    describe:"A box that toggles, with its state on `checked`.",
+    build:function(w,h,opts){
+      var box=Math.min(h,16);
+      var label=opts.label||"Check box";
+      var base=function(ticked){
+        var objs=[
+          compShape("rect",0,Math.round((h-box)/2),box,box,"#FFFFFF","#555555",1),
+          compText(box+6,Math.round(h/2-7),w-box-6,14,label,{size:11,align:"left"})
+        ];
+        if(ticked){
+          // A tick drawn as two strokes, so it scales and recolours with the
+          // rest of the artwork rather than being a glyph in a font.
+          var a=compShape("line",3,Math.round((h-box)/2)+box/2,box/2-2,box/2-4,
+                          null,"#226622",2);
+          var b=compShape("line",box/2+1,Math.round((h-box)/2)+box-4,box/2-3,-(box-7),
+                          null,"#226622",2);
+          objs.push(a,b);
+        }
+        return objs;
+      };
+      return {behavior:"graphic",frames:[base(false),base(true)]};
+    },
+    script:function(){
+      /* Frame 1 is off and frame 2 is on, so the state IS the frame — which
+         means a script can read it without a variable to keep in step. */
+      return "onClipEvent (load) {\n  checked = false;\n}\n\n"+
+             "on (release) {\n  checked = !checked;\n  gotoAndStop(checked ? 2 : 1);\n}";
+    }
+  },
+  {
+    id:"radio",label:"Radio Button",
+    width:120,height:20,
+    describe:"A round one-of-many button, in a named group.",
+    build:function(w,h,opts){
+      var d=Math.min(h,16);
+      var label=opts.label||"Option";
+      var base=function(on){
+        var objs=[
+          compShape("oval",0,Math.round((h-d)/2),d,d,"#FFFFFF","#555555",1),
+          compText(d+6,Math.round(h/2-7),w-d-6,14,label,{size:11,align:"left"})
+        ];
+        if(on){
+          objs.push(compShape("oval",4,Math.round((h-d)/2)+4,d-8,d-8,"#226622",null,0));
+        }
+        return objs;
+      };
+      return {behavior:"graphic",frames:[base(false),base(true)]};
+    },
+    script:function(opts){
+      var group=behaviorIdent(opts.group||"group1");
+      /* One-of-many needs the OTHERS switched off, and the group is the only
+         thing that knows which others those are. Kept on the root, where every
+         member of the group can see it. */
+      return "on (release) {\n"+
+             "  _root."+group+" = this._name;\n"+
+             "  gotoAndStop(2);\n"+
+             "  for (var n in _root) {\n"+
+             "    var other = _root[n];\n"+
+             "    if (other != this && other._radioGroup == \""+group+"\") other.gotoAndStop(1);\n"+
+             "  }\n"+
+             "}\n\n"+
+             "onClipEvent (load) {\n  _radioGroup = \""+group+"\";\n}";
+    }
+  },
+  {
+    id:"input",label:"Text Input",
+    width:160,height:24,
+    describe:"A field the reader types into, readable from script.",
+    build:function(w,h,opts){
+      var name=behaviorIdent(opts.instanceName||"field1");
+      var t=compText(3,Math.round(h/2-8),w-6,16,"",{
+        size:12,align:"left",textType:"input",instanceName:name
+      });
+      t.maxChars=opts.maxChars||0;
+      return {
+        behavior:"movieclip",
+        frames:[[
+          compShape("rect",0,0,w,h,"#FFFFFF","#555555",1),
+          t
+        ]]
+      };
+    },
+    script:function(opts){
+      var name=behaviorIdent(opts.instanceName||"field1");
+      return "// The field inside is named \""+name+"\".\n"+
+             "// In a frame script: trace(root."+name+".text)";
+    }
+  },
+  {
+    id:"slider",label:"Slider",
+    width:160,height:20,
+    describe:"A draggable handle reporting 0–100 on `value`.",
+    build:function(w,h){
+      var th=Math.min(h,14);
+      return {
+        behavior:"movieclip",
+        frames:[[
+          compShape("rect",0,Math.round(h/2-2),w,4,"#BBBBBB","#777777",1),
+          (function(){
+            var k=compShape("rect",0,Math.round((h-th)/2),12,th,"#E4E4E4","#555555",1);
+            k.instanceName="knob";
+            return k;
+          })()
+        ]]
+      };
+    },
+    script:function(opts){
+      var span=Math.max(1,(opts.width||160)-12);
+      /* Dragged by hand rather than with startDrag, which is one of the calls
+         flashy-as2.js still stubs. Clamped to the track, and `value` is
+         published on the root so something else can read it. */
+      return "onClipEvent (load) {\n  value = 0;\n  dragging = false;\n}\n\n"+
+             "on (press) {\n  dragging = true;\n}\n\n"+
+             "on (release) {\n  dragging = false;\n}\n\n"+
+             "on (releaseOutside) {\n  dragging = false;\n}\n\n"+
+             "onClipEvent (mouseMove) {\n"+
+             "  if (!dragging) return;\n"+
+             "  var x = _xmouse - 6;\n"+
+             "  if (x < 0) x = 0;\n"+
+             "  if (x > "+span+") x = "+span+";\n"+
+             "  knob._x = x;\n"+
+             "  value = Math.round((x / "+span+") * 100);\n"+
+             "  _root.sliderValue = value;\n"+
+             "  updateAfterEvent();\n"+
+             "}";
+    }
+  },
+  {
+    id:"progress",label:"Progress Bar",
+    width:160,height:14,
+    describe:"A bar driven by `setProgress(0–100)`.",
+    build:function(w,h){
+      return {
+        behavior:"movieclip",
+        frames:[[
+          compShape("rect",0,0,w,h,"#EEEEEE","#777777",1),
+          (function(){
+            var f=compShape("rect",1,1,w-2,h-2,"#4A7FB5",null,0);
+            f.instanceName="fill";
+            return f;
+          })()
+        ]]
+      };
+    },
+    script:function(opts){
+      var w=Math.max(2,(opts.width||160)-2);
+      return "onClipEvent (load) {\n"+
+             "  // Starts empty. Call setProgress from a frame script:\n"+
+             "  //   root.bar1.setProgress(50)\n"+
+             "  fill._xscale = 0;\n"+
+             "  setProgress = function (pct) {\n"+
+             "    if (pct < 0) pct = 0;\n"+
+             "    if (pct > 100) pct = 100;\n"+
+             "    fill._width = ("+w+" * pct) / 100;\n"+
+             "  };\n"+
+             "}";
+    }
+  }
+];
+
+/**
+ * Put a component on the stage.
+ *
+ * It becomes a library symbol plus an instance, so a second one costs nothing
+ * and editing the symbol changes both — which is what a component is for.
+ */
+function addComponent(id,opts){
+  opts=opts||{};
+  var spec=COMPONENTS.filter(function(c){return c.id===id;})[0];
+  if(!spec)return {ok:false,reason:"unknown"};
+  if(!layerEditable())return {ok:false,reason:"locked"};
+  var w=Math.max(8,opts.width||spec.width);
+  var h=Math.max(8,opts.height||spec.height);
+  var built=spec.build(w,h,Object.assign({width:w,height:h},opts));
+
+  pushUndo();
+  var name=uniqueSymbolName(opts.name||spec.label);
+  var layer=new Layer("Layer 1");
+  layer.keyframes=built.frames.map(function(objs,i){
+    var kf=new KeyFrame(i+1);
+    kf.duration=1;
+    kf.objects=objs;
+    return kf;
+  });
+  doc.library[name]={
+    objects:built.frames[0].map(function(o){return o.clone();}),
+    layers:[layer],
+    totalFrames:built.frames.length,
+    behavior:built.behavior,
+    folder:"Components",
+    mouthChart:null,scale9:null,
+    exportForAS:false,linkageName:""
+  };
+
+  var kf=CKF();
+  if(!kf){var l=CL();if(l)kf=l.insertKeyframe(curFrame);}
+  if(!kf)return {ok:false,reason:"frame"};
+  var inst=new EditorObject("symbol");
+  inst.symbolName=name;
+  inst.symbolBehavior=built.behavior;
+  inst.instanceName=behaviorIdent(opts.instanceName||(id+"1"));
+  inst.width=w;inst.height=h;
+  // Dropped in the middle of the stage, where it can be seen, rather than at
+  // the origin under whatever is already there.
+  inst.x=Math.round((doc.width-w)/2);
+  inst.y=Math.round((doc.height-h)/2);
+  inst.firstFrame=1;
+  inst.loopMode="single";
+  inst.clipScript=spec.script
+    ? spec.script(Object.assign({width:w,height:h},opts))
+    : "";
+  kf.objects.push(inst);
+  selection=[inst];
+  return {ok:true,name:name,instance:inst};
+}
+
+function showComponentsDialog(){
+  showDialog({
+    title:"Components",
+    message:"Ready-made pieces, added as ordinary library symbols with handlers "+
+            "on them — so you can open one and change it, and it exports through "+
+            "the paths that already exist.",
+    fields:[
+      {name:"id",label:"Component",type:"select",value:COMPONENTS[0].id,
+       options:COMPONENTS.map(function(c){return [c.id,c.label];})},
+      {name:"label",label:"Label",value:"Button"},
+      {name:"instanceName",label:"Instance name",value:""},
+      {name:"width",label:"Width",type:"number",value:COMPONENTS[0].width,min:8,max:2000},
+      {name:"height",label:"Height",type:"number",value:COMPONENTS[0].height,min:8,max:2000},
+      {name:"gotoFrame",label:"Button goes to frame",value:"",
+       placeholder:"blank = trace instead"},
+      {name:"group",label:"Radio group",value:"group1"}
+    ],
+    footnote:COMPONENTS.map(function(c){return c.label+" — "+c.describe;}).join("\n"),
+    onOk:function(v){
+      var r=addComponent(v.id,{
+        label:v.label,
+        instanceName:v.instanceName,
+        width:parseInt(v.width,10)||0,
+        height:parseInt(v.height,10)||0,
+        gotoFrame:v.gotoFrame,
+        group:v.group
+      });
+      if(r.ok){
+        fullRefresh();
+        outputLog("Added component “"+r.name+"”.");
+      }else if(r.reason==="locked"){
+        showMessage("Components","This layer is locked or hidden.");
+      }
+    }
+  });
+}
+
 function updateColorUI(){
   var fc=document.getElementById("fillColorSwatch");
   var sc=document.getElementById("strokeColorSwatch");
@@ -10562,6 +11149,10 @@ function doActionInner(a){
   case "winHistory": if(workspace())workspace().toggle("history");break;
   case "winExplorer":if(workspace())workspace().toggle("explorer");break;
   case "winBehaviors":if(workspace())workspace().toggle("behaviors");break;
+  case "winSwatches":if(workspace())workspace().toggle("swatches");break;
+  case "components":
+    showComponentsDialog();
+    break;
   case "wsAnimation":if(workspace())workspace().preset("animation");break;
   case "wsDrawing":  if(workspace())workspace().preset("drawing");break;
   case "wsCoding":   if(workspace())workspace().preset("coding");break;
@@ -14264,6 +14855,8 @@ function initKeys(){
     if(!ctrl&&!e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winOutput");return;}
     if(ctrl&&e.key==="F10"){e.preventDefault();doAction("winHistory");return;}
     if(ctrl&&e.key==="F12"){e.preventDefault();doAction("publish");return;}
+    if(ctrl&&e.key==="F9"){e.preventDefault();doAction("winSwatches");return;}
+    if(ctrl&&e.key==="F7"){e.preventDefault();doAction("components");return;}
     if(e.altKey&&e.key==="F3"){e.preventDefault();doAction("winExplorer");return;}
     if(e.shiftKey&&e.key==="F3"){e.preventDefault();doAction("winBehaviors");return;}
     if(ctrl&&e.key==="PageUp"){e.preventDefault();doAction("prevScene");return;}
@@ -18054,6 +18647,7 @@ function fullRefresh(){
   updateHistoryPanel();
   updateExplorerPanel();
   updateBehaviorsPanel();
+  updateSwatchesPanel();
   updateOnionUI();
   // The Character panel rebuilds from the document rather than tracking it, so
   // one notification after every refresh is all it needs. Note this is
@@ -18400,6 +18994,17 @@ function init(){
     },
     publishAll: publishAll,
     sizeReport: sizeReport,
+    /* Swatches and components. */
+    documentPalette: documentPalette,
+    webSafePalette: webSafePalette,
+    swatchMode: function(m){
+      if(m){swatchMode=m;updateSwatchesPanel();}
+      return swatchMode;
+    },
+    addCustomSwatch: addCustomSwatch,
+    currentSwatches: currentSwatches,
+    components: function(){ return COMPONENTS; },
+    addComponent: addComponent,
     showSoundEnvelope: showSoundEnvelopeDialog,
     /* Library management. */
     libUseCount: libUseCount,

@@ -1552,3 +1552,32 @@ input[type="range"].props-input {
   flex: 0 0 64px; text-align: right;
   color: #DDD; font-family: Consolas, monospace; font-variant-numeric: tabular-nums;
 }
+
+/* ── Color Swatches ──
+   A palette you click rather than a picker you open. */
+.swatch-bar {
+  display: flex; gap: 2px; padding: 3px 5px;
+  background: #333; border-bottom: 1px solid #444;
+}
+.swatch-tab {
+  flex: 1; height: 18px; padding: 0 4px;
+  background: linear-gradient(to bottom, #4A4A4A, #3E3E3E);
+  border: 1px solid #585858; border-bottom-color: #2E2E2E;
+  color: #BBB; cursor: pointer; font: 10px Tahoma, sans-serif;
+  border-radius: 2px;
+}
+.swatch-tab.active {
+  background: linear-gradient(to bottom, #4A7FB5, #39638F);
+  border-color: #6CA6DC; color: #fff;
+}
+.swatch-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(14px, 1fr));
+  gap: 1px; padding: 4px 5px; max-height: 240px; overflow: auto;
+}
+.swatch {
+  height: 14px; padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.5); border-radius: 1px;
+  cursor: pointer;
+}
+.swatch:hover { outline: 1px solid #fff; outline-offset: -1px; z-index: 1; }
+.swatch.sel { outline: 2px solid var(--accent); outline-offset: -1px; z-index: 2; }
