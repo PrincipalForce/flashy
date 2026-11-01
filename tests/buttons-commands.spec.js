@@ -530,3 +530,117 @@ test("Save a Copy writes a file without claiming the document is saved", async (
      the original, so marking the document saved would be a lie. */
   expect(await page.evaluate(() => window._flashyEditor.isDirty())).toBe(true);
 });
+
+/* ------------------------------------------------------------------ *
+ * The registration handle, and the snippet library
+ *
+ * The last two leftovers, and both are the same shape: something that existed
+ * as a number or a list and had no way to be touched.
+ * ------------------------------------------------------------------ */
+
+test("the registration point can be dragged, and stays a fraction of the box", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, {
+    width: 300, height: 200, fps: 24, backgroundColor: "#FFFFFF", totalFrames: 1,
+    layers: [{ name: "L", visible: true, locked: false, keyframes: [kf([
+      { type: "rect", x: 50, y: 50, width: 100, height: 100,
+        rotation: 0, scaleX: 1, scaleY: 1, alpha: 1,
+        fillColor: "#CC3344", fillAlpha: 1, fillType: "solid",
+        strokeColor: "#000000", strokeAlpha: 1, strokeWidth: 0, strokeStyle: "none" },
+    ])] }],
+    library: {},
+  });
+
+  const where = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    F.setSelection([o]);
+    // Defaults to the centre of the box, which is 100,100 here.
+    return F.regPointAt(o);
+  });
+  expect(where).toEqual({ x: 100, y: 100 });
+
+  const picked = await page.evaluate(() => {
+    const F = window._flashyAI;
+    return {
+      onIt: !!F.regHandleAt(100, 100),
+      offIt: !!F.regHandleAt(60, 60),
+    };
+  });
+  expect(picked.onIt).toBe(true);
+  expect(picked.offIt).toBe(false);
+
+  // Move it to the top-left corner, then resize: a fraction survives a resize
+  // where a pixel offset would not.
+  const after = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const o = F.currentLayers()[0].getKeyframeAt(1).objects[0];
+    o.regX = 0; o.regY = 0;
+    const atCorner = F.regPointAt(o);
+    o.width = 200; o.height = 40;
+    o.regX = 0.5; o.regY = 0.5;
+    return { atCorner, resized: F.regPointAt(o) };
+  });
+  expect(after.atCorner).toEqual({ x: 50, y: 50 });
+  expect(after.resized).toEqual({ x: 150, y: 70 });
+});
+
+test("the handle is only offered for a single selection", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, {
+    width: 300, height: 200, fps: 24, backgroundColor: "#FFFFFF", totalFrames: 1,
+    layers: [{ name: "L", visible: true, locked: false, keyframes: [kf([
+      { type: "rect", x: 0, y: 0, width: 100, height: 100,
+        rotation: 0, scaleX: 1, scaleY: 1, alpha: 1,
+        fillColor: "#CC3344", fillAlpha: 1, fillType: "solid",
+        strokeColor: "#000000", strokeAlpha: 1, strokeWidth: 0, strokeStyle: "none" },
+      { type: "rect", x: 0, y: 0, width: 100, height: 100,
+        rotation: 0, scaleX: 1, scaleY: 1, alpha: 1,
+        fillColor: "#3366CC", fillAlpha: 1, fillType: "solid",
+        strokeColor: "#000000", strokeAlpha: 1, strokeWidth: 0, strokeStyle: "none" },
+    ])] }],
+    library: {},
+  });
+
+  const found = await page.evaluate(() => {
+    const F = window._flashyAI;
+    const objs = F.currentLayers()[0].getKeyframeAt(1).objects;
+    F.setSelection(objs);
+    /* With two selected there is no one registration point to drag, and an
+       average would move both objects' points somewhere neither wanted. */
+    return !!F.regHandleAt(50, 50);
+  });
+  expect(found).toBe(false);
+});
+
+test("a snippet is saved, inserted and deleted", async ({ page }) => {
+  await openEditor(page);
+  const r = await page.evaluate(() =>
+    window._flashyAI.saveSnippet("Preloader", "if (loaded) {\n  play();\n}"));
+  expect(r.ok).toBe(true);
+
+  const names = await page.evaluate(() => Object.keys(window._flashyAI.codeSnippets()));
+  expect(names).toContain("Preloader");
+
+  // It appears as a chip, distinguishable from the built-in API ones.
+  await page.evaluate(() => window._flashyAI.buildCodeHints());
+  await expect(page.locator("#code-hints .code-chip.snippet", { hasText: "Preloader" }))
+    .toHaveCount(1);
+
+  await page.evaluate(() => window._flashyAI.deleteSnippet("Preloader"));
+  const after = await page.evaluate(() => Object.keys(window._flashyAI.codeSnippets()));
+  expect(after).not.toContain("Preloader");
+});
+
+test("a snippet refuses a blank name or no code", async ({ page }) => {
+  await openEditor(page);
+  const out = await page.evaluate(() => {
+    const F = window._flashyAI;
+    return { nameless: F.saveSnippet("  ", "stop();"),
+             empty: F.saveSnippet("Nothing", "   \n  ") };
+  });
+  expect(out.nameless.ok).toBe(false);
+  expect(out.nameless.why).toContain("name");
+  expect(out.empty.ok).toBe(false);
+  expect(out.empty.why).toContain("no code");
+});

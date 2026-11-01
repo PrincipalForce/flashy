@@ -1613,3 +1613,8 @@ input[type="range"].props-input {
 .sc-bind { min-width: 84px; }
 .sc-bind.listening { background: #3C5A74; color: #FFF; }
 .sc-note { color: #D8A24A; }
+
+/* A saved snippet reads differently from a built-in API chip: one is the
+   language, the other is something you wrote. */
+.code-chip.snippet { background: #3A4A3A; border-color: #5A6A5A; }
+.code-chip.add-snippet { background: #3A3A4A; border-color: #5A5A6A; }

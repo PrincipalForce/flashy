@@ -96,7 +96,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Shared libraries, runtime sharing | ⬜ | Missing (low value). |
 | 9-slice scaling | ✅ | `Flashy.Slice9` — the cell maths once, shared by the stage, the SVG export and the `NineSlice` container the exported player uses. Guides are set in Symbol Properties. |
 | Edit in Place / Edit in New Window | ◐ | `enterSymbol`/`exitSymbol` is Edit in Place; no new-window edit. |
-| Registration / transformation point editing | ◐ | A registration point as a fraction of the object’s box, editable in the inspector, defaulting to the centre so no existing document moves. It drives a guided tween’s Snap. No on-stage handle to drag it by yet. |
+| Registration / transformation point editing | ✅ | A registration point as a fraction of the object’s box — so it survives a resize — editable in the inspector and draggable on the stage as a crosshair. Defaults to the centre, so no existing document moves. It drives a guided tween’s Snap. |
 
 ## 5. Filters and colour effects
 
@@ -155,7 +155,7 @@ name — an entire class of Flash content is unreachable.
 | Debugger (breakpoints, watch, variable inspector) | ⬜ | Missing. |
 | Behaviors panel (scriptless interactivity) | ✅ | Eleven behaviours across six events, written as Flash's own `on(release) { … }` handlers — which flashy-as2.js already runs. They stack rather than replacing each other, and stay editable as code in the Actions panel. |
 | Components (Button, CheckBox, RadioButton, TextInput, Slider, ProgressBar, ComboBox) | ✅ | Built as ordinary library symbols with handlers, the way Flash’s own were — so a component is editable, exports through the existing paths and needs no new runtime. The ComboBox’s dropdown is its second frame, which is where Flash put one too. |
-| Code snippets library | ◐ | The API chips insert working calls at the caret. A saved, user-editable snippet library is still missing. |
+| Code snippets library | ✅ | The API chips insert working calls at the caret, and a saved snippet library sits beside them: the selection (or the whole script) saved under a name in localStorage, inserted at the caret, shift-click to delete. |
 | Button event wiring without code | ✅ | The Behaviors panel. |
 
 ## 8. Panels
@@ -695,5 +695,8 @@ their own, and they are named rather than quietly dropped:
   Effects** (which Adobe deprecated too), **multiple documents in one window**,
   and **Edit in New Window** on the web build.
 * **A user-supplied HTML template** and publish **alignment**.
-* **An on-stage handle** for dragging the registration point, and a saved,
-  user-editable **code snippet library** beyond the API chips.
+
+Both of the small leftovers above are now done as well: the registration point
+has an on-stage crosshair you can drag, and the Actions panel keeps a snippet
+library beside its API chips — the selection (or the whole script) saved under
+a name, inserted at the caret.

@@ -4816,6 +4816,33 @@ function withTiming(o,kf,frame){
 }
 
 // === drawSel / drawPrev ===
+/** The registration point of an object, in stage coordinates. */
+function regPointAt(o){
+  var r=regPoint(o);
+  return {x:(o.x||0)+(o.width||0)*r.x,y:(o.y||0)+(o.height||0)*r.y};
+}
+
+/* Dragging the registration point. Separate from the move drag because it
+   moves the POINT and not the object -- an object whose registration point
+   moved has not itself moved at all. */
+var regDrag=null;
+
+/**
+ * The registration handle under a stage point, if one is there.
+ *
+ * Only for a single selection: with two objects selected there is no one
+ * registration point to drag, and inventing an average would move both
+ * objects' points to somewhere neither of them wanted.
+ */
+function regHandleAt(x,y){
+  if(selection.length!==1)return null;
+  var o=selection[0];
+  var at=regPointAt(o);
+  var tol=7/zoom;
+  if(Math.abs(x-at.x)>tol||Math.abs(y-at.y)>tol)return null;
+  return {obj:o};
+}
+
 function drawSel(o){
   var p1=s2c(o.x,o.y),p2=s2c(o.x+o.width,o.y+o.height);
   ctx.save();
@@ -4833,6 +4860,22 @@ function drawSel(o){
     ctx.fillRect(pt[0]-hs/2,pt[1]-hs/2,hs,hs);
     ctx.strokeRect(pt[0]-hs/2,pt[1]-hs/2,hs,hs);
   });
+  /* The registration point, as a crosshair you can drag. Only on a single
+     selection, and only when it has been MOVED off the centre or something is
+     actually dragging it -- a crosshair in the middle of every selected object
+     is noise, and the centre is the default. */
+  if(selection.length===1&&selection[0]===o&&
+     (o.regX!=null||o.regY!=null||regDrag)){
+    var rp=regPointAt(o);
+    var rc=s2c(rp.x,rp.y);
+    ctx.strokeStyle=regDrag?"#FFCC33":"#0066FF";
+    ctx.lineWidth=1.4;
+    ctx.beginPath();
+    ctx.arc(rc.x,rc.y,4,0,Math.PI*2);
+    ctx.moveTo(rc.x-7,rc.y);ctx.lineTo(rc.x+7,rc.y);
+    ctx.moveTo(rc.x,rc.y-7);ctx.lineTo(rc.x,rc.y+7);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -5040,6 +5083,7 @@ function initMouse(){
   // stuck true — that would make the next click continue the abandoned drag.
   canvas.addEventListener("pointercancel",function(e){
     dragging=false;dragPreview=null;moveObjStarts=[];movePreSnap=null;poseDrag=null;
+    regDrag=null;hintDrag=null;
     render();
   });
   canvas.addEventListener("dblclick",onDblClick);
@@ -5182,6 +5226,18 @@ function onMouseDown(e){
         pushUndo();g.h.splice(gj,1);
         dragging=true;guideDrag={axis:"h",at:p.y};render();return;
       }
+    }
+  }
+  /* The registration handle takes the press before the move drag does: it is
+     drawn on top of the object, so a click on it means the handle. */
+  if(curTool==="select"){
+    var rh=regHandleAt(p.x,p.y);
+    if(rh){
+      dragging=true;
+      regDrag=rh;
+      movePreSnap=snap();
+      render();
+      return;
     }
   }
   /* A shape hint marker takes the press before any tool does. They are only
@@ -5362,6 +5418,19 @@ function onMouseMove(e){
     render();
     return;
   }
+  /* Dragging the registration point moves the POINT, not the object: an
+     object whose registration point moved has not itself moved at all. Stored
+     as a fraction of the box so it survives a resize, and clamped to the box
+     because a registration point outside the artwork has nothing to register
+     to. */
+  if(regDrag){
+    var ro=regDrag.obj;
+    var rw=ro.width||1,rh2=ro.height||1;
+    ro.regX=Math.max(0,Math.min(1,(p.x-(ro.x||0))/rw));
+    ro.regY=Math.max(0,Math.min(1,(p.y-(ro.y||0))/rh2));
+    render();
+    return;
+  }
   dragCur={x:p.x,y:p.y};
   if(curTool==="pose"){
     poseMouseMove(e,p);
@@ -5449,6 +5518,12 @@ function onMouseUp(e){
   }
   if(hintDrag){
     hintDrag=null;dragging=false;
+    if(movePreSnap){pushUndoSnap(movePreSnap);movePreSnap=null;}
+    fullRefresh();
+    return;
+  }
+  if(regDrag){
+    regDrag=null;dragging=false;
     if(movePreSnap){pushUndoSnap(movePreSnap);movePreSnap=null;}
     fullRefresh();
     return;
@@ -21517,10 +21592,74 @@ function syncCodeScroll(){
 }
 
 /** The API chips — Flash called this Script Assist. */
+/* ------------------------------------------------------------------ *
+ * The snippet library
+ *
+ * The API chips insert one call. A snippet is a block you wrote yourself and
+ * want again -- the five-line preloader, the button handler with the right
+ * event name -- which is what Flash's Code Snippets panel was for.
+ *
+ * Kept in localStorage beside the filter presets and the saved commands, for
+ * the same reason: it belongs to the person, not to the document.
+ * ------------------------------------------------------------------ */
+var SNIPPET_STORE="flashy_snippets";
+
+function codeSnippets(){
+  try{
+    var raw=localStorage.getItem(SNIPPET_STORE);
+    if(!raw)return {};
+    var o=JSON.parse(raw);
+    if(!o||typeof o!=="object"||Array.isArray(o))return {};
+    var out={};
+    Object.keys(o).forEach(function(k){
+      if(typeof o[k]==="string"&&o[k].length)out[k]=o[k];
+    });
+    return out;
+  }catch(e){return {};}
+}
+
+function saveSnippet(name,code){
+  name=String(name||"").trim();
+  if(!name)return {ok:false,why:"a snippet needs a name"};
+  if(!String(code||"").trim())return {ok:false,why:"there is no code to save"};
+  var all=codeSnippets();
+  all[name]=String(code);
+  try{localStorage.setItem(SNIPPET_STORE,JSON.stringify(all));}
+  catch(e){return {ok:false,why:"this browser would not store it"};}
+  return {ok:true,name:name};
+}
+
+function deleteSnippet(name){
+  var all=codeSnippets();
+  if(!(name in all))return false;
+  delete all[name];
+  try{localStorage.setItem(SNIPPET_STORE,JSON.stringify(all));}catch(e){}
+  return true;
+}
+
+/** Insert text at the caret of the script editor. Returns false if it cannot. */
+function insertIntoScript(text){
+  var ta=document.getElementById("frame-script");
+  if(!ta||ta.disabled)return false;
+  /* At the caret, not appended: a chip that always writes to the end is no
+     quicker than typing. */
+  var at=ta.selectionStart==null?ta.value.length:ta.selectionStart;
+  var end=ta.selectionEnd==null?at:ta.selectionEnd;
+  ta.value=ta.value.slice(0,at)+text+ta.value.slice(end);
+  ta.selectionStart=ta.selectionEnd=at+text.length;
+  ta.focus();
+  /* A textarea's own `change` only fires on blur, and the point of a chip is
+     that it takes effect now. */
+  ta.dispatchEvent(new Event("change"));
+  refreshCodeEditor();
+  return true;
+}
+
 function buildCodeHints(){
   var host=document.getElementById("code-hints");
-  if(!host||host.childNodes.length)return;
-  var ta=document.getElementById("frame-script");
+  if(!host)return;
+  // Rebuilt rather than built once: the snippet list changes under it.
+  host.textContent="";
   [["stop()","stop();"],["play()","play();"],
    ["gotoAndPlay()","gotoAndPlay(1);"],["gotoAndStop()","gotoAndStop(1);"],
    ["trace()","trace(\"\");"],["root","root"],["stage","stage"]].forEach(function(p){
@@ -21529,22 +21668,57 @@ function buildCodeHints(){
     b.className="code-chip";
     b.textContent=p[0];
     b.title="Insert "+p[1];
-    b.addEventListener("click",function(){
-      if(!ta||ta.disabled)return;
-      /* At the caret, not appended: a chip that always writes to the end is
-         no quicker than typing. */
-      var at=ta.selectionStart==null?ta.value.length:ta.selectionStart;
-      var end=ta.selectionEnd==null?at:ta.selectionEnd;
-      ta.value=ta.value.slice(0,at)+p[1]+ta.value.slice(end);
-      ta.selectionStart=ta.selectionEnd=at+p[1].length;
-      ta.focus();
-      /* A textarea's own `change` only fires on blur, and the point of a chip
-         is that it takes effect now. */
-      ta.dispatchEvent(new Event("change"));
-      refreshCodeEditor();
+    b.addEventListener("click",function(){insertIntoScript(p[1]);});
+    host.appendChild(b);
+  });
+
+  var snips=codeSnippets();
+  var names=Object.keys(snips).sort();
+  names.forEach(function(n){
+    var b=document.createElement("button");
+    b.type="button";
+    b.className="code-chip snippet";
+    b.textContent=n;
+    b.title=snips[n].split("\n").slice(0,6).join("\n")+
+            "\n\n(Shift-click to delete)";
+    b.addEventListener("click",function(ev){
+      if(ev.shiftKey){
+        deleteSnippet(n);
+        buildCodeHints();
+        return;
+      }
+      insertIntoScript(snips[n]);
     });
     host.appendChild(b);
   });
+
+  var add=document.createElement("button");
+  add.type="button";
+  add.className="code-chip add-snippet";
+  add.textContent="+ Snippet";
+  add.title="Save what is in the editor as a reusable snippet";
+  add.addEventListener("click",function(){
+    var ta=document.getElementById("frame-script");
+    var code=ta?(ta.value||""):"";
+    // The selection if there is one, otherwise the whole script: saving a
+    // highlighted block is the commoner intent.
+    if(ta&&ta.selectionStart!=null&&ta.selectionEnd>ta.selectionStart){
+      code=ta.value.slice(ta.selectionStart,ta.selectionEnd);
+    }
+    if(!String(code).trim()){
+      showMessage("Snippets",
+        "There is nothing in the editor to save. Write some code first, or "+
+        "select the part you want to keep.");
+      return;
+    }
+    askFor("Save Snippet","Name","",function(name){
+      if(!name)return;
+      var r=saveSnippet(name,code);
+      if(!r.ok)showMessage("Snippets","Not saved: "+r.why+".");
+      else buildCodeHints();
+    });
+  });
+  host.appendChild(add);
 }
 
 function initActionsPanel(){
@@ -21968,6 +22142,12 @@ function init(){
        shows while Enable Simple Buttons is on. */
     /* History replay and saved commands, and the two publish switches that
        change the output rather than the format. */
+    /* The snippet library: blocks you wrote and want again, which is what the
+       API chips are not. */
+    codeSnippets: codeSnippets,
+    saveSnippet: saveSnippet,
+    deleteSnippet: deleteSnippet,
+    buildCodeHints: buildCodeHints,
     replayableSteps: replayableSteps,
     replayActions: replayActions,
     savedCommands: savedCommands,
@@ -22001,6 +22181,8 @@ function init(){
     },
     docTemplates: docTemplates,
     regPoint: regPoint,
+    regPointAt: regPointAt,
+    regHandleAt: regHandleAt,
     symbolDisplayFrame: symbolDisplayFrame,
     pathSegments: pathSegments,
     pathSegHit: pathSegHit,
