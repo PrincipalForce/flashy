@@ -441,7 +441,11 @@ function showDialog(opts){
   document.body.appendChild(back);
   var first=fields.length?inputs[fields[0].name]:ok;
   setTimeout(function(){first.focus();if(first.select)first.select();},0);
-  return {close:close};
+  /* `values` comes back as well as `close`: a dialog whose body reacts to its
+     own fields (Find and Replace's live results list) has to re-read them, and
+     reaching into the DOM by input order to do it would break the moment a
+     field was added. */
+  return {close:close,values:values,inputs:inputs};
 }
 
 /** One-field convenience, the shape most old prompt() calls needed. */
@@ -502,7 +506,10 @@ var menus=[
     {label:"Export as JS Module...",action:"exportModule"},
     {label:"Export as SWF...",action:"exportSWF"},
     {type:"sep"},
+    {label:"Revert",action:"revert"},
+    {type:"sep"},
     {label:"Document Settings...",action:"docSettings"},
+    {label:"Match Stage Size to Contents",action:"matchStage"},
     {label:"Publish Settings...",action:"publishSettings"},
     {label:"Publish",action:"publish",shortcut:"Ctrl+F12"},
     {label:"Size Report...",action:"sizeReport"},
@@ -535,6 +542,9 @@ var menus=[
     {type:"sep"},
     {label:"Select All",action:"selectAll",shortcut:"Ctrl+A"},
     {type:"sep"},
+    {label:"Find and Replace...",action:"findReplace",shortcut:"Ctrl+F"},
+    {type:"sep"},
+    {label:"Keyboard Shortcuts...",action:"shortcuts"},
     {label:"Preferences...",action:"prefs"}
   ]},
   {label:"View",items:[
@@ -10876,9 +10886,10 @@ function doActionInner(a){
     // Desktop Save writes back to the file the document came from, with no
     // dialog; the browser has no such notion, so it downloads a fresh copy.
     // (The desktop host clears the dirty flag itself, once the bytes land.)
-    if(desktopHost){desktopHost.saveDoc();break;}
+    if(desktopHost){desktopHost.saveDoc();rememberSavedDoc();break;}
     dlFile(JSON.stringify(serializeDoc(),null,2),"animation.flashy","application/json");
     markSaved();
+    rememberSavedDoc();
     break;
   case "saveAs":
     if(desktopHost){desktopHost.saveDocAs();break;}
@@ -10943,6 +10954,28 @@ function doActionInner(a){
         centerStage();fullRefresh();
       }
     });
+    break;
+  case "shortcuts":
+    showShortcutsDialog();
+    break;
+  case "findReplace":
+    showFindReplaceDialog();
+    break;
+  case "revert":
+    revertDocument();
+    break;
+  case "matchStage":
+    var ms=matchStageToContents(0);
+    if(!ms.ok){
+      showMessage("Match Stage Size",
+        "Nothing to measure: "+ms.why+".\n\nDraw something first, and the "+
+        "stage will be sized to fit it.");
+    }else{
+      showMessage("Match Stage Size",
+        "The stage is now "+ms.width+" x "+ms.height+" pixels"+
+        ((ms.dx||ms.dy)?", and the artwork moved "+Math.round(ms.dx)+", "+
+          Math.round(ms.dy)+" to sit at the origin.":"."));
+    }
     break;
   case "undo":doUndo();break;
   case "redo":doRedo();break;
@@ -13242,6 +13275,28 @@ function pathMatrix(o){
   return matMul(matMul(objMatrix(o),[1,0,0,1,-hw,-hh]),[psx,0,0,psy,0,0]);
 }
 /** Where a bitmap's box lives: top-left origin, current displayed size. */
+/**
+ * The axis-aligned box an object actually occupies on the stage.
+ *
+ * `getBounds` reads x/y/width/height straight off the object, which is right
+ * for a selection marquee but wrong for anything rotated, scaled or skewed —
+ * a square turned 45 degrees needs a box half again as wide. This walks the
+ * four corners through the object's own matrix instead.
+ */
+function objectBounds(o){
+  if(!o)return null;
+  var w=o.width||0,h=o.height||0;
+  if(!w&&!h)return null;
+  var m=boxMatrix(o);
+  var xs=[],ys=[];
+  [[0,0],[w,0],[w,h],[0,h]].forEach(function(c){
+    var p=matApplyPoint(m,c[0],c[1]);
+    xs.push(p.x);ys.push(p.y);
+  });
+  var x0=Math.min.apply(null,xs),y0=Math.min.apply(null,ys);
+  return {x:x0,y:y0,w:Math.max.apply(null,xs)-x0,h:Math.max.apply(null,ys)-y0};
+}
+
 function boxMatrix(o){
   var hw=(o.width||0)/2,hh=(o.height||0)/2;
   return matMul(objMatrix(o),[1,0,0,1,-hw,-hh]);
@@ -14378,6 +14433,682 @@ function drawPenOverlay(cx){
 }
 
 /* ------------------------------------------------------------------ *
+ * Keyboard shortcut customisation
+ *
+ * Flash shipped a Keyboard Shortcuts dialog with switchable sets, because
+ * everybody arriving from another tool had different fingers. Flashy's own
+ * shortcuts are a long, deliberately ORDERED chain of conditionals — several
+ * of them differ only by a modifier, and the order is what keeps Ctrl+Shift+Z
+ * from being swallowed by Ctrl+Z.
+ *
+ * So customisation is an override table consulted BEFORE that chain rather
+ * than a rewrite of it. A user binding wins outright; everything unbound falls
+ * through to the defaults, in their existing order, unchanged. That is the
+ * whole feature and it costs the defaults nothing.
+ * ------------------------------------------------------------------ */
+
+var SHORTCUT_STORE = "flashy_shortcuts";
+var shortcutOverrides = {};        // chord -> action
+
+/** A key event as a canonical chord string: "Ctrl+Shift+K", "F7", "Alt+O". */
+function keyChord(e) {
+  if (!e || !e.key) return "";
+  var k = e.key;
+  // Modifiers alone are not a chord; they are half of one.
+  if (k === "Control" || k === "Shift" || k === "Alt" || k === "Meta") return "";
+  var parts = [];
+  if (e.ctrlKey || e.metaKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  /* Single letters are upper-cased, so Ctrl+Shift+K and Ctrl+Shift+k are the
+     same chord — the browser reports the shifted character, and binding one
+     spelling while the user presses the other is a shortcut that never fires.
+     Everything longer ("ArrowUp", "F7") is already canonical. */
+  parts.push(k.length === 1 ? k.toUpperCase() : k);
+  return parts.join("+");
+}
+
+/** Every command the menus offer, as [action, label, defaultShortcut]. */
+function shortcutCommands() {
+  var out = [];
+  menus.forEach(function (m) {
+    (m.items || []).forEach(function (it) {
+      if (!it.action || it.type === "sep") return;
+      out.push({
+        action: it.action,
+        label: m.label + " › " + String(it.label).replace(/\.\.\.$/, ""),
+        dflt: it.shortcut || ""
+      });
+    });
+  });
+  return out;
+}
+
+function loadShortcutOverrides() {
+  shortcutOverrides = {};
+  try {
+    var raw = localStorage.getItem(SHORTCUT_STORE);
+    if (!raw) return;
+    var o = JSON.parse(raw);
+    // A hand-edited or stale store must not brick the keyboard, so anything
+    // that is not a string pair is dropped rather than trusted.
+    Object.keys(o).forEach(function (chord) {
+      if (typeof chord === "string" && typeof o[chord] === "string") {
+        shortcutOverrides[chord] = o[chord];
+      }
+    });
+  } catch (e) { shortcutOverrides = {}; }
+}
+
+function saveShortcutOverrides() {
+  try { localStorage.setItem(SHORTCUT_STORE, JSON.stringify(shortcutOverrides)); }
+  catch (e) { /* a private-mode browser: the bindings last the session */ }
+}
+
+/** The chord currently bound to an action, if the user bound one. */
+function chordFor(action) {
+  var found = "";
+  Object.keys(shortcutOverrides).forEach(function (c) {
+    if (shortcutOverrides[c] === action) found = c;
+  });
+  return found;
+}
+
+/**
+ * Run a user binding for this event, if there is one.
+ *
+ * Returns true when it handled the key, which is the caller's signal to stop:
+ * a rebound key must not also do whatever it used to do.
+ */
+function runShortcutOverride(e) {
+  var chord = keyChord(e);
+  if (!chord) return false;
+  var action = shortcutOverrides[chord];
+  if (!action) return false;
+  e.preventDefault();
+  doAction(action);
+  return true;
+}
+
+function showShortcutsDialog() {
+  var cmds = shortcutCommands();
+  var pending = {};            // action -> chord, uncommitted
+  var filterText = "";
+  var listEl = null, errEl = null;
+
+  var chordOf = function (action) {
+    return pending[action] != null ? pending[action] : chordFor(action);
+  };
+
+  var draw = function () {
+    if (!listEl) return;
+    listEl.textContent = "";
+    var q = filterText.trim().toLowerCase();
+    var shown = cmds.filter(function (c) {
+      return !q || c.label.toLowerCase().indexOf(q) >= 0 ||
+             c.action.toLowerCase().indexOf(q) >= 0;
+    });
+    shown.slice(0, 300).forEach(function (c) {
+      var row = document.createElement("div");
+      row.className = "sc-row";
+      row.dataset.action = c.action;
+
+      var lab = document.createElement("span");
+      lab.className = "sc-label";
+      lab.textContent = c.label;
+      row.appendChild(lab);
+
+      var dflt = document.createElement("span");
+      dflt.className = "sc-default";
+      dflt.textContent = c.dflt || "—";
+      dflt.title = c.dflt ? "The built-in shortcut, which still works unless "+
+                            "you bind this command to something else"
+                          : "No built-in shortcut";
+      row.appendChild(dflt);
+
+      var btn = document.createElement("button");
+      btn.className = "props-btn-action sc-bind";
+      var mine = chordOf(c.action);
+      btn.textContent = mine || "Set…";
+      btn.title = "Click, then press the keys you want";
+      btn.addEventListener("click", function () {
+        btn.textContent = "Press keys…";
+        btn.classList.add("listening");
+        var onKey = function (ev) {
+          var chord = keyChord(ev);
+          if (!chord) return;                 // a bare modifier: keep waiting
+          ev.preventDefault();
+          ev.stopPropagation();
+          document.removeEventListener("keydown", onKey, true);
+          btn.classList.remove("listening");
+          if (chord === "Escape") { btn.textContent = mine || "Set…"; return; }
+          /* One chord, one command. Taking it from whoever had it and saying
+             so beats two commands quietly fighting over a key. */
+          var taken = null;
+          Object.keys(pending).forEach(function (a) {
+            if (pending[a] === chord && a !== c.action) taken = a;
+          });
+          if (!taken && shortcutOverrides[chord] && shortcutOverrides[chord] !== c.action) {
+            taken = shortcutOverrides[chord];
+          }
+          if (taken) {
+            pending[taken] = "";
+            errEl.textContent = chord + " was bound to " + taken + "; it is now " +
+                                c.action + ".";
+            errEl.style.display = "";
+          } else {
+            errEl.style.display = "none";
+          }
+          pending[c.action] = chord;
+          draw();
+        };
+        document.addEventListener("keydown", onKey, true);
+      });
+      row.appendChild(btn);
+
+      var clr = document.createElement("button");
+      clr.className = "props-btn-action";
+      clr.textContent = "✕";
+      clr.title = "Clear this binding and go back to the built-in shortcut";
+      clr.disabled = !mine;
+      clr.addEventListener("click", function () { pending[c.action] = ""; draw(); });
+      row.appendChild(clr);
+
+      listEl.appendChild(row);
+    });
+    if (shown.length > 300) {
+      var more = document.createElement("div");
+      more.className = "fy-dialog-hint";
+      more.textContent = "Showing the first 300 of " + shown.length +
+                         " — type above to narrow it down.";
+      listEl.appendChild(more);
+    }
+  };
+
+  showDialog({
+    title: "Keyboard Shortcuts",
+    message: "Bind any menu command to a key. A binding you set here is tried " +
+             "first; anything you leave alone keeps its built-in shortcut.",
+    fields: [
+      { name: "filter", label: "Search", value: "", placeholder: "frame, library, export…",
+        onChange: function (v) { filterText = v; draw(); } }
+    ],
+    build: function (body) {
+      errEl = document.createElement("div");
+      errEl.className = "fy-dialog-hint sc-note";
+      errEl.style.display = "none";
+      body.appendChild(errEl);
+      listEl = document.createElement("div");
+      listEl.className = "sc-list";
+      body.appendChild(listEl);
+      draw();
+    },
+    extraButtons: [
+      { label: "Reset All", onClick: function (v, close) {
+          shortcutOverrides = {};
+          saveShortcutOverrides();
+          close();
+          showMessage("Keyboard Shortcuts",
+            "Every command is back to its built-in shortcut.");
+        } }
+    ],
+    okLabel: "Apply",
+    onOk: function () {
+      Object.keys(pending).forEach(function (action) {
+        var chord = pending[action];
+        // Drop whatever this action used to hold, then take the new chord.
+        Object.keys(shortcutOverrides).forEach(function (c) {
+          if (shortcutOverrides[c] === action) delete shortcutOverrides[c];
+        });
+        if (chord) shortcutOverrides[chord] = action;
+      });
+      saveShortcutOverrides();
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Find and Replace
+ *
+ * Flash searched a whole document for text, a font, a colour or a symbol, and
+ * could replace every hit at once. It is the difference between changing one
+ * typeface across a forty-frame cartoon and opening forty keyframes.
+ *
+ * Everything here goes through one walker, because the four search kinds differ
+ * only in which field they look at — and because the places artwork hides
+ * (nested groups, library symbols, other scenes) are exactly the places a
+ * hand-rolled per-kind search would forget.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every object in the document, with enough context to navigate back to it.
+ *
+ * `where` is a human-readable trail for the results list; `sceneIndex` is set
+ * for objects that live on a scene's timeline, and `symbolName` for those
+ * inside a library symbol — a hit inside a symbol cannot be selected on the
+ * stage, but it still has to be findable and replaceable.
+ */
+function frWalk(scope) {
+  var out = [];
+  var scenes = docScenes();
+  var visit = function (objs, ctx, depth) {
+    (objs || []).forEach(function (o, i) {
+      out.push({
+        obj: o,
+        where: ctx.where + ", item " + (i + 1),
+        sceneIndex: ctx.sceneIndex,
+        symbolName: ctx.symbolName,
+        layerIdx: ctx.layerIdx,
+        frame: ctx.frame
+      });
+      // A group's children are artwork too; text inside one is still text.
+      if (Array.isArray(o.children) && depth < 8) {
+        visit(o.children, { where: ctx.where + " > group", sceneIndex: ctx.sceneIndex,
+                            symbolName: ctx.symbolName, layerIdx: ctx.layerIdx,
+                            frame: ctx.frame }, depth + 1);
+      }
+    });
+  };
+  var sweepLayers = function (layers, label, sceneIndex, symbolName) {
+    (layers || []).forEach(function (l, li) {
+      (l.keyframes || []).forEach(function (kf) {
+        visit(kf.objects, {
+          where: label + " / " + (l.name || ("Layer " + (li + 1))) + " / frame " + kf.index,
+          sceneIndex: sceneIndex, symbolName: symbolName,
+          layerIdx: li, frame: kf.index
+        }, 0);
+      });
+    });
+  };
+
+  if (scope === "scene") {
+    sweepLayers(currentLayers(), scenes[doc.sceneIndex || 0]
+      ? scenes[doc.sceneIndex || 0].name : "Scene 1", doc.sceneIndex || 0, null);
+    return out;
+  }
+  /* The whole document: every scene, then every library symbol. The current
+     scene's live layers are used rather than its parked copy, or edits made
+     since the last scene switch would be invisible to the search. */
+  scenes.forEach(function (sc, si) {
+    var layers = (si === (doc.sceneIndex || 0)) ? currentLayers() : sc.layers;
+    sweepLayers(layers, sc.name || ("Scene " + (si + 1)), si, null);
+  });
+  Object.keys(doc.library || {}).forEach(function (name) {
+    sweepLayers(doc.library[name].layers, "Symbol " + name, null, name);
+  });
+  return out;
+}
+
+/** A matcher for one search term, honouring case, whole word and regex. */
+function frMatcher(term, opts) {
+  opts = opts || {};
+  var flags = opts.matchCase ? "g" : "gi";
+  var src;
+  if (opts.regex) {
+    try { return new RegExp(term, flags); }
+    catch (e) { return null; }           // an unfinished regex is not an error
+  }
+  src = String(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (opts.wholeWord) src = "\\b" + src + "\\b";
+  return new RegExp(src, flags);
+}
+
+/** The colour fields a search can look at, in the order a user expects. */
+var FR_COLOR_FIELDS = ["fillColor", "strokeColor", "textColor"];
+
+/**
+ * Find every hit for one search.
+ *
+ * `kind` is "text", "font", "color" or "symbol". The returned hits carry the
+ * object and its trail, plus the field and value that matched, so Replace does
+ * not have to work out a second time what Find already knew.
+ */
+function frFind(kind, term, opts) {
+  opts = opts || {};
+  var hits = [];
+  if (!term) return hits;
+  var re = (kind === "text") ? frMatcher(term, opts) : null;
+  if (kind === "text" && !re) return hits;
+  var same = function (a, b) {
+    return opts.matchCase ? String(a) === String(b)
+                          : String(a).toLowerCase() === String(b).toLowerCase();
+  };
+  frWalk(opts.scope).forEach(function (e) {
+    var o = e.obj;
+    if (kind === "text") {
+      if (o.type !== "text" || !o.text) return;
+      re.lastIndex = 0;
+      if (!re.test(o.text)) return;
+      hits.push(Object.assign({ field: "text", value: o.text }, e));
+    } else if (kind === "font") {
+      if (o.type !== "text") return;
+      if (!same(o.font || "", term)) return;
+      hits.push(Object.assign({ field: "font", value: o.font }, e));
+    } else if (kind === "color") {
+      var want = frHex(term);
+      if (!want) return;
+      FR_COLOR_FIELDS.forEach(function (f) {
+        if (!o[f]) return;
+        if (frHex(o[f]) !== want) return;
+        hits.push(Object.assign({ field: f, value: o[f] }, e));
+      });
+    } else if (kind === "symbol") {
+      if (o.type !== "symbol") return;
+      if (!same(o.symbolName || "", term)) return;
+      hits.push(Object.assign({ field: "symbolName", value: o.symbolName }, e));
+    }
+  });
+  return hits;
+}
+
+/** A colour written any of the ways a user might type it, as #RRGGBB. */
+function frHex(v) {
+  if (v == null) return null;
+  var s = String(v).trim();
+  if (/^[0-9a-fA-F]{6}$/.test(s)) s = "#" + s;
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+    s = "#" + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  }
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toUpperCase() : null;
+}
+
+/**
+ * Apply a replacement to one hit.
+ *
+ * Text replaces within the string, every occurrence, so a field holding the
+ * term twice is fixed in one pass. The other three kinds set a whole field,
+ * because a font or a symbol name is not a substring of anything.
+ */
+function frApply(hit, kind, term, replacement, opts) {
+  opts = opts || {};
+  var o = hit.obj;
+  if (kind === "text") {
+    var re = frMatcher(term, opts);
+    if (!re) return false;
+    o.text = String(o.text).replace(re, replacement);
+    return true;
+  }
+  if (kind === "font") { o.font = replacement; return true; }
+  if (kind === "color") {
+    var hex = frHex(replacement);
+    if (!hex) return false;
+    o[hit.field] = hex;
+    return true;
+  }
+  if (kind === "symbol") {
+    // Pointing an instance at a symbol that does not exist would draw nothing
+    // and give no clue why, so the swap is refused instead.
+    if (!doc.library || !doc.library[replacement]) return false;
+    o.symbolName = replacement;
+    return true;
+  }
+  return false;
+}
+
+/** Replace every hit; returns how many objects changed. */
+function frReplaceAll(kind, term, replacement, opts) {
+  var hits = frFind(kind, term, opts);
+  if (!hits.length) return 0;
+  pushUndo();
+  var n = 0;
+  hits.forEach(function (h) { if (frApply(h, kind, term, replacement, opts)) n++; });
+  if (!n) doUndo();          // nothing applied: leave no empty history step
+  else fullRefresh();
+  return n;
+}
+
+/**
+ * Show a hit: switch to its scene, layer and frame, and select the object.
+ *
+ * A hit inside a library symbol has no stage position, so there is nothing to
+ * select — the caller says so rather than silently doing nothing.
+ */
+function frReveal(hit) {
+  if (!hit) return false;
+  if (hit.symbolName != null) return false;
+  if (hit.sceneIndex != null && hit.sceneIndex !== (doc.sceneIndex || 0)) {
+    gotoScene(hit.sceneIndex);
+  }
+  if (hit.layerIdx != null && hit.layerIdx < currentLayers().length) curLayer = hit.layerIdx;
+  if (hit.frame != null) curFrame = hit.frame;
+  selection = [hit.obj];
+  fullRefresh();
+  return true;
+}
+
+/** How a hit is described in the results list. */
+function frDescribe(hit, kind) {
+  var o = hit.obj;
+  if (kind === "text") return '"' + String(o.text).slice(0, 40) + '"';
+  if (kind === "font") return o.font + " " + (o.fontSize || 24) + "px";
+  if (kind === "color") return hit.field.replace("Color", "") + " " + frHex(hit.value);
+  if (kind === "symbol") return o.symbolName + (o.instanceName ? " (" + o.instanceName + ")" : "");
+  return o.type;
+}
+
+function showFindReplaceDialog() {
+  var state = { kind: "text", scope: "document", results: [], at: -1 };
+  var listEl = null, countEl = null;
+
+  var rerun = function (vals) {
+    state.results = frFind(state.kind, vals.term, {
+      matchCase: vals.matchCase, wholeWord: vals.wholeWord,
+      regex: vals.regex, scope: vals.scope
+    });
+    state.at = -1;
+    if (countEl) {
+      countEl.textContent = !vals.term ? "Type something to search for."
+        : state.results.length ? state.results.length + " match" +
+            (state.results.length === 1 ? "" : "es")
+        : "No matches.";
+    }
+    if (!listEl) return;
+    listEl.textContent = "";
+    state.results.slice(0, 200).forEach(function (h, i) {
+      var row = document.createElement("div");
+      row.className = "fr-hit";
+      var what = document.createElement("span");
+      what.className = "fr-hit-what";
+      what.textContent = frDescribe(h, state.kind);
+      var where = document.createElement("span");
+      where.className = "fr-hit-where";
+      where.textContent = h.where;
+      row.appendChild(what);
+      row.appendChild(where);
+      row.addEventListener("click", function () {
+        state.at = i;
+        if (!frReveal(h)) {
+          /* Inside a symbol: say where rather than appearing to ignore the
+             click. Opening the symbol for editing from here would throw away
+             whatever the user is in the middle of on the stage. */
+          where.textContent = h.where + " — open this symbol to see it";
+        }
+      });
+      listEl.appendChild(row);
+    });
+    if (state.results.length > 200) {
+      var more = document.createElement("div");
+      more.className = "fy-dialog-hint";
+      // Say what was dropped: a silent cap reads as "that is all of them".
+      more.textContent = "Showing the first 200 of " + state.results.length +
+                         "; Replace All still covers every one.";
+      listEl.appendChild(more);
+    }
+  };
+
+  var dlg = showDialog({
+    title: "Find and Replace",
+    fields: [
+      { name: "kind", label: "For", type: "select", value: "text",
+        options: [["text", "Text"], ["font", "Font"], ["color", "Color"], ["symbol", "Symbol"]],
+        onChange: function (v) { state.kind = v; if (dlg) rerun(dlg.values()); } },
+      { name: "term", label: "Find", value: "",
+        onChange: function () { if (dlg) rerun(dlg.values()); } },
+      { name: "replacement", label: "Replace with", value: "" },
+      { name: "scope", label: "In", type: "select", value: "document",
+        options: [["document", "Whole document"], ["scene", "Current scene"]],
+        onChange: function () { if (dlg) rerun(dlg.values()); } },
+      { name: "matchCase", label: "Match case", type: "checkbox", value: false,
+        onChange: function () { if (dlg) rerun(dlg.values()); } },
+      { name: "wholeWord", label: "Whole word", type: "checkbox", value: false,
+        onChange: function () { if (dlg) rerun(dlg.values()); } },
+      { name: "regex", label: "Regular expression", type: "checkbox", value: false,
+        onChange: function () { if (dlg) rerun(dlg.values()); },
+        hint: "Text searches only. Match case, whole word and regex do not " +
+              "apply to a font, a colour or a symbol name — those match a " +
+              "whole field, not part of one." }
+    ],
+    build: function (body) {
+      countEl = document.createElement("div");
+      countEl.className = "fy-dialog-hint fr-count";
+      countEl.textContent = "Type something to search for.";
+      body.appendChild(countEl);
+      listEl = document.createElement("div");
+      listEl.className = "fr-results";
+      body.appendChild(listEl);
+    },
+    extraButtons: [
+      { label: "Find Next", onClick: function (v) {
+          rerun(v);
+          if (!state.results.length) return;
+          state.at = (state.at + 1) % state.results.length;
+          frReveal(state.results[state.at]);
+        } },
+      { label: "Replace All", onClick: function (v, close) {
+          var n = frReplaceAll(state.kind, v.term, v.replacement, {
+            matchCase: v.matchCase, wholeWord: v.wholeWord,
+            regex: v.regex, scope: v.scope
+          });
+          close();
+          showMessage("Find and Replace", n
+            ? "Replaced " + n + " " + (n === 1 ? "match" : "matches") + "."
+            : "Nothing was replaced. " + (state.kind === "symbol"
+                ? "Check that the replacement symbol exists in the Library."
+                : state.kind === "color"
+                ? "The replacement must be a hex colour like #FF3366."
+                : "There were no matches."));
+        } }
+    ],
+    okLabel: "Close",
+    noCancel: true
+  });
+  // The first search runs once the dialog exists, so an empty box says what
+  // to do rather than showing an empty list with no explanation.
+  rerun(dlg.values());
+  return dlg;
+}
+
+/* ------------------------------------------------------------------ *
+ * Match stage size to contents, and Revert
+ * ------------------------------------------------------------------ */
+
+/**
+ * The bounding box of every object on every frame of the current scene.
+ *
+ * Every frame, not the current one: a stage sized to frame 1 clips the rest of
+ * the animation, which is the opposite of what the command is for.
+ */
+function contentsBounds() {
+  var b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, n: 0 };
+  currentLayers().forEach(function (l) {
+    // Guide layers are furniture, not artwork, and are never published.
+    if (l.layerType === "guide" || l.layerType === "motionguide") return;
+    (l.keyframes || []).forEach(function (kf) {
+      (kf.objects || []).forEach(function (o) {
+        var box = objectBounds(o);
+        if (!box) return;
+        b.x0 = Math.min(b.x0, box.x);
+        b.y0 = Math.min(b.y0, box.y);
+        b.x1 = Math.max(b.x1, box.x + box.w);
+        b.y1 = Math.max(b.y1, box.y + box.h);
+        b.n++;
+      });
+    });
+  });
+  return b.n ? b : null;
+}
+
+/**
+ * Resize the stage to fit its contents, moving the artwork to the origin.
+ *
+ * The artwork has to move: a stage is always 0,0 to width,height, so fitting
+ * content that starts at -40 means shifting everything by 40 rather than
+ * inventing a negative stage. Every scene shifts by the same amount, because a
+ * scene change that also jumped the artwork would be a strange thing to watch.
+ */
+function matchStageToContents(pad) {
+  var b = contentsBounds();
+  if (!b) return { ok: false, why: "there is nothing on the stage to measure" };
+  pad = Math.max(0, pad || 0);
+  var w = Math.max(1, Math.ceil(b.x1 - b.x0) + pad * 2);
+  var h = Math.max(1, Math.ceil(b.y1 - b.y0) + pad * 2);
+  var dx = pad - b.x0, dy = pad - b.y0;
+  pushUndo();
+  if (dx || dy) {
+    var shift = function (objs) {
+      (objs || []).forEach(function (o) {
+        o.x += dx; o.y += dy;
+        if (Array.isArray(o.children)) shift(o.children);
+      });
+    };
+    docScenes().forEach(function (sc, si) {
+      var layers = (si === (doc.sceneIndex || 0)) ? currentLayers() : sc.layers;
+      (layers || []).forEach(function (l) {
+        (l.keyframes || []).forEach(function (kf) { shift(kf.objects); });
+      });
+    });
+    // Guides are positions on the stage, so they move with it.
+    var g = docGuides();
+    g.v = g.v.map(function (v) { return v + dx; });
+    g.h = g.h.map(function (v) { return v + dy; });
+  }
+  doc.width = w;
+  doc.height = h;
+  centerStage();
+  fullRefresh();
+  return { ok: true, width: w, height: h, dx: dx, dy: dy };
+}
+
+/* The document as it was when it was last saved or opened. Revert needs a
+   copy, not a flag: undo history is bounded and a session can easily make
+   more changes than it holds. */
+var savedDocJSON = null;
+function rememberSavedDoc() {
+  try { savedDocJSON = JSON.stringify(serializeDoc()); }
+  catch (e) { savedDocJSON = null; }
+}
+
+function revertDocument() {
+  if (!savedDocJSON) {
+    showMessage("Revert",
+      "This document has not been saved or opened yet, so there is no saved " +
+      "version to go back to. Use Undo instead.");
+    return false;
+  }
+  if (!isDirty()) {
+    showMessage("Revert", "There are no unsaved changes to discard.");
+    return false;
+  }
+  showDialog({
+    title: "Revert",
+    message: "Discard every change since the document was last saved? " +
+             "This cannot be undone.",
+    fields: [],
+    okLabel: "Revert",
+    onOk: function () {
+      loadDocFromObject(JSON.parse(savedDocJSON));
+      // Reverting lands on the saved state, so the document is clean again —
+      // and the undo stack describes a document that no longer exists.
+      undoStack.length = 0;
+      redoStack.length = 0;
+      markSaved();
+      fullRefresh();
+    }
+  });
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -14643,7 +15374,7 @@ function penEditAt(x,y,alt){
              :pathDeleteAnchor(hit.obj,hit.node.i);
     if(!r.ok){
       // Drop the snapshot nobody used, so the history has no empty step.
-      undo();
+      doUndo();
       showMessage("Pen",(alt?"That point cannot be converted: "
                             :"That point cannot be deleted: ")+r.why+".");
       return {action:"none"};
@@ -14655,7 +15386,7 @@ function penEditAt(x,y,alt){
   if(seg){
     if(!layerEditable())return {action:"none"};
     pushUndo();
-    if(!pathInsertAnchor(seg.obj,seg.seg.at,seg.t)){undo();return {action:"none"};}
+    if(!pathInsertAnchor(seg.obj,seg.seg.at,seg.t)){doUndo();return {action:"none"};}
     selection=[seg.obj];
     return {action:"add",obj:seg.obj};
   }
@@ -15434,6 +16165,10 @@ function initKeys(){
   document.addEventListener("keydown",function(e){
     // Don't handle if typing in input
     if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
+    /* A user's own binding wins outright, and stops here: a rebound key must
+       not also do whatever it used to do. Everything unbound falls through to
+       the chain below, in its existing order, unchanged. */
+    if(runShortcutOverride(e))return;
     var ctrl=e.ctrlKey||e.metaKey;
     /* Brush size on the bracket keys, as in every other drawing application.
        Only while the eraser is actually the active tool — jumping tools out
@@ -15516,6 +16251,7 @@ function initKeys(){
     if(!ctrl&&e.altKey&&(e.key==="m"||e.key==="M")){
       e.preventDefault();doAction("editMultiple");return;
     }
+    if(ctrl&&!e.shiftKey&&(e.key==="f"||e.key==="F")){e.preventDefault();doAction("findReplace");return;}
     if(ctrl&&e.key==="z"){e.preventDefault();doAction("undo");return;}
     if(ctrl&&e.key==="y"){e.preventDefault();doAction("redo");return;}
     if(ctrl&&e.key==="s"){e.preventDefault();doAction("save");return;}
@@ -15934,6 +16670,8 @@ function loadDocFromObject(d){
   centerStage();
   // A freshly loaded document is, by definition, identical to what is on disk.
   markSaved();
+  // ...and it is also what Revert goes back to.
+  rememberSavedDoc();
   updateBreadcrumb();fullRefresh();
 }
 // Save `content` — a string, or a Blob for binary output like the MP4/WebM
@@ -19547,6 +20285,7 @@ function init(){
     maskPath:bitmapMaskPath,
     fullyErased:bitmapFullyErased
   };
+  loadShortcutOverrides();
   initActionsPanel();
   initOutputPanel();
   initUnloadGuard();
@@ -19628,6 +20367,25 @@ function init(){
        Options panel edits and what a newly dragged shape inherits. */
     rectPrim: function(){ return rectPrim; },
     ovalPrim: function(){ return ovalPrim; },
+    /* Find and Replace, Match Stage Size and Revert: the document-wide
+       commands, whose whole point is reaching artwork a click cannot. */
+    frFind: frFind,
+    frReplaceAll: frReplaceAll,
+    frWalk: frWalk,
+    frHex: frHex,
+    matchStageToContents: matchStageToContents,
+    contentsBounds: contentsBounds,
+    objectBounds: objectBounds,
+    revertDocument: revertDocument,
+    rememberSavedDoc: rememberSavedDoc,
+    /* Keyboard bindings: the chord parser and the override table. */
+    keyChord: keyChord,
+    shortcutCommands: shortcutCommands,
+    shortcutOverrides: function(){ return shortcutOverrides; },
+    setShortcutOverride: function(chord,action){
+      shortcutOverrides[chord]=action; saveShortcutOverrides();
+    },
+    clearShortcutOverrides: function(){ shortcutOverrides={}; saveShortcutOverrides(); },
     /* Anchor editing: the Pen's other three jobs, and the stream surgery they
        perform. Exposed because a spec can aim at them far more precisely than
        it can point at a quadratic. */

@@ -1587,3 +1587,29 @@ input[type="range"].props-input {
 }
 .swatch:hover { outline: 1px solid #fff; outline-offset: -1px; z-index: 1; }
 .swatch.sel { outline: 2px solid var(--accent); outline-offset: -1px; z-index: 2; }
+
+/* ── Find and Replace, and Keyboard Shortcuts ──
+   Both dialogs are a short form over a long scrolling list, so the list owns
+   the height and the form stays put above it. */
+.fr-results, .sc-list {
+  max-height: 220px; overflow-y: auto;
+  border: 1px solid #1a1a1a; border-radius: 3px;
+  background: #242424; margin: 4px 0;
+}
+.fr-hit, .sc-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 6px; font-size: 11px;
+  border-bottom: 1px solid #2E2E2E;
+}
+.fr-hit { cursor: pointer; }
+.fr-hit:hover { background: #30404E; }
+.fr-hit-what { color: #DDD; white-space: nowrap; }
+.fr-hit-where { color: #8A8A8A; flex: 1; text-align: right; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+.fr-count { margin-top: 2px; }
+.sc-label { flex: 1; color: #DDD; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; }
+.sc-default { color: #8A8A8A; min-width: 90px; text-align: right; }
+.sc-bind { min-width: 84px; }
+.sc-bind.listening { background: #3C5A74; color: #FFF; }
+.sc-note { color: #D8A24A; }

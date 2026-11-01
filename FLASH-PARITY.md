@@ -21,7 +21,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Free Transform | Q | ✅ | — |
 | Gradient / Fill Transform | F | ✅ | Drags the two points `fillGrad` already stored in bounding-box fractions — which the canvas painter, the SVG exporter and the runtime all read. Focal point is still missing. |
 | Lasso (+ polygon mode, magic wand) | L | ✅ | Freeform, corner-to-corner polygon, and a magic wand that selects everything sharing the clicked shape's fill. |
-| Pen / Add / Delete / Convert anchor | P | ◐ | Click for a corner, drag for a curve, click the first point to close, double-click or Enter to finish open, Escape to abandon. The command stream carries quadratics, so one drag sets one control point. Add/Delete/Convert anchor are still missing. |
+| Pen / Add / Delete / Convert anchor | P | ✅ | Click for a corner, drag for a curve, click the first point to close, double-click or Enter to finish open, Escape to abandon. The command stream carries quadratics, so one drag sets one control point. With nothing in progress a click adds an anchor on a segment or removes one on an anchor, and Alt-click converts between corner and curve; adding on a curve splits by de Casteljau, so the outline does not move. |
 | Text | T | ✅ | All three kinds — see §6. |
 | Line | N | ✅ | — |
 | Rectangle (+ primitive, corner radius) | R | ✅ | Corner radius is a property, re-editable forever, resolved through `Flashy.Primitives` by all six consumers. |
@@ -56,7 +56,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Distribute to Layers | ✅ | `distributeToLayers`, naming each layer after what it holds. |
 | Snap ▸ to Objects / to Pixels / to Guides | ✅ | `snapBox` snaps the selection's bounding box to other objects' edges and centres, the stage, and the guides, with an alignment line drawn for whatever it matched. Alt suspends it. |
 | Rulers, Guides, Edit Guides | ✅ | Rulers drawn on the stage canvas (one coordinate system, so the ticks cannot drift from the zoom); drag one out to create a guide, drag a guide off the stage to delete it. Guides save with the document and never export. |
-| Find and Replace | ⬜ | Missing. |
+| Find and Replace | ✅ | Text, font, colour and symbol, across nested groups, every scene and every library symbol — one walker, so the hiding places cannot be forgotten per kind. Match case, whole word and regex on text; a live results list that navigates to each hit. |
 
 ## 3. Timeline and animation
 
@@ -111,7 +111,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Filters ▸ Blur | ✅ | Isotropic on canvas (the `filter` property has no anisotropic blur, so the two radii are averaged); exact in the SVG export, which can express both. |
 | Filters ▸ Glow | ✅ | `strength` is how many times the glow is laid over itself, as in Flash. |
 | Filters ▸ Bevel | ✅ | A highlight and a shadow on opposite sides. |
-| Filters ▸ Gradient Glow / Gradient Bevel | ⬜ | Still missing — the only two of the seven not covered. |
+| Filters ▸ Gradient Glow / Gradient Bevel | ✅ | The blurred alpha silhouette looked up in a ramp, which is how Flash built them. One ramp in `Flashy.Filters` feeds the canvas pass, the SVG export (blur `SourceAlpha`, alpha into RGB, one `feComponentTransfer` table per channel), the exported player and the tween. |
 | Filters ▸ Adjust Color | ✅ | Brightness, contrast, saturation, hue. |
 | Filter presets, per-filter enable/disable | ◐ | Enable, disable, reorder and remove per filter. Saved presets are still missing. |
 
@@ -206,12 +206,12 @@ name — an entire class of Flash content is unreachable.
 | Feature | Flashy | Gap |
 | --- | --- | --- |
 | Document Settings (size, fps, background) | ✅ | — |
-| Match stage size to contents / printer | ⬜ | Missing. |
+| Match stage size to contents / printer | ◐ | Match Stage Size to Contents measures every frame of the scene through each object’s own matrix, resizes the stage and shifts the artwork to the origin. No printer support. |
 | Templates / New from Template | ⬜ | Missing. |
 | Recent files | ◐ | Desktop shell only. |
-| Save As / Save a Copy / Revert | ◐ | Save As exists; no Revert. |
+| Save As / Save a Copy / Revert | ◐ | Save As and Revert; no Save a Copy. Revert keeps a copy of the saved document rather than relying on undo history, which is bounded. |
 | Preferences | ✅ | — |
-| Keyboard shortcut customisation | ⬜ | Missing. |
+| Keyboard shortcut customisation | ✅ | Any menu command bindable to a chord, stored in localStorage. Overrides are consulted BEFORE the built-in chain rather than replacing it, so the defaults keep their careful ordering. |
 | Multiple documents / tabs in one window | ◐ | Desktop opens one document per window. |
 | AI Assistant | ✅ | Beyond Flash. |
 | SWF/FLA/XFL import, AVM1 + ABC decompilation | ✅ | Well beyond Flash. |
@@ -415,3 +415,67 @@ History replay and save-as-command.
     stop when the keyframes agree about how many stops there are.
 
     Covered by 11 specs in `tests/filters.spec.js`.
+
+### Wave 7b — the document-wide commands
+
+36. ✅ **Find and Replace.** Text, font, colour or symbol, across the whole
+    document or just the current scene. The four kinds differ only in which
+    field they read, so they share one walker — and the places artwork hides
+    (nested groups, library symbols, other scenes) are exactly the places a
+    hand-rolled per-kind search would forget.
+
+    Text honours match case, whole word and a regular expression; a half-typed
+    pattern finds nothing rather than throwing. Font, colour and symbol match
+    a whole FIELD, not a substring: "Arial" must not match "Arial Black". A
+    colour is normalised first, so `cc3344`, `#CC3344` and `#0F0` all mean
+    what the user meant. A symbol swap to a name not in the Library is
+    refused, because an instance pointing at nothing draws nothing and gives
+    no clue why.
+
+    The dialog keeps a live results list — each row says what and where, and
+    clicking it switches scene, layer and frame and selects the object. A hit
+    inside a library symbol has no stage position, so the row says to open the
+    symbol rather than appearing to ignore the click. Replace All is one undo
+    step and covers every hit, including the ones past the list’s 200-row cap,
+    which says what it dropped.
+
+37. ✅ **Match Stage Size to Contents.** Measures every frame of the scene, not
+    the one on screen — a stage sized to frame 1 clips the rest of the
+    animation, which is the opposite of what the command is for. Guide and
+    motion-guide layers are furniture and are excluded.
+
+    This needed a bounding box that did not exist: `getBounds` reads
+    x/y/width/height straight off an object, which is right for a selection
+    marquee and wrong for anything rotated — a 100px square turned 45 degrees
+    needs 141px each way. `objectBounds` walks the four corners through the
+    object’s own matrix instead. The artwork then MOVES: a stage is always 0,0
+    to width,height, so fitting content that starts at -40 means shifting
+    everything rather than inventing a negative stage. Guides move with it.
+
+38. ✅ **Revert.** Keeps a copy of the serialised document from the last save
+    or open, not a flag — undo history is bounded and a session can easily
+    make more changes than it holds. Confirms first, then clears the undo
+    stacks, because they describe a document that no longer exists.
+
+39. ✅ **Keyboard shortcut customisation.** Any menu command bindable to a
+    chord, in a searchable list, stored in localStorage.
+
+    The implementation is deliberately additive. Flashy’s shortcuts are a long
+    and carefully ORDERED chain of conditionals — several differ only by a
+    modifier, and the order is what keeps Ctrl+Shift+Z from being swallowed by
+    Ctrl+Z. So a user binding is an override table consulted BEFORE that chain,
+    not a rewrite of it: a binding wins outright and stops there, and
+    everything unbound falls through to the defaults unchanged.
+
+    `keyChord` upper-cases single letters, because the browser reports the
+    SHIFTED character — binding `Ctrl+Shift+k` while the user presses
+    `Ctrl+Shift+K` is a shortcut that never fires. One chord holds one command:
+    rebinding a taken chord takes it and says so, rather than leaving two
+    commands quietly fighting over a key.
+
+    Also in this wave: Ctrl+F reaches Find and Replace, and `showDialog` now
+    returns a reader for its own fields — a dialog whose body reacts to its
+    own inputs was otherwise reaching into the DOM by input order, which would
+    break the moment a field was added.
+
+    Covered by `tests/document-commands.spec.js` (21 specs).
