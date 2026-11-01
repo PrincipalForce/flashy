@@ -31,6 +31,13 @@ export default defineConfig({
       // app rather than a page from the dev server.
       name: "electron",
       testMatch: "**/*.espec.js",
+      /* One at a time. Every spec here spawns the same binary —
+         node_modules/electron/dist/electron — and Linux refuses to exec a
+         file another process still holds open for writing, so launching two
+         at once on CI fails with ETXTBSY. It is a race, so it struck one
+         spec per run and looked like that spec was flaky. */
+      fullyParallel: false,
+      workers: 1,
     },
   ],
   webServer: {
