@@ -15,7 +15,8 @@ var N=1;function uid(){return N++;}
 //
 // All default empty, so every other object type is unchanged.
 function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;}
-EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});c.id=uid();return c;};
+EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});/* `children` (a group's contents) holds OBJECTS, so the shallow slice above would hand the copy the originals and every edit to one group would show up in the other. Deep-clone it, the way KeyFrame.clone deep-clones its own object list. */
+if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
 function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.sound=null;}
@@ -482,7 +483,16 @@ var menus=[
     {label:"Fit in Window",action:"zoomFit",shortcut:"Ctrl+2"},
     {type:"sep"},
     {label:"Show Grid",action:"grid",shortcut:"Ctrl+''''"},
+    {label:"Show Rulers",action:"rulers",shortcut:"Ctrl+Alt+Shift+R"},
+    {label:"Show Guides",action:"guidesShow"},
+    {label:"Clear Guides",action:"guidesClear"},
+    {type:"sep"},
     {label:"Snap to Grid",action:"snap"},
+    {label:"Snap to Objects",action:"snapObjects"},
+    {label:"Snap to Guides",action:"snapGuides"},
+    {type:"sep"},
+    {label:"Onion Skin",action:"onionToggle",shortcut:"Alt+O"},
+    {label:"Onion Skin Outlines",action:"onionOutlines",shortcut:"Alt+Shift+O"},
     {type:"sep"},
     {label:"Hide Other Layers",action:"hideOthers"},
     {label:"Show All Layers",action:"showAllLayers"}
@@ -499,6 +509,24 @@ var menus=[
   {label:"Modify",items:[
     {label:"Convert to Symbol...",action:"convertSym",shortcut:"F8"},
     {label:"Convert Frames to Symbol...",action:"framesToSymbol"},
+    {type:"sep"},
+    {label:"Group",action:"group",shortcut:"Ctrl+G"},
+    {label:"Ungroup",action:"ungroup",shortcut:"Ctrl+Shift+G"},
+    {label:"Break Apart",action:"breakApart",shortcut:"Ctrl+B"},
+    {type:"sep"},
+    {label:"Bring to Front",action:"bringFront",shortcut:"Ctrl+Shift+Up"},
+    {label:"Bring Forward",action:"bringForward",shortcut:"Ctrl+Up"},
+    {label:"Send Backward",action:"sendBackward",shortcut:"Ctrl+Down"},
+    {label:"Send to Back",action:"sendBack",shortcut:"Ctrl+Shift+Down"},
+    {type:"sep"},
+    {label:"Flip Horizontal",action:"flipH"},
+    {label:"Flip Vertical",action:"flipV"},
+    {label:"Rotate 90° CW",action:"rot90cw"},
+    {label:"Rotate 90° CCW",action:"rot90ccw"},
+    {label:"Scale and Rotate...",action:"scaleRotate",shortcut:"Ctrl+Alt+S"},
+    {label:"Remove Transform",action:"transformReset",shortcut:"Ctrl+Shift+Z"},
+    {type:"sep"},
+    {label:"Distribute to Layers",action:"distributeToLayers",shortcut:"Ctrl+Shift+D"},
     {type:"sep"},
     {label:"Create Motion Tween",action:"motionTween"},
     {label:"Create Shape Tween",action:"shapeTween"},
@@ -542,6 +570,9 @@ var menus=[
     {label:"Color Mixer",action:"winColor",shortcut:"Shift+F9"},
     {label:"Library",action:"winLibrary",shortcut:"Ctrl+L"},
     {label:"Actions",action:"winActions",shortcut:"F9"},
+    {label:"Align",action:"winAlign",shortcut:"Ctrl+K"},
+    {label:"Info",action:"winInfo",shortcut:"Ctrl+I"},
+    {label:"Transform",action:"winTransform",shortcut:"Ctrl+T"},
     {label:"AI Assistant",action:"winAI"},
     {type:"sep"},
     {label:"Workspace: Animation",action:"wsAnimation"},
@@ -644,6 +675,28 @@ function closeMenus(){
 
 // === Toolbar ===
 var zoom=1,panX=0,panY=0,showGrid=false,snapGrid=false,gridSize=10;
+
+/* Snapping, rulers and guides.
+ *
+ * Grid snap was the only snap the editor had, and a grid is the one thing an
+ * animator turns off first — artwork lines up with other artwork, not with an
+ * arbitrary lattice. `snapObjects` snaps a dragged object's edges and centre
+ * to every other object's edges and centres; `snapGuides` snaps to the guides
+ * dragged off the rulers. Both report what they matched so the stage can draw
+ * the alignment line, which is most of what makes snapping trustworthy. */
+var snapObjects=true,snapGuides=true,showRulers=false,showGuides=true;
+var SNAP_TOL=6;              // screen pixels, so the feel is zoom-independent
+var snapHints=[];            // [{axis:"x"|"y", at:stageCoord}] drawn this frame
+var RULER_W=16;              // thickness of the ruler strips, in screen pixels
+var guideDrag=null;          // {axis, at} while a guide is being dragged
+
+/* Onion skinning.
+ *
+ * `onionBefore`/`onionAfter` are frame counts, not a marker range, because a
+ * count is what an animator actually thinks in ("show me the last two
+ * drawings"). Outline mode draws silhouettes rather than ghosts, which is the
+ * only way to read more than two or three overlapping frames at once. */
+var onionOn=false,onionOutlines=false,onionBefore=2,onionAfter=1;
 function buildToolbar(){
   var tb=document.getElementById("toolbar");
   if(!tb)return;
@@ -870,6 +923,9 @@ function render(){
     ctx.strokeRect(0,0,doc.width,doc.height);
     ctx.setLineDash([]);
   }
+  // Onion skin sits UNDER the live drawing: the frames you are working from
+  // must never obscure the frame you are working on.
+  if(onionOn)drawOnionSkin();
   // Render layers bottom to top, rigs composed through their hierarchy, and
   // each masked run clipped to the silhouette of the mask above it.
   var groups=maskGroups(currentLayers());
@@ -903,12 +959,246 @@ function render(){
       ctx.beginPath();ctx.moveTo(panX,py);ctx.lineTo(panX+sw,py);ctx.stroke();
     }
   }
+  // Guides and their alignment feedback live above the artwork but below the
+  // selection chrome: they are stage furniture, not part of the drawing.
+  if(showGuides)drawGuides();
+  drawSnapHints();
   ctx.restore();
+  if(showRulers)drawRulers();
   // selection handles
   selection.forEach(function(o){drawSel(o);});
   // tool preview
   if(dragging&&dragPreview)drawPrev();
   drawEraserGhost();
+}
+
+/* ------------------------------------------------------------------ *
+ * Onion skinning
+ *
+ * Draws the frames around the current one, faded, under the live drawing.
+ * Hidden and locked-out layers are skipped the same way the live render skips
+ * them, so turning onion skin on never shows you something the stage does not.
+ *
+ * Ghost mode paints the real artwork through a reduced globalAlpha (which
+ * composes with each object's own alpha, so a half-transparent shape ghosts
+ * half as strongly — correct). Outline mode strokes silhouettes instead,
+ * because past about three overlapping ghosts the stage turns to mud.
+ * ------------------------------------------------------------------ */
+function drawOnionSkin(){
+  var layers=currentLayers().filter(layerShows).filter(function(l){
+    // A guide layer is reference art that is already permanently visible;
+    // ghosting it would double every line on the stage.
+    return (l.layerType||"normal")!=="guide";
+  });
+  if(!layers.length)return;
+  var frames=[];
+  for(var d=onionBefore;d>=1;d--)if(curFrame-d>=1)frames.push({f:curFrame-d,d:d,past:true});
+  for(var a=1;a<=onionAfter;a++)if(curFrame+a<=currentMaxFrame())frames.push({f:curFrame+a,d:a,past:false});
+  frames.forEach(function(e){
+    // Nearest neighbour is the one you are matching against, so it is the
+    // strongest; each step out halves again.
+    var strength=0.38/Math.pow(1.6,e.d-1);
+    var objs=frameObjects(layers,e.f);
+    if(!objs.length)return;
+    ctx.save();
+    if(onionOutlines){
+      ctx.strokeStyle=e.past?"rgba(80,110,220,"+(strength+0.3)+")":"rgba(220,90,70,"+(strength+0.3)+")";
+      ctx.lineWidth=1/zoom;
+      objs.forEach(function(o){
+        ctx.beginPath();
+        addObjectOutline(ctx,o);
+        ctx.stroke();
+      });
+    }else{
+      ctx.globalAlpha=strength;
+      rigDrawPlan(objs).forEach(function(en){paintPlanned(ctx,en,{});});
+    }
+    ctx.restore();
+  });
+}
+
+/** Keep the timeline header's onion-skin controls in step with the state. */
+function updateOnionUI(){
+  var b=document.getElementById("tlOnion");
+  if(b)b.className="tl-zoom-btn wide"+(onionOn?" active":"");
+  var o=document.getElementById("tlOnionOutline");
+  if(o)o.className="tl-zoom-btn wide"+(onionOn&&onionOutlines?" active":"");
+  var bef=document.getElementById("tlOnionBefore");
+  if(bef&&String(onionBefore)!==bef.value)bef.value=onionBefore;
+  var aft=document.getElementById("tlOnionAfter");
+  if(aft&&String(onionAfter)!==aft.value)aft.value=onionAfter;
+}
+
+/** Guides: `doc.guides` is {v:[x,…], h:[y,…]} in stage coordinates. */
+function docGuides(){
+  if(!doc.guides)doc.guides={v:[],h:[]};
+  if(!doc.guides.v)doc.guides.v=[];
+  if(!doc.guides.h)doc.guides.h=[];
+  return doc.guides;
+}
+
+function drawGuides(){
+  var g=docGuides();
+  ctx.save();
+  ctx.lineWidth=1/zoom;
+  ctx.setLineDash([]);
+  ctx.strokeStyle="rgba(0,190,90,0.85)";
+  g.v.forEach(function(x){
+    ctx.beginPath();ctx.moveTo(x,-10000);ctx.lineTo(x,10000);ctx.stroke();
+  });
+  g.h.forEach(function(y){
+    ctx.beginPath();ctx.moveTo(-10000,y);ctx.lineTo(10000,y);ctx.stroke();
+  });
+  if(guideDrag){
+    ctx.strokeStyle="rgba(0,190,90,0.45)";
+    ctx.beginPath();
+    if(guideDrag.axis==="v"){ctx.moveTo(guideDrag.at,-10000);ctx.lineTo(guideDrag.at,10000);}
+    else{ctx.moveTo(-10000,guideDrag.at);ctx.lineTo(10000,guideDrag.at);}
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** The line a snap matched against, so the user can see why it moved. */
+function drawSnapHints(){
+  if(!snapHints.length)return;
+  ctx.save();
+  ctx.strokeStyle="rgba(255,60,160,0.9)";
+  ctx.lineWidth=1/zoom;
+  ctx.setLineDash([4/zoom,3/zoom]);
+  snapHints.forEach(function(h){
+    ctx.beginPath();
+    if(h.axis==="x"){ctx.moveTo(h.at,-10000);ctx.lineTo(h.at,10000);}
+    else{ctx.moveTo(-10000,h.at);ctx.lineTo(10000,h.at);}
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+/* Rulers, drawn on the stage canvas rather than as separate DOM strips.
+ * One renderer means one coordinate system: the tick spacing has to follow
+ * `zoom` and `panX/panY` exactly, and a DOM ruler would have to re-derive both.
+ * Dragging out of a ruler creates a guide — see rulerHitAxis / onMouseDown. */
+function rulerStep(){
+  // Keep labelled ticks at least ~50 screen pixels apart, on 1-2-5 steps.
+  var want=50/zoom,pow=Math.pow(10,Math.floor(Math.log(want)/Math.LN10));
+  var mults=[1,2,5,10];
+  for(var i=0;i<mults.length;i++)if(pow*mults[i]>=want)return pow*mults[i];
+  return pow*10;
+}
+
+function drawRulers(){
+  var step=rulerStep();
+  ctx.save();
+  ctx.fillStyle="#2A2A2A";
+  ctx.fillRect(0,0,canvasW,RULER_W);
+  ctx.fillRect(0,0,RULER_W,canvasH);
+  ctx.strokeStyle="#4A4A4A";ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(0,RULER_W+0.5);ctx.lineTo(canvasW,RULER_W+0.5);
+  ctx.moveTo(RULER_W+0.5,0);ctx.lineTo(RULER_W+0.5,canvasH);
+  ctx.stroke();
+  ctx.fillStyle="#AAA";
+  ctx.font="8px sans-serif";
+  ctx.strokeStyle="#777";
+  // Horizontal ruler: stage units across the top.
+  var first=Math.floor((-panX/zoom)/step)*step;
+  ctx.textAlign="left";ctx.textBaseline="top";
+  for(var x=first;x*zoom+panX<canvasW;x+=step){
+    var sx=Math.round(x*zoom+panX)+0.5;
+    if(sx<RULER_W)continue;
+    ctx.beginPath();ctx.moveTo(sx,RULER_W-5);ctx.lineTo(sx,RULER_W);ctx.stroke();
+    ctx.fillText(String(Math.round(x)),sx+2,2);
+  }
+  var firstY=Math.floor((-panY/zoom)/step)*step;
+  for(var y=firstY;y*zoom+panY<canvasH;y+=step){
+    var sy=Math.round(y*zoom+panY)+0.5;
+    if(sy<RULER_W)continue;
+    ctx.beginPath();ctx.moveTo(RULER_W-5,sy);ctx.lineTo(RULER_W,sy);ctx.stroke();
+    ctx.save();
+    ctx.translate(2,sy+2);
+    ctx.fillText(String(Math.round(y)),0,0);
+    ctx.restore();
+  }
+  // Where the pointer is, on both rulers — the readout the Info panel repeats
+  // numerically. Flash drew this and it is how you hit a coordinate by eye.
+  if(stageHover){
+    ctx.fillStyle="rgba(255,120,60,0.9)";
+    var hx=stageHover.x*zoom+panX,hy=stageHover.y*zoom+panY;
+    ctx.fillRect(hx-0.5,0,1,RULER_W);
+    ctx.fillRect(0,hy-0.5,RULER_W,1);
+  }
+  ctx.restore();
+}
+
+/** Which ruler, if any, a screen point is over. */
+function rulerHitAxis(cx,cy){
+  if(!showRulers)return null;
+  if(cy<=RULER_W&&cx>RULER_W)return "h";   // top ruler drags a horizontal guide
+  if(cx<=RULER_W&&cy>RULER_W)return "v";   // left ruler drags a vertical guide
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Snapping
+ *
+ * Collects candidate lines — other objects' edges and centres, the stage's
+ * own edges and centre, the guides — and pulls the dragged box onto the
+ * nearest one within SNAP_TOL *screen* pixels. The tolerance is in screen
+ * space on purpose: at 400% zoom a 6-stage-unit pull would feel like a magnet,
+ * and at 25% it would feel like nothing.
+ *
+ * Returns {dx,dy} to add to the proposed position, and records what matched in
+ * `snapHints` so render() can draw it.
+ * ------------------------------------------------------------------ */
+function snapCandidates(exclude){
+  var xs=[],ys=[];
+  if(snapObjects){
+    xs.push(0,doc.width/2,doc.width);
+    ys.push(0,doc.height/2,doc.height);
+    currentLayers().filter(layerShows).forEach(function(l){
+      frameObjects([l],curFrame).forEach(function(o){
+        if(exclude&&exclude.indexOf(o)>=0)return;
+        xs.push(o.x,o.x+(o.width||0)/2,o.x+(o.width||0));
+        ys.push(o.y,o.y+(o.height||0)/2,o.y+(o.height||0));
+      });
+    });
+  }
+  if(snapGuides){
+    var g=docGuides();
+    g.v.forEach(function(v){xs.push(v);});
+    g.h.forEach(function(h){ys.push(h);});
+  }
+  return {xs:xs,ys:ys};
+}
+
+/**
+ * Snap a box. `box` is {x,y,w,h} in stage coordinates.
+ * `exclude` is the objects being dragged, which must not snap to themselves.
+ */
+function snapBox(box,exclude){
+  snapHints=[];
+  if(!snapObjects&&!snapGuides)return {dx:0,dy:0};
+  var cand=snapCandidates(exclude);
+  var tol=SNAP_TOL/zoom;
+  var best={dx:0,dy:0},bx=tol+1,by=tol+1,hx=null,hy=null;
+  [box.x,box.x+box.w/2,box.x+box.w].forEach(function(edge){
+    cand.xs.forEach(function(c){
+      var d=c-edge;
+      if(Math.abs(d)<Math.abs(bx)){bx=d;best.dx=d;hx=c;}
+    });
+  });
+  [box.y,box.y+box.h/2,box.y+box.h].forEach(function(edge){
+    cand.ys.forEach(function(c){
+      var d=c-edge;
+      if(Math.abs(d)<Math.abs(by)){by=d;best.dy=d;hy=c;}
+    });
+  });
+  if(Math.abs(bx)>tol){best.dx=0;hx=null;}
+  if(Math.abs(by)>tol){best.dy=0;hy=null;}
+  if(hx!=null)snapHints.push({axis:"x",at:hx});
+  if(hy!=null)snapHints.push({axis:"y",at:hy});
+  return best;
 }
 
 /* ------------------------------------------------------------------ *
@@ -3057,6 +3347,15 @@ function paintObj(cx,o,opts){
   }else{
     cx.translate((o.x||0)+hw,(o.y||0)+hh);
     if(o.rotation)cx.rotate(o.rotation*Math.PI/180);
+    /* Skew, in the same slot and the same order as DisplayObject._applyTransform
+       in flashy.js: rotate, then skew, then scale. `skewX`/`skewY` have been on
+       every object since the beginning and were applied by nothing — stored,
+       serialized, honoured by the engine, and invisible on the stage and in
+       every export. The Transform panel is the first thing that sets them. */
+    if(o.skewX||o.skewY){
+      cx.transform(1,Math.tan((o.skewY||0)*Math.PI/180),
+                     Math.tan((o.skewX||0)*Math.PI/180),1,0,0);
+    }
     cx.scale(o.scaleX||1,o.scaleY||1);
   }
   if(o.blendMode&&o.blendMode!=="source-over")cx.globalCompositeOperation=o.blendMode;
@@ -3249,8 +3548,46 @@ function paintObj(cx,o,opts){
       cx.fillText("Missing: "+(o.symbolName||"?"),0,0);
       cx.textAlign="start";
     }
+  }else if(o.type==="group"){
+    /* A group is a transform plus a child list, drawn in group space — the
+       same construction as a symbol instance, minus the library entry. That
+       is exactly the distinction Flash drew: a group is artwork you want to
+       handle as one piece, a symbol is artwork you want to reuse. Nesting is
+       bounded by the same depth guard, since a group cannot contain itself
+       but can contain symbols that contain groups. */
+    if(depth<SYMBOL_MAX_DEPTH){
+      cx.save();
+      cx.translate(-hw,-hh);
+      groupChildScale(cx,o);
+      var gk=o.children||[];
+      for(var gc=0;gc<gk.length;gc++)paintObj(cx,gk[gc],{chrome:false,depth:depth+1});
+      cx.restore();
+      if(chrome){
+        // Flash drew a thin box around a group so you could tell at a glance
+        // that clicking it would select the whole thing.
+        cx.globalAlpha=alpha*0.55;
+        cx.strokeStyle="#55DD88";cx.lineWidth=1/((zoom||1));
+        cx.setLineDash([]);
+        cx.strokeRect(-hw,-hh,o.width,o.height);
+      }
+    }
   }
   cx.restore();
+}
+
+/**
+ * Scale a group's children from the box they were grouped in to the box the
+ * group now occupies.
+ *
+ * `groupW`/`groupH` are the authored size, the same role `pathW`/`pathH` play
+ * for a traced path: without them, resizing a group would move its children's
+ * coordinates out from under it and the group would come apart.
+ */
+function groupChildScale(cx,o){
+  var gw=o.groupW||Math.abs(o.width)||1,gh=o.groupH||Math.abs(o.height)||1;
+  var sx=gw?Math.abs(o.width||gw)/gw:1,sy=gh?Math.abs(o.height||gh)/gh:1;
+  if(sx!==1||sy!==1)cx.scale(sx,sy);
+  return {sx:sx,sy:sy};
 }
 
 // The stage draws with authoring chrome; everything else goes through paintObj
@@ -3285,6 +3622,9 @@ function interpObj(a,b,t,easing){
   tmp.width=lerp("width",0);tmp.height=lerp("height",0);
   tmp.rotation=lerp("rotation",0);
   tmp.scaleX=lerp("scaleX",1);tmp.scaleY=lerp("scaleY",1);
+  // Skew tweens like every other transform channel. It did not before, so a
+  // motion tween between two differently skewed keyframes snapped at the end.
+  tmp.skewX=lerp("skewX",0);tmp.skewY=lerp("skewY",0);
   tmp.alpha=lerp("alpha",1);
   return tmp;
 }
@@ -3428,6 +3768,8 @@ function drawPrev(){
    capped at about 128px and would need regenerating on every size and zoom
    change. Seeing exactly what the brush will take is most of the tool. */
 var eraserHover=null;
+/** Last pointer position in stage coordinates, for the rulers and Info panel. */
+var stageHover=null;
 function drawEraserGhost(){
   if(curTool!=="eraser"||!eraserHover)return;
   var c=s2c(eraserHover.x,eraserHover.y);
@@ -3480,8 +3822,23 @@ function initMouse(){
     eraserHover=getStagePos(e);
     if(!dragging)render();
   });
+  /* The pointer's stage position, for the Info panel's readout and the ruler
+     tick markers. Tracked on every move, but it only forces a repaint when
+     something is actually showing it. */
+  canvas.addEventListener("pointermove",function(e){
+    stageHover=getStagePos(e);
+    updateInfoPanel();
+    if(showRulers&&!dragging)render();
+    // Hovering a ruler is how a guide is discovered, so say so.
+    var r=canvas.getBoundingClientRect();
+    var ax=rulerHitAxis(e.clientX-r.left,e.clientY-r.top);
+    if(ax&&!dragging)canvas.style.cursor=ax==="h"?"row-resize":"col-resize";
+    else if(canvas.style.cursor==="row-resize"||canvas.style.cursor==="col-resize")canvas.style.cursor="";
+  });
   canvas.addEventListener("pointerleave",function(){
+    stageHover=null;updateInfoPanel();
     if(eraserHover){eraserHover=null;render();}
+    else if(showRulers)render();
   });
   canvas.addEventListener("pointerup",onMouseUp);
   // A cancelled pointer (OS gesture, palm rejection) must not leave `dragging`
@@ -3560,6 +3917,33 @@ function onDblClick(e){
 function onMouseDown(e){
   if(e.button===2)return;
   var p=getStagePos(e);
+  /* A press that starts on a ruler pulls out a guide, whatever tool is
+     selected — the rulers are stage furniture, not a tool mode. */
+  var rc=canvas.getBoundingClientRect();
+  var rax=rulerHitAxis(e.clientX-rc.left,e.clientY-rc.top);
+  if(rax){
+    dragging=true;
+    guideDrag={axis:rax==="h"?"h":"v",at:rax==="h"?p.y:p.x,created:true};
+    render();
+    return;
+  }
+  /* Dragging an existing guide moves it; dragging it back onto its ruler (or
+     off the stage) deletes it, which is how Flash removed one. */
+  if(showGuides&&curTool==="select"){
+    var g=docGuides(),tol=SNAP_TOL/zoom;
+    for(var gi=0;gi<g.v.length;gi++){
+      if(Math.abs(g.v[gi]-p.x)<=tol){
+        pushUndo();g.v.splice(gi,1);
+        dragging=true;guideDrag={axis:"v",at:p.x};render();return;
+      }
+    }
+    for(var gj=0;gj<g.h.length;gj++){
+      if(Math.abs(g.h[gj]-p.y)<=tol){
+        pushUndo();g.h.splice(gj,1);
+        dragging=true;guideDrag={axis:"h",at:p.y};render();return;
+      }
+    }
+  }
   dragging=true;dragStart={x:p.x,y:p.y};dragCur={x:p.x,y:p.y};
   if(curTool==="pose"){
     poseMouseDown(e,p);
@@ -3619,6 +4003,11 @@ function onMouseDown(e){
 function onMouseMove(e){
   if(!dragging)return;
   var p=getStagePos(e);
+  if(guideDrag){
+    guideDrag.at=guideDrag.axis==="v"?p.x:p.y;
+    render();
+    return;
+  }
   dragCur={x:p.x,y:p.y};
   if(curTool==="pose"){
     poseMouseMove(e,p);
@@ -3627,13 +4016,32 @@ function onMouseMove(e){
       dragPreview.x2=p.x;dragPreview.y2=p.y;
     }else if(selection.length>0&&moveObjStarts.length>0){
       var dx=p.x-moveStartX,dy=p.y-moveStartY;
+      if(snapGrid){
+        /* Grid snap applies to the SELECTION, not to each object: snapping
+           every object independently collapsed the spacing between them,
+           so dragging two shapes a few pixels apart onto the grid stacked
+           them on the same line. */
+        var g0=getBounds(moveObjStarts.map(function(s,i){
+          return {x:s.x,y:s.y,width:selection[i].width||0,height:selection[i].height||0};
+        }));
+        dx=Math.round((g0.x+dx)/gridSize)*gridSize-g0.x;
+        dy=Math.round((g0.y+dy)/gridSize)*gridSize-g0.y;
+      }
+      /* Object and guide snapping, on the selection's bounding box. Alt
+         suspends it, for the one time in ten you need to land between two
+         things that want to capture you. */
+      if(!e.altKey){
+        var box=getBounds(moveObjStarts.map(function(s,i){
+          return {x:s.x+dx,y:s.y+dy,width:selection[i].width||0,height:selection[i].height||0};
+        }));
+        var sn=snapBox({x:box.x,y:box.y,w:box.w,h:box.h},selection);
+        dx+=sn.dx;dy+=sn.dy;
+      }else{
+        snapHints=[];
+      }
       for(var i=0;i<selection.length;i++){
         selection[i].x=moveObjStarts[i].x+dx;
         selection[i].y=moveObjStarts[i].y+dy;
-        if(snapGrid){
-          selection[i].x=Math.round(selection[i].x/gridSize)*gridSize;
-          selection[i].y=Math.round(selection[i].y/gridSize)*gridSize;
-        }
       }
     }
   }else if(curTool==="rect"||curTool==="oval"||curTool==="line"||curTool==="text"){
@@ -3647,6 +4055,22 @@ function onMouseMove(e){
   render();
 }
 function onMouseUp(e){
+  if(guideDrag){
+    var gp=getStagePos(e);
+    var at=guideDrag.axis==="v"?gp.x:gp.y;
+    var limit=guideDrag.axis==="v"?doc.width:doc.height;
+    // Dropped outside the stage (or back on the ruler): the guide is thrown
+    // away. Flash deleted a guide exactly this way.
+    if(at>=-RULER_W/zoom&&at<=limit+RULER_W/zoom){
+      if(guideDrag.created)pushUndo();
+      var gg=docGuides();
+      (guideDrag.axis==="v"?gg.v:gg.h).push(Math.round(at));
+      touchDoc();
+    }
+    guideDrag=null;dragging=false;
+    render();
+    return;
+  }
   if(curTool==="pose"){
     poseMouseUp();
     dragging=false;dragPreview=null;
@@ -3675,6 +4099,7 @@ function onMouseUp(e){
       });
       if(movedAny&&movePreSnap)pushUndoSnap(movePreSnap);
       moveObjStarts=[];movePreSnap=null;
+      snapHints=[];
     }
     updateProps();
   }else if(curTool==="rect"||curTool==="oval"||curTool==="line"){
@@ -4281,6 +4706,27 @@ function initTLClicks(){
   if(zfit)zfit.addEventListener("click",tlZoomFit);
   var zlbl=document.getElementById("tlZoomLabel");
   if(zlbl)zlbl.textContent=tlZoomText();
+
+  var onBtn=document.getElementById("tlOnion");
+  var onOut=document.getElementById("tlOnionOutline");
+  var onBef=document.getElementById("tlOnionBefore");
+  var onAft=document.getElementById("tlOnionAfter");
+  if(onBtn)onBtn.addEventListener("click",function(){doAction("onionToggle");});
+  if(onOut)onOut.addEventListener("click",function(){doAction("onionOutlines");});
+  /* Typing a count turns onion skin ON: setting a range and seeing nothing
+     happen because the master toggle was off is a dead end people do not
+     recover from on their own. */
+  if(onBef)onBef.addEventListener("change",function(){
+    onionBefore=Math.max(0,Math.min(12,parseInt(onBef.value,10)||0));
+    if(onionBefore||onionAfter)onionOn=true;
+    updateOnionUI();render();
+  });
+  if(onAft)onAft.addEventListener("change",function(){
+    onionAfter=Math.max(0,Math.min(12,parseInt(onAft.value,10)||0));
+    if(onionBefore||onionAfter)onionOn=true;
+    updateOnionUI();render();
+  });
+  updateOnionUI();
 
   /** Pointer position in timeline content coordinates. */
   function tlPos(e){
@@ -5003,6 +5449,255 @@ function updateProps(){
 }
 
 // === Color System ===
+/* ------------------------------------------------------------------ *
+ * Align, Info and Transform panels
+ *
+ * Three small panels that together replace a lot of arithmetic. Flash had all
+ * three and they were the difference between "nudge it until it looks right"
+ * and "put it at 240, 180, 90° — done".
+ *
+ * They are rebuilt on every refresh like the Properties panel. That is cheap
+ * (a few dozen nodes) and it is the only way a readout stays true while you
+ * drag something across the stage.
+ * ------------------------------------------------------------------ */
+
+/** A row of small square buttons, the Align panel's whole vocabulary. */
+function iconBtnRow(host,items){
+  var r=document.createElement("div");
+  r.className="align-row";
+  items.forEach(function(it){
+    if(it.gap){
+      var sp=document.createElement("span");
+      sp.className="align-gap";
+      r.appendChild(sp);
+      return;
+    }
+    var b=document.createElement("button");
+    b.type="button";
+    b.className="align-btn"+(it.active?" active":"");
+    b.title=it.title;
+    b.appendChild(svgIcon(it.svg));
+    b.addEventListener("click",it.onClick);
+    r.appendChild(b);
+  });
+  host.appendChild(r);
+  return r;
+}
+
+function alignSectionLabel(host,text){
+  var d=document.createElement("div");
+  d.className="props-section";
+  d.textContent=text;
+  host.appendChild(d);
+  return d;
+}
+
+/* The icon vocabulary. Each is a 14x14 glyph: bars showing what moves where,
+   which reads faster than words at this size — and is what Flash drew. */
+var ALIGN_ICONS={
+  left:'<rect x="1" y="1" width="1.4" height="12" fill="currentColor"/><rect x="3" y="3" width="9" height="3" fill="currentColor"/><rect x="3" y="8" width="5" height="3" fill="currentColor"/>',
+  hcenter:'<rect x="6.3" y="1" width="1.4" height="12" fill="currentColor"/><rect x="2" y="3" width="10" height="3" fill="currentColor"/><rect x="4" y="8" width="6" height="3" fill="currentColor"/>',
+  right:'<rect x="11.6" y="1" width="1.4" height="12" fill="currentColor"/><rect x="2" y="3" width="9" height="3" fill="currentColor"/><rect x="6" y="8" width="5" height="3" fill="currentColor"/>',
+  top:'<rect x="1" y="1" width="12" height="1.4" fill="currentColor"/><rect x="3" y="3" width="3" height="9" fill="currentColor"/><rect x="8" y="3" width="3" height="5" fill="currentColor"/>',
+  vcenter:'<rect x="1" y="6.3" width="12" height="1.4" fill="currentColor"/><rect x="3" y="2" width="3" height="10" fill="currentColor"/><rect x="8" y="4" width="3" height="6" fill="currentColor"/>',
+  bottom:'<rect x="1" y="11.6" width="12" height="1.4" fill="currentColor"/><rect x="3" y="2" width="3" height="9" fill="currentColor"/><rect x="8" y="6" width="3" height="5" fill="currentColor"/>',
+  distH:'<rect x="1" y="3" width="2.5" height="8" fill="currentColor"/><rect x="6" y="3" width="2.5" height="8" fill="currentColor"/><rect x="11" y="3" width="2.5" height="8" fill="currentColor"/>',
+  distV:'<rect x="3" y="1" width="8" height="2.5" fill="currentColor"/><rect x="3" y="6" width="8" height="2.5" fill="currentColor"/><rect x="3" y="11" width="8" height="2.5" fill="currentColor"/>',
+  spaceH:'<rect x="1" y="2" width="3" height="10" fill="currentColor"/><rect x="10" y="2" width="3" height="10" fill="currentColor"/><path d="M5,7 L9,7" stroke="currentColor" stroke-width="1.2"/><path d="M5,5 L5,9 M9,5 L9,9" stroke="currentColor" stroke-width="1"/>',
+  spaceV:'<rect x="2" y="1" width="10" height="3" fill="currentColor"/><rect x="2" y="10" width="10" height="3" fill="currentColor"/><path d="M7,5 L7,9" stroke="currentColor" stroke-width="1.2"/><path d="M5,5 L9,5 M5,9 L9,9" stroke="currentColor" stroke-width="1"/>',
+  matchW:'<rect x="1" y="3" width="12" height="3" fill="none" stroke="currentColor"/><rect x="1" y="8" width="12" height="3" fill="currentColor"/>',
+  matchH:'<rect x="3" y="1" width="3" height="12" fill="none" stroke="currentColor"/><rect x="8" y="1" width="3" height="12" fill="currentColor"/>',
+  matchWH:'<rect x="1" y="1" width="12" height="12" fill="none" stroke="currentColor"/><rect x="3" y="3" width="8" height="8" fill="currentColor"/>'
+};
+
+function updateAlignPanel(){
+  var host=document.getElementById("alignPanel");
+  if(!host)return;
+  host.textContent="";
+
+  var hint=document.createElement("div");
+  hint.className="props-note";
+  hint.textContent=alignToStage
+    ? "Relative to the stage."
+    : "Relative to the selection. Turn on To Stage to use the stage instead.";
+  host.appendChild(hint);
+
+  var stageRow=document.createElement("div");
+  stageRow.className="align-row";
+  var sb=document.createElement("button");
+  sb.type="button";
+  sb.className="align-wide"+(alignToStage?" active":"");
+  sb.textContent="To Stage";
+  sb.title="Align relative to the stage rather than to the selection";
+  sb.addEventListener("click",function(){doAction("alignToStage");});
+  stageRow.appendChild(sb);
+  host.appendChild(stageRow);
+
+  alignSectionLabel(host,"Align");
+  iconBtnRow(host,[
+    {title:"Align left edges",svg:ALIGN_ICONS.left,onClick:function(){doAction("alignLeft");}},
+    {title:"Align horizontal centres",svg:ALIGN_ICONS.hcenter,onClick:function(){doAction("alignHCenter");}},
+    {title:"Align right edges",svg:ALIGN_ICONS.right,onClick:function(){doAction("alignRight");}},
+    {gap:true},
+    {title:"Align top edges",svg:ALIGN_ICONS.top,onClick:function(){doAction("alignTop");}},
+    {title:"Align vertical centres",svg:ALIGN_ICONS.vcenter,onClick:function(){doAction("alignVCenter");}},
+    {title:"Align bottom edges",svg:ALIGN_ICONS.bottom,onClick:function(){doAction("alignBottom");}}
+  ]);
+
+  alignSectionLabel(host,"Distribute");
+  iconBtnRow(host,[
+    {title:"Distribute horizontal centres evenly",svg:ALIGN_ICONS.distH,onClick:function(){doAction("alignDistH");}},
+    {title:"Distribute vertical centres evenly",svg:ALIGN_ICONS.distV,onClick:function(){doAction("alignDistV");}},
+    {gap:true},
+    {title:"Space evenly horizontally (equal gaps)",svg:ALIGN_ICONS.spaceH,onClick:function(){doAction("alignSpaceH");}},
+    {title:"Space evenly vertically (equal gaps)",svg:ALIGN_ICONS.spaceV,onClick:function(){doAction("alignSpaceV");}}
+  ]);
+
+  alignSectionLabel(host,"Match size");
+  iconBtnRow(host,[
+    {title:"Match width",svg:ALIGN_ICONS.matchW,onClick:function(){doAction("alignMatchW");}},
+    {title:"Match height",svg:ALIGN_ICONS.matchH,onClick:function(){doAction("alignMatchH");}},
+    {title:"Match width and height",svg:ALIGN_ICONS.matchWH,onClick:function(){doAction("alignMatchWH");}}
+  ]);
+
+  var count=document.createElement("div");
+  count.className="props-note";
+  count.textContent=selection.length===0?"Nothing selected."
+    :selection.length===1?"1 object selected."
+    :selection.length+" objects selected.";
+  host.appendChild(count);
+}
+
+/**
+ * The Info panel: the selection's box, and the pointer's position.
+ *
+ * Rebuilt on pointer move, so it is deliberately tiny — six rows of text,
+ * no inputs. Editing happens in Properties and Transform; this one is a
+ * readout, which is what makes it safe to update constantly.
+ */
+function updateInfoPanel(){
+  var host=document.getElementById("infoPanel");
+  if(!host)return;
+  host.textContent="";
+  var pair=function(label,value){
+    var r=document.createElement("div");
+    r.className="info-row";
+    var l=document.createElement("span");l.className="info-label";l.textContent=label;
+    var v=document.createElement("span");v.className="info-value";v.textContent=value;
+    r.appendChild(l);r.appendChild(v);
+    host.appendChild(r);
+  };
+  var rnd=function(n){return Math.round(n*10)/10;};
+  alignSectionLabel(host,"Selection");
+  if(selection.length){
+    var b=getBounds(selection);
+    pair("W",rnd(b.w)+" px");
+    pair("H",rnd(b.h)+" px");
+    pair("X",rnd(b.x)+" px");
+    pair("Y",rnd(b.y)+" px");
+    pair("Objects",String(selection.length));
+  }else{
+    pair("W","—");pair("H","—");pair("X","—");pair("Y","—");
+  }
+  alignSectionLabel(host,"Pointer");
+  if(stageHover){
+    pair("X",rnd(stageHover.x)+" px");
+    pair("Y",rnd(stageHover.y)+" px");
+    // Inside or outside the stage matters: a lot of "where did my drawing go"
+    // is artwork placed on the pasteboard.
+    pair("On stage",(stageHover.x>=0&&stageHover.y>=0&&
+      stageHover.x<=doc.width&&stageHover.y<=doc.height)?"yes":"no");
+  }else{
+    pair("X","—");pair("Y","—");
+  }
+  alignSectionLabel(host,"Document");
+  pair("Stage",doc.width+" × "+doc.height);
+  pair("Zoom",Math.round(zoom*100)+"%");
+  pair("Frame",curFrame+" / "+currentMaxFrame());
+}
+
+/**
+ * The Transform panel: numeric scale, rotate and skew for the selection.
+ *
+ * Properties already edits one object's position and size. This one edits the
+ * TRANSFORM — and applies to a whole selection at once, which Properties does
+ * not, so "rotate all of these 15°" is one action.
+ */
+function updateTransformPanel(){
+  var host=document.getElementById("transformPanel");
+  if(!host)return;
+  host.textContent="";
+  if(!selection.length){
+    var n=document.createElement("div");
+    n.className="props-note";
+    n.textContent="Select one or more objects to transform them.";
+    host.appendChild(n);
+    return;
+  }
+  var one=selection.length===1?selection[0]:null;
+  var numRow=function(label,value,onChange,unit){
+    var r=document.createElement("div");
+    r.className="props-row";
+    var l=document.createElement("label");l.className="props-label";l.textContent=label+":";
+    r.appendChild(l);
+    var i=document.createElement("input");
+    i.className="props-input";i.type="text";i.value=value;
+    i.addEventListener("change",function(){
+      var v=parseFloat(i.value);
+      if(isNaN(v))return;
+      pushUndo();onChange(v);fullRefresh();
+    });
+    r.appendChild(i);
+    if(unit){
+      var u=document.createElement("span");u.className="props-unit";u.textContent=unit;
+      r.appendChild(u);
+    }
+    host.appendChild(r);
+  };
+
+  alignSectionLabel(host,"Scale");
+  numRow("Width",one?Math.round((one.scaleX||1)*1000)/10:100,function(v){
+    selection.forEach(function(o){o.scaleX=(o.scaleX||1)<0?-(v/100):(v/100);});
+  },"%");
+  numRow("Height",one?Math.round((one.scaleY||1)*1000)/10:100,function(v){
+    selection.forEach(function(o){o.scaleY=(o.scaleY||1)<0?-(v/100):(v/100);});
+  },"%");
+
+  alignSectionLabel(host,"Rotate");
+  numRow("Angle",one?Math.round((one.rotation||0)*10)/10:0,function(v){
+    selection.forEach(function(o){o.rotation=v;});
+  },"°");
+
+  alignSectionLabel(host,"Skew");
+  numRow("Horizontal",one?(one.skewX||0):0,function(v){
+    selection.forEach(function(o){o.skewX=v;});
+  },"°");
+  numRow("Vertical",one?(one.skewY||0):0,function(v){
+    selection.forEach(function(o){o.skewY=v;});
+  },"°");
+
+  var acts=document.createElement("div");
+  acts.className="props-row";
+  acts.style.cssText="flex-wrap:wrap;gap:2px";
+  [["Flip H","flipH"],["Flip V","flipV"],["90° CW","rot90cw"],["90° CCW","rot90ccw"],
+   ["Reset","transformReset"],["Scale & Rotate…","scaleRotate"]].forEach(function(p){
+    var b=document.createElement("button");
+    b.className="props-btn-action";
+    b.textContent=p[0];
+    b.addEventListener("click",function(){doAction(p[1]);});
+    acts.appendChild(b);
+  });
+  host.appendChild(acts);
+
+  if(selection.length>1){
+    var m=document.createElement("div");
+    m.className="props-note";
+    m.textContent="Values shown are blank for a multiple selection; typing one applies it to all "+
+      selection.length+" objects.";
+    host.appendChild(m);
+  }
+}
+
 function updateColorUI(){
   var fc=document.getElementById("fillColorSwatch");
   var sc=document.getElementById("strokeColorSwatch");
@@ -5774,6 +6469,7 @@ function doAction(a){
     if(!isDirty()||confirm("Create new document? Unsaved changes will be lost.")){
       doc.width=550;doc.height=400;doc.fps=24;doc.backgroundColor="#FFFFFF";
       doc.layers=[new Layer("Layer 1")];doc.library={};doc.sounds={};doc.bitmaps={};doc.totalFrames=60;
+      doc.guides={v:[],h:[]};
       curLayer=0;curFrame=1;selection=[];undoStack=[];redoStack=[];editStack=[];
       markSaved();
       updateBreadcrumb();fullRefresh();
@@ -6050,6 +6746,103 @@ function doAction(a){
       });render();}
     }
     break;
+  case "bringForward":
+    if(arrangeSelection("forward"))fullRefresh();
+    break;
+  case "sendBackward":
+    if(arrangeSelection("backward"))fullRefresh();
+    break;
+  case "group":
+    if(groupSelection())fullRefresh();
+    else showMessage("Group","Select two or more shapes on an unlocked layer to group them.");
+    break;
+  case "ungroup":
+    if(ungroupSelection())fullRefresh();
+    else showMessage("Ungroup","Select a group first. (Modify ▸ Break Apart also takes a symbol instance or a text block apart.)");
+    break;
+  case "breakApart":
+    var ba=breakApartSelection();
+    if(ba.done)fullRefresh();
+    else if(ba.skipped)showMessage("Break Apart",
+      "Nothing here can be broken apart.\n\nBreak Apart works on a group, a "+
+      "symbol instance, or a text block. A bitmap has no shape to break into — "+
+      "use Modify ▸ Trace Bitmap to turn one into vectors.");
+    else showMessage("Break Apart","Select a group, a symbol instance or a text block first.");
+    break;
+  case "flipH": if(transformSelection("flipH"))fullRefresh(); break;
+  case "flipV": if(transformSelection("flipV"))fullRefresh(); break;
+  case "rot90cw": if(transformSelection("rot90cw"))fullRefresh(); break;
+  case "rot90ccw": if(transformSelection("rot90ccw"))fullRefresh(); break;
+  case "transformReset": if(transformSelection("reset"))fullRefresh(); break;
+  case "scaleRotate":
+    if(!selection.length){showMessage("Scale and Rotate","Select something first.");break;}
+    showDialog({
+      title:"Scale and Rotate",
+      fields:[
+        {name:"scale",label:"Scale (%)",type:"number",value:100,min:1,max:2000},
+        {name:"rotate",label:"Rotate (°)",type:"number",value:0,min:-360,max:360}
+      ],
+      onOk:function(v){
+        transformSelection("scaleRotate",{
+          scale:parseFloat(v.scale)||100,
+          rotate:parseFloat(v.rotate)||0
+        });
+        fullRefresh();
+      }
+    });
+    break;
+  case "alignLeft": case "alignHCenter": case "alignRight":
+  case "alignTop": case "alignVCenter": case "alignBottom":
+  case "alignMatchW": case "alignMatchH": case "alignMatchWH":
+  case "alignDistH": case "alignDistV": case "alignSpaceH": case "alignSpaceV":
+    var amode={alignLeft:"left",alignHCenter:"hcenter",alignRight:"right",
+      alignTop:"top",alignVCenter:"vcenter",alignBottom:"bottom",
+      alignMatchW:"matchW",alignMatchH:"matchH",alignMatchWH:"matchWH",
+      alignDistH:"distH",alignDistV:"distV",alignSpaceH:"spaceH",alignSpaceV:"spaceV"}[a];
+    if(alignSelection(amode))fullRefresh();
+    else showMessage("Align",alignToStage
+      ?"Select something to align to the stage."
+      :"Select at least two objects — or turn on \"To Stage\" to align one object to the stage. Distribute and Space need three.");
+    break;
+  case "alignToStage":
+    alignToStage=!alignToStage;
+    updateAlignPanel();
+    break;
+  case "distributeToLayers":
+    if(distributeToLayers())fullRefresh();
+    else showMessage("Distribute to Layers","Select two or more objects first.");
+    break;
+  case "onionToggle":
+    onionOn=!onionOn;
+    // Turning it on with both counts at zero shows nothing, which reads as a
+    // broken toggle — give it the one-frame-back default.
+    if(onionOn&&!onionBefore&&!onionAfter)onionBefore=1;
+    updateOnionUI();render();
+    break;
+  case "onionOutlines":
+    onionOutlines=!onionOutlines;
+    if(onionOutlines)onionOn=true;
+    updateOnionUI();render();
+    break;
+  case "rulers":
+    showRulers=!showRulers;
+    render();
+    break;
+  case "guidesShow":
+    showGuides=!showGuides;
+    render();
+    break;
+  case "guidesClear":
+    if(docGuides().v.length||docGuides().h.length){
+      pushUndo();doc.guides={v:[],h:[]};render();
+    }
+    break;
+  case "snapObjects":
+    snapObjects=!snapObjects;
+    break;
+  case "snapGuides":
+    snapGuides=!snapGuides;
+    break;
   case "play":startPlay();break;
   case "stop":stopPlay();break;
   case "test":testMovie();break;
@@ -6064,6 +6857,9 @@ function doAction(a){
   case "winLibrary": if(workspace())workspace().toggle("library");break;
   case "winActions": if(workspace())workspace().toggle("actions");break;
   case "winAI":      if(workspace())workspace().toggle("ai");break;
+  case "winAlign":   if(workspace())workspace().toggle("align");break;
+  case "winInfo":    if(workspace())workspace().toggle("info");break;
+  case "winTransform":if(workspace())workspace().toggle("transform");break;
   case "wsAnimation":if(workspace())workspace().preset("animation");break;
   case "wsDrawing":  if(workspace())workspace().preset("drawing");break;
   case "wsCoding":   if(workspace())workspace().preset("coding");break;
@@ -6236,6 +7032,427 @@ function doAction(a){
     break;
   }
 }
+/* ------------------------------------------------------------------ *
+ * Group, Ungroup, Break Apart
+ *
+ * Flash drew a sharp line between a GROUP and a SYMBOL, and the line is worth
+ * keeping: a group is artwork you want to handle as one piece *here*, a symbol
+ * is artwork you want to reuse *everywhere*. Converting a one-off arrangement
+ * of shapes to a symbol just to drag it around fills the library with entries
+ * that mean nothing and will never be reused twice.
+ *
+ * A group is an EditorObject of type "group" carrying `children` in group-local
+ * coordinates and `groupW`/`groupH` (the box they were authored in), so
+ * resizing the group scales its contents instead of tearing them apart.
+ * ------------------------------------------------------------------ */
+
+/** The composite transform a group applies to its children, as plain scalars. */
+function groupTransform(o,contentScaled){
+  var gw=o.groupW||Math.abs(o.width)||1,gh=o.groupH||Math.abs(o.height)||1;
+  // A symbol instance does NOT scale its contents to its box (the box follows
+  // the content), so Break Apart passes contentScaled=false for one.
+  var ks=contentScaled===false?1:(gw?Math.abs(o.width||gw)/gw:1);
+  var kt=contentScaled===false?1:(gh?Math.abs(o.height||gh)/gh:1);
+  return {
+    ks:ks,kt:kt,
+    hw:(o.width||0)/2,hh:(o.height||0)/2,
+    sx:(o.scaleX||1),sy:(o.scaleY||1),
+    rot:(o.rotation||0)*Math.PI/180,
+    cx:(o.x||0)+(o.width||0)/2,cy:(o.y||0)+(o.height||0)/2
+  };
+}
+
+/**
+ * Lift one child out of its parent group (or symbol instance) into stage
+ * coordinates, composing the parent's transform onto the child's own.
+ *
+ * Exact for the transform the painter actually applies: the painter translates
+ * to a box centre, rotates, then scales, so rotations add, scales multiply,
+ * and only the centre has to be pushed through the parent's matrix.
+ */
+function liftChild(parent,child,contentScaled){
+  var t=groupTransform(parent,contentScaled);
+  var c=child.clone();
+  var lx=(child.x||0)+(child.width||0)/2;
+  var ly=(child.y||0)+(child.height||0)/2;
+  // group-content space -> parent centre space
+  var px=(lx*t.ks-t.hw)*t.sx;
+  var py=(ly*t.kt-t.hh)*t.sy;
+  // parent centre space -> stage
+  var ca=Math.cos(t.rot),sa=Math.sin(t.rot);
+  var wx=t.cx+px*ca-py*sa;
+  var wy=t.cy+px*sa+py*ca;
+  c.rotation=(parent.rotation||0)+(child.rotation||0);
+  c.scaleX=t.sx*t.ks*(child.scaleX||1);
+  c.scaleY=t.sy*t.kt*(child.scaleY||1);
+  c.alpha=(parent.alpha!=null?parent.alpha:1)*(child.alpha!=null?child.alpha:1);
+  c.x=wx-(c.width||0)/2;
+  c.y=wy-(c.height||0)/2;
+  return c;
+}
+
+/** Group the selection into one object, preserving z-order. */
+function groupSelection(){
+  if(!selection.length)return false;
+  var kf=CKF();
+  if(!kf)return false;
+  var l=CL();
+  if(l&&(l.locked||!l.visible))return false;
+  // Only objects that are actually on this keyframe can be grouped — a rig
+  // part drawn through its hierarchy is not a free-standing object.
+  var members=kf.objects.filter(function(o){return selection.indexOf(o)>=0;});
+  if(!members.length)return false;
+  if(members.some(isRigPart))return false;
+  pushUndo();
+  var b=getBounds(members);
+  var g=new EditorObject("group");
+  g.x=b.x;g.y=b.y;g.width=b.w||1;g.height=b.h||1;
+  g.groupW=g.width;g.groupH=g.height;
+  g.children=members.map(function(o){
+    var c=o.clone();
+    c.x=(o.x||0)-b.x;
+    c.y=(o.y||0)-b.y;
+    return c;
+  });
+  // Drop the originals, then put the group where the topmost of them was, so
+  // grouping never changes what is in front of what.
+  var topIdx=-1;
+  members.forEach(function(o){
+    var i=kf.objects.indexOf(o);
+    if(i>topIdx)topIdx=i;
+  });
+  kf.objects=kf.objects.filter(function(o){return members.indexOf(o)<0;});
+  var insertAt=Math.min(Math.max(0,topIdx-members.length+1),kf.objects.length);
+  kf.objects.splice(insertAt,0,g);
+  selection=[g];
+  return true;
+}
+
+/** Explode the selected groups back into their contents. */
+function ungroupSelection(){
+  var kf=CKF();
+  if(!kf)return 0;
+  var groups=selection.filter(function(o){return o.type==="group"&&kf.objects.indexOf(o)>=0;});
+  if(!groups.length)return 0;
+  pushUndo();
+  var freed=[];
+  groups.forEach(function(g){
+    var at=kf.objects.indexOf(g);
+    var kids=(g.children||[]).map(function(c){return liftChild(g,c,true);});
+    kf.objects.splice.apply(kf.objects,[at,1].concat(kids));
+    freed=freed.concat(kids);
+  });
+  selection=freed;
+  return groups.length;
+}
+
+/**
+ * Break Apart, Flash's one command with four different meanings:
+ *   group    -> its contents (same as Ungroup)
+ *   symbol   -> the symbol's current frame, as free objects on the stage
+ *   text     -> one text object per character
+ *   bitmap   -> left alone, and said so, since there is no "fill" type to
+ *               break a bitmap into here.
+ * Returns a short report so the caller can tell the user what happened.
+ */
+function breakApartSelection(){
+  var kf=CKF();
+  if(!kf)return {done:0,skipped:0};
+  var targets=selection.filter(function(o){return kf.objects.indexOf(o)>=0;});
+  if(!targets.length)return {done:0,skipped:0};
+  var done=0,skipped=0,freed=[];
+  pushUndo();
+  targets.forEach(function(o){
+    var at=kf.objects.indexOf(o);
+    if(at<0)return;
+    var parts=null;
+    if(o.type==="group"){
+      parts=(o.children||[]).map(function(c){return liftChild(o,c,true);});
+    }else if(o.type==="symbol"){
+      var sym=doc.library[o.symbolName];
+      if(sym){
+        var frame=symbolDisplayFrame(o,sym,o._parentFrame||1,o._startFrame||1);
+        parts=symbolFrameObjects(sym,frame).map(function(c){
+          return liftChild(o,c,false);
+        });
+      }
+    }else if(o.type==="text"){
+      parts=textToCharacters(o);
+    }
+    if(!parts||!parts.length){skipped++;return;}
+    kf.objects.splice.apply(kf.objects,[at,1].concat(parts));
+    freed=freed.concat(parts);
+    done++;
+  });
+  if(freed.length)selection=freed;
+  return {done:done,skipped:skipped};
+}
+
+/**
+ * One text object per character, laid out with the same measurements the
+ * painter uses. The point of breaking text apart is animating letters
+ * individually, so each piece has to land exactly where its glyph was.
+ */
+function textToCharacters(o){
+  var size=o.fontSize||24;
+  var font=(o.fontItalic?"italic ":"")+(o.fontBold?"bold ":"")+size+"px "+(o.font||"Arial");
+  var meas=document.createElement("canvas").getContext("2d");
+  meas.font=font;
+  var lines=String(o.text==null?"":o.text).split("\n");
+  var lh=(o.lineHeight||1.2)*size;
+  var out=[];
+  lines.forEach(function(line,li){
+    var total=meas.measureText(line).width;
+    // Mirror the painter's alignment: left from the box's left edge, centred
+    // about its middle, right from its right edge.
+    var startX=(o.x||0);
+    if(o.textAlign==="center")startX=(o.x||0)+(o.width||0)/2-total/2;
+    else if(o.textAlign==="right")startX=(o.x||0)+(o.width||0)-total;
+    var pen=startX;
+    for(var i=0;i<line.length;i++){
+      var ch=line[i];
+      var w=meas.measureText(ch).width;
+      if(ch!==" "&&w>0){
+        var c=o.clone();
+        c.text=ch;
+        c.textAlign="left";
+        c.x=pen;
+        c.y=(o.y||0)+li*lh;
+        c.width=w;
+        c.height=lh;
+        out.push(c);
+      }
+      pen+=w;
+    }
+  });
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Arrange
+ *
+ * Front and Back existed; Forward and Backward did not, and they are the two
+ * you actually need — "front" is a blunt instrument when four things overlap.
+ * Stepping is done in the right order (topmost first when moving up) so a
+ * multiple selection keeps its internal stacking.
+ * ------------------------------------------------------------------ */
+function arrangeSelection(mode){
+  var kf=CKF();
+  if(!kf||!selection.length)return false;
+  var idxs=selection.map(function(o){return kf.objects.indexOf(o);})
+                    .filter(function(i){return i>=0;});
+  if(!idxs.length)return false;
+  pushUndo();
+  if(mode==="forward"||mode==="front")idxs.sort(function(a,b){return b-a;});
+  else idxs.sort(function(a,b){return a-b;});
+  var objs=idxs.map(function(i){return kf.objects[i];});
+  if(mode==="front"){
+    objs.reverse().forEach(function(o){
+      kf.objects.splice(kf.objects.indexOf(o),1);kf.objects.push(o);
+    });
+  }else if(mode==="back"){
+    objs.reverse().forEach(function(o){
+      kf.objects.splice(kf.objects.indexOf(o),1);kf.objects.unshift(o);
+    });
+  }else if(mode==="forward"){
+    objs.forEach(function(o){
+      var i=kf.objects.indexOf(o);
+      if(i<kf.objects.length-1&&selection.indexOf(kf.objects[i+1])<0){
+        kf.objects.splice(i,1);kf.objects.splice(i+1,0,o);
+      }
+    });
+  }else if(mode==="backward"){
+    objs.forEach(function(o){
+      var i=kf.objects.indexOf(o);
+      if(i>0&&selection.indexOf(kf.objects[i-1])<0){
+        kf.objects.splice(i,1);kf.objects.splice(i-1,0,o);
+      }
+    });
+  }
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Transform commands
+ *
+ * All of these work on the painter's centre-origin convention, which is why
+ * a flip is a negative scale and nothing has to move: the object mirrors about
+ * its own middle and stays exactly where it was.
+ * ------------------------------------------------------------------ */
+function transformSelection(mode,arg){
+  if(!selection.length)return false;
+  pushUndo();
+  selection.forEach(function(o){
+    if(mode==="flipH")o.scaleX=-(o.scaleX||1);
+    else if(mode==="flipV")o.scaleY=-(o.scaleY||1);
+    else if(mode==="rot90cw")o.rotation=((o.rotation||0)+90)%360;
+    else if(mode==="rot90ccw")o.rotation=((o.rotation||0)-90)%360;
+    else if(mode==="rot180")o.rotation=((o.rotation||0)+180)%360;
+    else if(mode==="reset"){
+      o.rotation=0;o.scaleX=1;o.scaleY=1;o.skewX=0;o.skewY=0;
+    }else if(mode==="scaleRotate"){
+      var f=(arg&&arg.scale!=null?arg.scale:100)/100;
+      o.scaleX=(o.scaleX||1)*f;
+      o.scaleY=(o.scaleY||1)*f;
+      o.rotation=(o.rotation||0)+(arg&&arg.rotate||0);
+    }
+  });
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Align
+ *
+ * Flash's Align panel, including the part people forget it had: "To Stage",
+ * which switches every button from "line these up with each other" to "line
+ * these up with the stage". Without it, centring one object on the stage is
+ * arithmetic in the Properties panel.
+ * ------------------------------------------------------------------ */
+var alignToStage=false;
+
+/** The rectangle the align commands work relative to. */
+function alignFrame(objs){
+  if(alignToStage)return {x:0,y:0,w:doc.width,h:doc.height};
+  var b=getBounds(objs);
+  return {x:b.x,y:b.y,w:b.w,h:b.h};
+}
+
+function alignSelection(mode){
+  var objs=selection.slice();
+  // Aligning to each other needs two; aligning to the stage needs one.
+  if(objs.length<(alignToStage?1:2))return false;
+  var f=alignFrame(objs);
+  pushUndo();
+  var W=function(o){return Math.abs(o.width||0);};
+  var H=function(o){return Math.abs(o.height||0);};
+  if(mode==="left")objs.forEach(function(o){o.x=f.x;});
+  else if(mode==="hcenter")objs.forEach(function(o){o.x=f.x+(f.w-W(o))/2;});
+  else if(mode==="right")objs.forEach(function(o){o.x=f.x+f.w-W(o);});
+  else if(mode==="top")objs.forEach(function(o){o.y=f.y;});
+  else if(mode==="vcenter")objs.forEach(function(o){o.y=f.y+(f.h-H(o))/2;});
+  else if(mode==="bottom")objs.forEach(function(o){o.y=f.y+f.h-H(o);});
+  else if(mode==="matchW")objs.forEach(function(o){
+    // Match size scales rather than resizing the box, so a rotated or traced
+    // object keeps its proportions the way the Free Transform handles would.
+    setObjWidth(o,alignToStage?f.w:maxDim(objs,"w"));
+  });
+  else if(mode==="matchH")objs.forEach(function(o){
+    setObjHeight(o,alignToStage?f.h:maxDim(objs,"h"));
+  });
+  else if(mode==="matchWH")objs.forEach(function(o){
+    setObjWidth(o,alignToStage?f.w:maxDim(objs,"w"));
+    setObjHeight(o,alignToStage?f.h:maxDim(objs,"h"));
+  });
+  else if(mode==="distH"||mode==="distV"||mode==="spaceH"||mode==="spaceV"){
+    return distributeSelection(mode,objs,f);
+  }
+  return true;
+}
+
+function maxDim(objs,which){
+  var m=0;
+  objs.forEach(function(o){
+    var v=which==="w"?Math.abs(o.width||0):Math.abs(o.height||0);
+    if(v>m)m=v;
+  });
+  return m;
+}
+
+/* Width and height on these objects are box dimensions, not scales, so
+   "make this 120 wide" is a direct assignment — except for a group, whose
+   children follow its box through groupW/groupH, and that is already handled
+   by the painter. */
+function setObjWidth(o,w){o.width=(o.width||0)<0?-w:w;}
+function setObjHeight(o,h){o.height=(o.height||0)<0?-h:h;}
+
+/**
+ * Distribute spreads CENTRES evenly; Space spreads GAPS evenly. They are
+ * different answers whenever the objects are different sizes, and Flash gave
+ * you both for exactly that reason.
+ */
+function distributeSelection(mode,objs,f){
+  var horiz=(mode==="distH"||mode==="spaceH");
+  if(objs.length<3&&!alignToStage)return false;
+  var sorted=objs.slice().sort(function(a,b){
+    return horiz?(a.x||0)-(b.x||0):(a.y||0)-(b.y||0);
+  });
+  var size=function(o){return horiz?Math.abs(o.width||0):Math.abs(o.height||0);};
+  var set=function(o,v){if(horiz)o.x=v;else o.y=v;};
+  var lo=horiz?f.x:f.y,span=horiz?f.w:f.h;
+  // No pushUndo() here: alignSelection() has already taken the snapshot, and
+  // a second one would make Distribute cost two undos.
+  if(mode==="distH"||mode==="distV"){
+    // Centres on an even pitch between the first and last centres.
+    var c0=lo+size(sorted[0])/2;
+    var c1=lo+span-size(sorted[sorted.length-1])/2;
+    var stepc=sorted.length>1?(c1-c0)/(sorted.length-1):0;
+    sorted.forEach(function(o,i){set(o,c0+stepc*i-size(o)/2);});
+  }else{
+    // Equal gaps: whatever is left of the span once the objects are counted.
+    var used=0;
+    sorted.forEach(function(o){used+=size(o);});
+    var gap=sorted.length>1?(span-used)/(sorted.length-1):0;
+    var pen=lo;
+    sorted.forEach(function(o){set(o,pen);pen+=size(o)+gap;});
+  }
+  return true;
+}
+
+/**
+ * Distribute to Layers — one object per new layer, named after the object.
+ *
+ * This is the command that makes a pasted-in or broken-apart drawing
+ * animatable: twelve letters on one layer cannot be animated separately, and
+ * moving them by hand is twelve layer creations and twelve cut-and-pastes.
+ */
+function distributeToLayers(){
+  var kf=CKF();
+  if(!kf||selection.length<2)return false;
+  var layers=currentLayers();
+  var members=kf.objects.filter(function(o){return selection.indexOf(o)>=0;});
+  if(members.length<2)return false;
+  pushUndo();
+  var nameFor=function(o){
+    if(o.instanceName)return o.instanceName;
+    if(o.type==="symbol"&&o.symbolName)return o.symbolName;
+    if(o.type==="text"&&o.text)return String(o.text).slice(0,16);
+    return o.type.charAt(0).toUpperCase()+o.type.slice(1);
+  };
+  var at=currentLayers().indexOf(CL());
+  if(at<0)at=0;
+  // Bottom-up, inserting each above the source layer, so the new layers end up
+  // stacked in the same order the objects were.
+  members.slice().reverse().forEach(function(o){
+    var nl=new Layer(uniqueLayerName(nameFor(o)));
+    nl.keyframes=[new KeyFrame(1)];
+    // The object keeps the frame it was on: a blank span before it, then it.
+    if(curFrame>1){
+      nl.keyframes[0].duration=curFrame-1;
+      var k=new KeyFrame(curFrame);
+      k.duration=Math.max(1,kf.index+kf.duration-curFrame);
+      k.objects=[o];
+      nl.keyframes.push(k);
+    }else{
+      nl.keyframes[0].duration=Math.max(1,kf.duration);
+      nl.keyframes[0].objects=[o];
+    }
+    layers.splice(at,0,nl);
+  });
+  kf.objects=kf.objects.filter(function(o){return members.indexOf(o)<0;});
+  selection=[];
+  curLayer=Math.min(at,layers.length-1);
+  return true;
+}
+
+/** A layer name not already taken in this edit context. */
+function uniqueLayerName(base){
+  var names={};
+  currentLayers().forEach(function(l){names[l.name]=true;});
+  if(!names[base])return base;
+  for(var i=2;i<500;i++)if(!names[base+" "+i])return base+" "+i;
+  return base+" "+Date.now();
+}
+
 function getBounds(objs){
   var x1=Infinity,y1=Infinity,x2=-Infinity,y2=-Infinity;
   objs.forEach(function(o){
@@ -7112,6 +8329,12 @@ function objMatrix(o){
   if(o.rotation){
     var r=o.rotation*Math.PI/180,cs=Math.cos(r),sn=Math.sin(r);
     m=matMul(m,[cs,sn,-sn,cs,0,0]);
+  }
+  // Same rotate-skew-scale order as the painter, so the eraser's geometry
+  // agrees with what is on screen for a skewed shape too.
+  if(o.skewX||o.skewY){
+    m=matMul(m,[1,Math.tan((o.skewY||0)*Math.PI/180),
+                Math.tan((o.skewX||0)*Math.PI/180),1,0,0]);
   }
   var sx=o.scaleX||1,sy=o.scaleY||1;
   if(sx!==1||sy!==1)m=matMul(m,[sx,0,0,sy,0,0]);
@@ -8121,6 +9344,28 @@ function initKeys(){
       setEraserSize(eraserSize+(e.key==="]"?step:-step));
       return;
     }
+    /* Flash's object-editing accelerators. Tested before the plain Ctrl
+       shortcuts below because several of them differ only by Shift, and the
+       looser test would swallow them — Ctrl+Shift+Z is Remove Transform here,
+       not a second Redo. */
+    if(ctrl&&e.shiftKey&&(e.key==="G"||e.key==="g")){e.preventDefault();doAction("ungroup");return;}
+    if(ctrl&&!e.shiftKey&&(e.key==="g"||e.key==="G")){e.preventDefault();doAction("group");return;}
+    if(ctrl&&(e.key==="b"||e.key==="B")){e.preventDefault();doAction("breakApart");return;}
+    if(ctrl&&e.shiftKey&&(e.key==="z"||e.key==="Z")){e.preventDefault();doAction("transformReset");return;}
+    if(ctrl&&e.shiftKey&&(e.key==="d"||e.key==="D")){e.preventDefault();doAction("distributeToLayers");return;}
+    if(ctrl&&e.altKey&&(e.key==="s"||e.key==="S")){e.preventDefault();doAction("scaleRotate");return;}
+    if(ctrl&&(e.key==="k"||e.key==="K")){e.preventDefault();doAction("winAlign");return;}
+    if(ctrl&&(e.key==="i"||e.key==="I")){e.preventDefault();doAction("winInfo");return;}
+    if(ctrl&&(e.key==="t"||e.key==="T")){e.preventDefault();doAction("winTransform");return;}
+    if(ctrl&&e.altKey&&e.shiftKey&&(e.key==="r"||e.key==="R")){e.preventDefault();doAction("rulers");return;}
+    /* Arrange on the arrow keys, as in Flash. These are tested before the
+       plain-arrow nudge further down, which has no modifier. */
+    if(ctrl&&e.key==="ArrowUp"){e.preventDefault();doAction(e.shiftKey?"bringFront":"bringForward");return;}
+    if(ctrl&&e.key==="ArrowDown"){e.preventDefault();doAction(e.shiftKey?"sendBack":"sendBackward");return;}
+    // Onion skin: Alt+O, and Alt+Shift+O for the outline variant.
+    if(!ctrl&&e.altKey&&(e.key==="o"||e.key==="O")){
+      e.preventDefault();doAction(e.shiftKey?"onionOutlines":"onionToggle");return;
+    }
     if(ctrl&&e.key==="z"){e.preventDefault();doAction("undo");return;}
     if(ctrl&&e.key==="y"){e.preventDefault();doAction("redo");return;}
     if(ctrl&&e.key==="s"){e.preventDefault();doAction("save");return;}
@@ -8189,6 +9434,9 @@ function plainObj(o){
   Object.keys(o).forEach(function(k){
     var v=o[k];r[k]=Array.isArray(v)?v.slice():v;
   });
+  // A group's children are objects, not numbers: they go down the same
+  // serializer so a nested group survives a save/open round trip.
+  if(Array.isArray(o.children))r.children=o.children.map(plainObj);
   return r;
 }
 function serializeLayers(layers){
@@ -8287,7 +9535,10 @@ function serializeDoc(){
     scriptDialect:doc.scriptDialect||"js",
     // Character rigs: the templates and pose libraries. The hierarchy and
     // current pose ride along on the keyframe objects themselves.
-    characters:serializeCharacters(doc.characters)
+    characters:serializeCharacters(doc.characters),
+    /* Guides are document furniture, not artwork: they are saved with the
+       document (a layout you set up is worth keeping) but never exported. */
+    guides:{v:docGuides().v.slice(),h:docGuides().h.slice()}
   };
 }
 function serializeCharacters(cs){
@@ -8319,6 +9570,10 @@ function reviveObject(od){
   Object.keys(od).forEach(function(k){
     var v=od[k];o[k]=Array.isArray(v)?v.slice():v;
   });
+  // Group children come back as real EditorObjects. They used not to exist at
+  // all; when they did not go through here, a reopened group's children had no
+  // prototype and `clone()` threw on the next undo.
+  if(Array.isArray(od.children))o.children=od.children.map(reviveObject);
   normalizeObjPoints(o);
   return o;
 }
@@ -8386,6 +9641,10 @@ function deserializeDoc(d){
   doc.bitmaps=reviveBitmaps(d.bitmaps);
   doc.scriptDialect=d.scriptDialect==="as2"?"as2":"js";
   doc.characters=reviveCharacters(d.characters);
+  doc.guides={
+    v:(d.guides&&Array.isArray(d.guides.v)?d.guides.v:[]).map(Number).filter(isFinite),
+    h:(d.guides&&Array.isArray(d.guides.h)?d.guides.h:[]).map(Number).filter(isFinite)
+  };
   doc.layers=reviveLayers(d.layers);
   // Decoding is async; the timeline draws flat bars until the peaks land and
   // redraws itself when they do. Bitmaps are the same deal — a placed image
@@ -8947,6 +10206,23 @@ function exportRuntime(data, canvas, options) {
         node.__inner = inner;
         node.addChild(inner);
       }
+    } else if (o.type === "group") {
+      /* A group: a transform plus children, in group space. Built like a
+         Graphic symbol instance — rebuilt each frame, no own playhead — but
+         with the child list carried on the object instead of in the library.
+         Without this branch a grouped drawing fell through to the `else` and
+         exported as an empty Shape. */
+      node = new Flashy.MovieClip();
+      if (depth < SYM_MAX_DEPTH) {
+        var ginner = new Flashy.MovieClip();
+        ginner.x = -hw; ginner.y = -hh;
+        var gw0 = o.groupW || Math.abs(o.width) || 1, gh0 = o.groupH || Math.abs(o.height) || 1;
+        ginner.scaleX = Math.abs(o.width || gw0) / gw0;
+        ginner.scaleY = Math.abs(o.height || gh0) / gh0;
+        addPlanned(ginner, o.children || [], depth + 1, parentFrame, startFrame,
+                   key != null ? key + ":gr" : null);
+        node.addChild(ginner);
+      }
     } else if (o.type === "text") {
       var size = o.fontSize || 24;
       var tf = new Flashy.TextField(o.text || "", {
@@ -9061,6 +10337,9 @@ function exportRuntime(data, canvas, options) {
       node.scaleY = 1;
     } else {
       node.rotation = (o.rotation || 0) * Math.PI / 180;
+      // The engine takes skew in radians, in the same rotate-skew-scale order.
+      node.skewX = (o.skewX || 0) * Math.PI / 180;
+      node.skewY = (o.skewY || 0) * Math.PI / 180;
       node.scaleX = o.scaleX || 1;
       node.scaleY = o.scaleY || 1;
     }
@@ -9686,6 +10965,13 @@ function _objToSVG(o, depth) {
   // the object's centre, rotate/scale there, then draw around (0,0).
   var tf = 'translate('+((o.x||0)+hw)+','+((o.y||0)+hh)+')';
   if (o.rotation) tf += ' rotate('+o.rotation+')';
+  // Skew as an explicit matrix rather than SVG's skewX/skewY, because the two
+  // of them compose in sequence and the canvas painter applies ONE combined
+  // shear. Keeping the matrix identical keeps the SVG identical to the stage.
+  if (o.skewX||o.skewY) {
+    tf += ' matrix(1,'+Math.tan((o.skewY||0)*Math.PI/180)+','+
+          Math.tan((o.skewX||0)*Math.PI/180)+',1,0,0)';
+  }
   if ((o.scaleX!=null&&o.scaleX!==1)||(o.scaleY!=null&&o.scaleY!==1)) {
     tf += ' scale('+(o.scaleX||1)+','+(o.scaleY||1)+')';
   }
@@ -9762,6 +11048,19 @@ function _objToSVG(o, depth) {
         out += '  <tspan x="'+tx+'" y="'+(-hh+li*lh)+'">'+xmlText(lines[li])+'</tspan>\n';
       }
       return out+'</text>\n';
+    case "group":
+      // Same shape as the symbol case below: a transform, then children in
+      // group space. Without this a grouped drawing vanished from the SVG.
+      if (depth >= SYMBOL_MAX_DEPTH) return '';
+      var gkids = o.children || [];
+      if (!gkids.length) return '';
+      var ggw = o.groupW || Math.abs(o.width) || 1, ggh = o.groupH || Math.abs(o.height) || 1;
+      var gsx = Math.abs(o.width || ggw) / ggw, gsy = Math.abs(o.height || ggh) / ggh;
+      var ginner = 'translate('+(-hw)+','+(-hh)+')';
+      if (gsx !== 1 || gsy !== 1) ginner += ' scale('+gsx+','+gsy+')';
+      var gout = '<g'+a+'><g transform="'+xmlAttr(ginner)+'">\n';
+      for (var gi2 = 0; gi2 < gkids.length; gi2++) gout += _objToSVG(gkids[gi2], depth+1);
+      return gout+'</g></g>\n';
     case "symbol":
       // Symbols used to fall through to `default` and vanish from the SVG
       // without a word.
@@ -10665,6 +11964,10 @@ function fullRefresh(){
   updateActionsPanel();
   updateColorUI();
   updateLib();
+  updateAlignPanel();
+  updateInfoPanel();
+  updateTransformPanel();
+  updateOnionUI();
   // The Character panel rebuilds from the document rather than tracking it, so
   // one notification after every refresh is all it needs. Note this is
   // fullRefresh, not render() — a pose drag calls render() per pointer move and
@@ -10868,7 +12171,41 @@ function init(){
     hasFrameClipboard: hasFrameClipboard,
     clearSpan: function(layerIndex,f0,f1){
       clearSpan(currentLayers()[layerIndex],f0,f1);
-    }
+    },
+    /* Wave-1 object editing, exposed so the specs can drive the real entry
+       points the menus call rather than reimplementing them. */
+    groupSelection: groupSelection,
+    ungroupSelection: ungroupSelection,
+    breakApart: breakApartSelection,
+    arrange: arrangeSelection,
+    transformSelection: transformSelection,
+    alignSelection: alignSelection,
+    distributeToLayers: distributeToLayers,
+    /** Align's To Stage toggle, which changes what every align button means. */
+    alignToStage: function(v){ if(v!=null)alignToStage=!!v; return alignToStage; },
+    /** Onion skin state, for the specs and for anything scripting the editor. */
+    onion: function(v){
+      if(v){
+        if(v.on!=null)onionOn=!!v.on;
+        if(v.outlines!=null)onionOutlines=!!v.outlines;
+        if(v.before!=null)onionBefore=v.before|0;
+        if(v.after!=null)onionAfter=v.after|0;
+        updateOnionUI();render();
+      }
+      return {on:onionOn,outlines:onionOutlines,before:onionBefore,after:onionAfter};
+    },
+    /** Guides and snapping. */
+    guides: function(){ return docGuides(); },
+    snapping: function(v){
+      if(v){
+        if(v.objects!=null)snapObjects=!!v.objects;
+        if(v.guides!=null)snapGuides=!!v.guides;
+        if(v.grid!=null)snapGrid=!!v.grid;
+        if(v.rulers!=null){showRulers=!!v.rulers;render();}
+      }
+      return {objects:snapObjects,guides:snapGuides,grid:snapGrid,rulers:showRulers};
+    },
+    snapBox: snapBox
   };
   fullRefresh();
   window.addEventListener("resize",function(){

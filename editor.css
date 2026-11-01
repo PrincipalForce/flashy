@@ -541,6 +541,20 @@ input[type="range"].props-input {
 .tl-zoom-btn:hover { background: linear-gradient(to bottom, #666, #555); color: #fff; }
 .tl-zoom-label { color: var(--text-dim); font-size: 10px; min-width: 30px; text-align: center; }
 
+/* Onion skin controls. `active` is the pressed look shared with the toolbox,
+   so a toggle that is on reads as on at a glance rather than needing a label. */
+.tl-onion { display: flex; align-items: center; gap: 3px; margin-right: 8px; }
+.tl-zoom-btn.active {
+  background: linear-gradient(to bottom, #4A7FB5, #39638F);
+  border-color: #6CA6DC; color: #fff;
+}
+.tl-onion-num {
+  width: 30px; height: 17px; box-sizing: border-box;
+  background: #222; border: 1px solid #555; color: #DDD;
+  font-size: 10px; text-align: center; border-radius: 2px;
+}
+.tl-onion-num::-webkit-inner-spin-button { display: none; }
+
 #tl-spacer { position: relative; }
 /* Sticky keeps the viewport-sized canvas parked over the visible area while
    the spacer scrolls underneath it. */
@@ -845,6 +859,41 @@ input[type="range"].props-input {
   opacity: 0.4; cursor: default;
   background: linear-gradient(to bottom, #444, #3A3A3A);
 }
+
+/* ── Align panel ──
+   Square icon buttons in rows, the way Flash's Align panel worked: the glyph
+   shows what moves where, so one row covers three commands without wrapping. */
+.align-row { display: flex; align-items: center; gap: 2px; padding: 2px 4px; flex-wrap: wrap; }
+.align-gap { width: 8px; }
+.align-btn {
+  width: 22px; height: 22px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(to bottom, #555, #444);
+  border: 1px solid #666; border-bottom-color: #333;
+  color: #CCC; cursor: pointer; border-radius: 2px;
+}
+.align-btn:hover { background: linear-gradient(to bottom, #666, #555); color: #fff; }
+.align-btn.active, .align-wide.active {
+  background: linear-gradient(to bottom, #4A7FB5, #39638F);
+  border-color: #6CA6DC; color: #fff;
+}
+.align-wide {
+  height: 20px; padding: 0 10px;
+  background: linear-gradient(to bottom, #555, #444);
+  border: 1px solid #666; border-bottom-color: #333;
+  color: #DDD; cursor: pointer; font: 11px Tahoma, sans-serif; border-radius: 2px;
+}
+.align-wide:hover { background: linear-gradient(to bottom, #666, #555); color: #fff; }
+
+/* ── Info panel ──
+   A readout, not a form: two columns, tabular numerals so the values do not
+   jitter sideways while the pointer moves. */
+.info-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 1px 6px; font: 11px Tahoma, sans-serif;
+}
+.info-label { color: var(--text-dim); }
+.info-value { color: #DDD; font-variant-numeric: tabular-nums; font-family: Consolas, monospace; }
 .props-select {
   height: 20px;
   background: #1E1E1E;

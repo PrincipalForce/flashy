@@ -14,6 +14,11 @@ import { openEditor } from "./helpers.js";
 
 const ws = (page, fn) => page.evaluate(fn);
 
+/* Panels registered `closed: true` in workspace.js. They are part of the
+   registry — so they must be accounted for exactly once — but they are not in
+   any dock until the Window menu opens them. */
+const CLOSED_BY_DEFAULT = ["align", "info", "transform"];
+
 /** Panel ids in each dock, in order, from the live layout. */
 async function docks(page) {
   return page.evaluate(() => {
@@ -34,7 +39,12 @@ test("every panel starts docked, and there is exactly one of each", async ({ pag
   const d = await docks(page);
   expect(d.right).toEqual([["props"], ["color"], ["library", "character"]]);
   expect(d.bottom).toEqual([["actions", "ai"]]);
-  expect(d.closed).toEqual([]);
+  // Align, Info and Transform register `closed: true`: a default workspace
+  // with every panel open shows none of them properly, so they wait for the
+  // Window menu. A closed panel must be in NO group — closePanel() detaches,
+  // so "in a group and in `closed`" is a state that loses the panel on the
+  // next save/restore round trip.
+  expect(d.closed).toEqual(CLOSED_BY_DEFAULT);
 
   // Each panel's content element — the node editor-app.js writes into — must
   // be inside a dock body, not stranded in the parking store.
@@ -100,7 +110,8 @@ test("the arrangement survives a reload", async ({ page }) => {
   await page.waitForFunction(() => !!(window._flashyWorkspace && window._flashyEditor));
 
   expect(await docks(page)).toEqual(before);
-  expect(await docks(page)).toMatchObject({ closed: ["color"] });
+  expect((await docks(page)).closed.slice().sort())
+    .toEqual(["color"].concat(CLOSED_BY_DEFAULT).sort());
 });
 
 test("a corrupt or stale saved layout cannot brick the editor", async ({ page }) => {
@@ -138,11 +149,15 @@ test("a corrupt or stale saved layout cannot brick the editor", async ({ page })
   all.push(...l.closed);
 
   // Every registered panel appears exactly once; ghosts and duplicates gone.
-  expect(all.slice().sort()).toEqual(["actions", "ai", "character", "color", "library", "props"]);
+  expect(all.slice().sort()).toEqual(
+    ["actions", "ai", "character", "color", "library", "props"].concat(CLOSED_BY_DEFAULT).sort(),
+  );
   expect(all).not.toContain("ghost-panel");
   expect(all).not.toContain("another-ghost");
   // The explicit close is honoured; the unknown zone is ignored.
-  expect(l.closed).toEqual(["ai"]);
+  // The explicit close survives; so does each closed-by-default panel the
+  // stale layout had never heard of.
+  expect(l.closed.slice().sort()).toEqual(["ai"].concat(CLOSED_BY_DEFAULT).sort());
   expect(Object.keys(l.zones).sort()).toEqual(["bottom", "right"]);
   // Sizes clamped back into range rather than producing a 99999px dock.
   expect(l.sizes.right).toBeLessThanOrEqual(640);
@@ -243,7 +258,30 @@ test("workspace presets and reset", async ({ page }) => {
   d = await docks(page);
   expect(d.right).toEqual([["props"], ["color"], ["library", "character"]]);
   expect(d.bottom).toEqual([["actions", "ai"]]);
-  expect(d.closed).toEqual([]);
+  expect(d.closed).toEqual(CLOSED_BY_DEFAULT);
+});
+
+test("a closed-by-default panel opens as a tab-mate, not a new stacked group", async ({ page }) => {
+  const errors = await openEditor(page);
+  await page.waitForFunction(() => !!window._flashyWorkspace);
+
+  // Align registers `with: "props"`, so opening it must join Properties'
+  // group. A fourth stacked group in the right-hand column would leave every
+  // panel in it too short to use — which is what `with` exists to prevent.
+  await ws(page, () => window._flashyEditor.doAction("winAlign"));
+  const d = await docks(page);
+  expect(d.right[0]).toEqual(["props", "align"]);
+  expect(d.closed).not.toContain("align");
+
+  // And it is actually populated by the editor, not an empty box.
+  await expect(page.locator("#alignPanel")).toContainText("To Stage");
+
+  // Toggling it again closes it and takes it back out of every group.
+  await ws(page, () => window._flashyEditor.doAction("winAlign"));
+  const d2 = await docks(page);
+  expect(d2.right[0]).toEqual(["props"]);
+  expect(d2.closed).toContain("align");
+  expect(errors).toEqual([]);
 });
 
 test("the Actions panel keeps working wherever it is docked", async ({ page }) => {

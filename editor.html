@@ -40,6 +40,16 @@
     <div id="tl-head">
       <span class="title">Timeline</span>
       <span class="tl-spacer-flex"></span>
+      <!-- Onion skin. Flash put these under the layer column; here they sit in
+           the timeline header, which is the one strip that is always visible
+           whatever the dock layout. The range inputs are frame COUNTS either
+           side of the playhead, because that is what an animator thinks in. -->
+      <span class="tl-onion">
+        <button type="button" id="tlOnion" class="tl-zoom-btn wide" title="Onion skin — show the frames around this one (Alt+O)">Onion</button>
+        <button type="button" id="tlOnionOutline" class="tl-zoom-btn wide" title="Onion skin as outlines only">Outlines</button>
+        <input type="number" id="tlOnionBefore" class="tl-onion-num" min="0" max="12" title="Frames to show before this one">
+        <input type="number" id="tlOnionAfter" class="tl-onion-num" min="0" max="12" title="Frames to show after this one">
+      </span>
       <!-- Zooming the timeline is what makes a long soundtrack workable:
            out to see the whole track, in to find a syllable. -->
       <span class="tl-zoom">
@@ -73,6 +83,12 @@
   <div class="panel-content" data-panel="props"><div class="panel-body" id="propsPanel"></div></div>
   <div class="panel-content" data-panel="color"><div class="panel-body" id="colorPanel"></div></div>
   <div class="panel-content" data-panel="library"><div class="panel-body" id="libPanel"></div></div>
+  <!-- Align, Info and Transform are built by editor-app.js into these bodies,
+       the same contract the other panels use: the markup declares the mount
+       point, the editor fills it, workspace.js only ever moves it. -->
+  <div class="panel-content" data-panel="align"><div class="panel-body" id="alignPanel"></div></div>
+  <div class="panel-content" data-panel="info"><div class="panel-body" id="infoPanel"></div></div>
+  <div class="panel-content" data-panel="transform"><div class="panel-body" id="transformPanel"></div></div>
   <div class="panel-content" data-panel="character"><div class="panel-body" id="charPanel"></div></div>
   <div class="panel-content" data-panel="actions">
     <div class="panel-body actions-body">

@@ -48,7 +48,16 @@
     // and a fourth stacked group would leave every one of them too short.
     { id: "character", title: "Character", home: "right", with: "library" },
     { id: "actions", title: "Actions", home: "bottom" },
-    { id: "ai", title: "AI Assistant", home: "bottom" }
+    { id: "ai", title: "AI Assistant", home: "bottom" },
+    /* Align, Info and Transform share Properties' group: all three answer
+       "where exactly is this and how big is it", you use one at a time, and
+       three more stacked boxes in the right-hand column would leave every
+       panel in it too short to use. They are closed by default so an existing
+       layout does not suddenly get three new tabs it never asked for — the
+       Window menu opens them. */
+    { id: "align", title: "Align", home: "right", with: "props", closed: true },
+    { id: "info", title: "Info", home: "right", with: "props", closed: true },
+    { id: "transform", title: "Transform", home: "right", with: "props", closed: true }
   ];
 
   var ZONES = ["right", "bottom"];
@@ -85,6 +94,12 @@
     // One group per right-hand panel (stacked), one shared tab group at the
     // bottom — the arrangement the editor shipped with, now rearrangeable.
     PANELS.forEach(function (p) {
+      /* A panel registered `closed: true` is left out of every group entirely.
+         closePanel() detaches a panel from its group, so "in a group AND in
+         `closed`" is a state the rest of this file does not expect, and a
+         layout carrying it loses the panel on the next save/restore round
+         trip. openPanel() puts it back next to `with` when it is opened. */
+      if (p.closed) return;
       var zone = zones[p.home];
       if (p.with) {
         // Join the group holding the named panel, wherever that ended up.
@@ -106,7 +121,9 @@
       zones: zones,
       sizes: { right: SIZE_LIMITS.right.def, bottom: SIZE_LIMITS.bottom.def, timeline: SIZE_LIMITS.timeline.def },
       collapsed: { right: false, bottom: false },
-      closed: []
+      // Panels registered `closed: true` start out of the way: a default
+      // workspace with every panel open shows none of them properly.
+      closed: PANELS.filter(function (p) { return p.closed; }).map(function (p) { return p.id; })
     };
   }
 
@@ -209,6 +226,11 @@
       if (seen[p.id]) return;
       seen[p.id] = true;
       var zone = out.zones[p.home] || out.zones[ZONES[0]];
+      /* A panel added in a later release joins its home dock — that is how a
+         new panel reaches someone with a saved layout. One registered
+         `closed: true` joins a group but stays closed, so an upgrade does not
+         rearrange a workspace somebody set up deliberately. */
+      if (p.closed) { out.closed.push(p.id); return; }
       zone.groups.push({ panels: [p.id], active: p.id, weight: 1 });
     });
 
@@ -310,7 +332,13 @@
     if (findPanel(id)) { activate(id); return; }
     var ci = layout.closed.indexOf(id);
     if (ci >= 0) layout.closed.splice(ci, 1);
-    movePanel(id, panelById[id].home, { group: null });
+    /* Rejoin the group holding the panel this one is registered `with`, if it
+       is still open. A panel that declares itself a tab-mate should come back
+       as one; a new stacked group in an already-crowded column is the thing
+       the `with` field exists to avoid. */
+    var mate = panelById[id].with ? findPanel(panelById[id].with) : null;
+    if (mate) movePanel(id, mate.zone, { group: mate.group });
+    else movePanel(id, panelById[id].home, { group: null });
     activate(id);
   }
 
