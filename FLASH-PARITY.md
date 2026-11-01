@@ -79,7 +79,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Motion guide layer (tween along a drawn path) | ✅ | `Flashy.MotionGuide` samples the path by ARC LENGTH, not by vertex index — indexing makes an object crawl through the bends and bolt down the straights. The guide layer is drawn as dashed chrome and never exported, but stays in the output layer list so the player can still read the path. |
 | Layer height / outline view, per layer | ✅ | Both were already stored, serialized and read by nothing — the inspector offered Short/Normal/Tall and an outline colour, and the layer list drew every row at a fixed 20px with no outline mode anywhere. The timeline no longer assumes `index * 20`. Per-layer tint is still missing. |
 | **Scenes** (Insert ▸ Scene, Scene panel, play in order) | ✅ | `doc.scenes`, with `doc.layers` a live alias of the current scene rather than a copy — the whole editor reaches `doc.layers` directly, and an alias cannot drift out of sync with a copy that does not exist. An export lays them end to end on one timeline with each name as a frame label, so `gotoAndPlay("Scene 2")` works. |
-| Timeline Effects | ⬜ | Missing (low value — Adobe deprecated them too). |
+| Timeline Effects | ✅ | Eight effects — Blur, Expand, Explode, Transform, Transition, Drop Shadow, Copy to Grid, Distributed Duplicate — generated as ORDINARY keyframes with the spec kept on the first one, so they are editable, re-runnable and removable. Adobe dropped them because the generated frames were opaque; these are not. |
 
 ## 4. Symbols and Library
 
@@ -93,7 +93,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Library folders, sort, search/filter | ✅ | A folder is a path on the item rather than a tree beside it, so it cannot get out of step with what it describes and needs no migration. Sort by name, kind, use or folder; a search flattens the grouping. |
 | Unused items / Select Unused | ✅ | Every row shows its use count; the dialog lists what nothing refers to and deletes it in one undo step. Items used only INSIDE another symbol count as used. |
 | Symbol linkage (export for ActionScript / class name) | ✅ | And it does something: the exported player registers linked symbols and `attachMovie(name, instance, depth)` — until now a stub that logged a warning — builds one. A clip a script attached survives the root's display-list rebuild. |
-| Shared libraries, runtime sharing | ⬜ | Missing (low value). |
+| Shared libraries, runtime sharing | ◐ | Author-time sharing: import symbols (and the bitmaps and sounds they use) out of another .flashy, with `sharedFrom` recording the origin so Update can fetch a newer version in place. Runtime sharing is deliberately not done — it needs a second file that has to still be there, which is most of why Flash content rotted. |
 | 9-slice scaling | ✅ | `Flashy.Slice9` — the cell maths once, shared by the stage, the SVG export and the `NineSlice` container the exported player uses. Guides are set in Symbol Properties. |
 | Edit in Place / Edit in New Window | ◐ | `enterSymbol`/`exitSymbol` is Edit in Place; no new-window edit. |
 | Registration / transformation point editing | ✅ | A registration point as a fraction of the object’s box — so it survives a resize — editable in the inspector and draggable on the stage as a crosshair. Defaults to the centre, so no existing document moves. It drives a guided tween’s Snap. |
@@ -174,8 +174,8 @@ name — an entire class of Flash content is unreachable.
 | **Scene** | ✅ | §3. |
 | Color Swatches (+ load/save palettes, web-safe) | ✅ | Three palettes: the colours this document already uses (most-used first, gathered from fills, strokes, gradient stops, filters and every symbol), the web-safe 216, and your own. Click for fill, Shift-click for stroke — and a selected object is recoloured too. |
 | Movie Explorer | ✅ | §7. |
-| Accessibility | ⬜ | Missing (low value). |
-| Strings / localisation | ⬜ | Missing (low value). |
+| Accessibility | ✅ | A name and description per document and per object, plus a per-object switch. The export writes a real text alternative — ARIA on the canvas and a hidden list of the named objects — because a canvas is one opaque rectangle to a screen reader and one `alt` string cannot carry a sequence. |
+| Strings / localisation | ✅ | A per-document table keyed by string ID and language, CSV in and out for translators, auto-assigned IDs seeded from the authored text, and a fallback chain so a missing translation shows the original rather than going blank. One exported file serves every language: `stage.setLanguage()` switches at runtime. |
 | Dockable workspace, saved layouts | ✅ | `workspace.js`. |
 
 ## 9. Sound
@@ -680,20 +680,86 @@ History replay and save-as-command.
 
     Covered by `tests/buttons-commands.spec.js` (19 specs).
 
+### Wave 8 — the ones I had written off
+
+Three of these were marked "low value" in the audit and one was marked
+deprecated. That was a judgement about effort, not about the feature, and it
+was not mine to make — so they are built.
+
+54. ✅ **Timeline Effects.** Eight of them: Blur, Expand, Explode, Transform,
+    Transition, Drop Shadow, Copy to Grid, Distributed Duplicate.
+
+    Adobe deprecated these, and the reason usually given is that the generated
+    frames were opaque — you could not open one and nudge it, only delete the
+    effect and start again. So every effect here writes ORDINARY keyframes,
+    with the spec and the original objects kept on the first one. The frames
+    edit like any others, the effect re-runs with new settings from the
+    originals rather than compounding, and Remove Effect puts the object back
+    exactly where it was. That is the feature without the part that killed it.
+
+    Each effect is a function from (object, params) to a list of frames, so
+    adding one is adding a generator and nothing else. An effect applied to
+    three shapes animates all three — the generators run per object and the
+    results merge frame by frame.
+
+55. ✅ **Strings and localisation.** A table keyed by string ID and language,
+    on the document, with CSV in and out because what a translator wants is a
+    spreadsheet and not the editor.
+
+    Assign IDs does the tedious half: forty fields each need a stable key, and
+    typing forty keys is how two of them end up the same. The IDs come from
+    the text and are made unique, and the authored text is seeded as the first
+    language so the panel opens showing the movie rather than empty rows.
+
+    A missing translation falls back along the language list and then to the
+    object’s own text, because a field that went blank looks like the field
+    broke rather than like the translation is missing. A field with no ID is
+    untouched, so adding a language to an existing document changes nothing
+    until an ID is handed out. The table travels into the export and
+    `stage.setLanguage()` switches at runtime — one file for every language,
+    not one build per locale.
+
+56. ✅ **Accessibility.** A name and description per document and per object,
+    and a per-object switch.
+
+    The export writes a real text alternative rather than an `alt` attribute:
+    ARIA on the canvas for the movie’s name, and a visually-hidden list of the
+    named objects. A cartoon is a sequence of named things and one string
+    cannot carry that. A text object needs no accessibility name because it
+    has text — making the author type it twice would guarantee the two drift
+    apart. Turning the whole thing off marks the canvas `aria-hidden`, which
+    is the right answer for pure decoration: announced decoration is worse
+    than ignored decoration.
+
+57. ◐ **Shared libraries.** Author-time sharing: pull symbols out of another
+    .flashy, with the bitmaps and sounds they use, or the symbol arrives as an
+    empty box with no clue why. A name clash renames the incoming one rather
+    than overwriting — the local symbol might be the one the movie is built
+    on. `sharedFrom` records the origin so Update can fetch a newer version,
+    and Update replaces the symbol’s CONTENTS rather than the entry, because
+    every instance on the stage points at the name.
+
+    Runtime sharing is deliberately not built. It needs a loader protocol and
+    a second file that has to still be there, which is a large part of why
+    Flash content rotted; author-time sharing puts the symbol in this document
+    where every export path already handles it.
+
+    Covered by `tests/timeline-effects.spec.js` (16) and
+    `tests/strings-access.spec.js` (20).
+
 ### What is left
 
-The enumeration is now complete except for items that need a subsystem of
-their own, and they are named rather than quietly dropped:
+The remaining items need a subsystem of their own, and they are named rather
+than quietly dropped:
 
 * **SWF text, bitmaps, sound, filters and scripts** — glyph tables, JPEG/zlib,
   MP3 framing, filter tags, an ActionScript assembler. The writer reports each
   as missing rather than silently dropping it.
 * **Device fonts and character embedding ranges** — needs font parsing.
 * **A debugger** — breakpoints, watches, a variable inspector.
-* **Shared libraries and runtime sharing**, **per-sound compression**,
-  **Accessibility**, **Strings/localisation**, **spell check**, **Timeline
-  Effects** (which Adobe deprecated too), **multiple documents in one window**,
-  and **Edit in New Window** on the web build.
+* **Runtime** shared libraries, **per-sound compression**, **spell check**,
+  **multiple documents in one window**, and **Edit in New Window** on the web
+  build.
 * **A user-supplied HTML template** and publish **alignment**.
 
 Both of the small leftovers above are now done as well: the registration point

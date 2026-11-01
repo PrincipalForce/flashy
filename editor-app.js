@@ -32,7 +32,7 @@ if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clon
    tween spin instead of taking the short way round; `tweenScale` is Flash's
    Scale checkbox. All default to the behaviour documents already have. */
 function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;this.orientToPath=false;this.tweenSnap=false;this.tweenSync=false;this.shapeHints=null;}
-KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.tweenSnap=!!this.tweenSnap;c.tweenSync=!!this.tweenSync;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;return c;};
+KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.tweenSnap=!!this.tweenSnap;c.tweenSync=!!this.tweenSync;c.effect=this.effect?JSON.parse(JSON.stringify(this.effect)):null;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;return c;};
 function cloneSound(s){
   return {
     asset:s.asset,sync:s.sync||"stream",
@@ -526,6 +526,7 @@ var menus=[
     {label:"Import Sound...",action:"importSound",shortcut:"Ctrl+R"},
     {label:"Import Flash Movie (.swf/.fla)...",action:"importFlash"},
     {label:"Import XFL Folder...",action:"importXFL"},
+    {label:"Shared Library...",action:"sharedLibrary"},
     {label:"Import from URL...",action:"importURL"}
   ]},
   {label:"Edit",items:[
@@ -550,6 +551,9 @@ var menus=[
     {label:"Find and Replace...",action:"findReplace",shortcut:"Ctrl+F"},
     {type:"sep"},
     {label:"Commands...",action:"commands"},
+    {type:"sep"},
+    {label:"Strings...",action:"strings"},
+    {label:"Accessibility...",action:"accessibility"},
     {type:"sep"},
     {label:"Keyboard Shortcuts...",action:"shortcuts"},
     {label:"Preferences...",action:"prefs"}
@@ -597,6 +601,8 @@ var menus=[
   {label:"Modify",items:[
     {label:"Convert to Symbol...",action:"convertSym",shortcut:"F8"},
     {label:"Convert Frames to Symbol...",action:"framesToSymbol"},
+    {type:"sep"},
+    {label:"Timeline Effects...",action:"timelineEffect"},
     {type:"sep"},
     {label:"Group",action:"group",shortcut:"Ctrl+G"},
     {label:"Ungroup",action:"ungroup",shortcut:"Ctrl+Shift+G"},
@@ -8754,6 +8760,10 @@ function initOutputPanel(){
 
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
+  timelineEffect:"Timeline Effect",
+  strings:"Strings",
+  accessibility:"Accessibility",
+  sharedLibrary:"Shared Library",
   commands:"Commands",
   findReplace:"Find and Replace",
   matchStage:"Match Stage Size",
@@ -11728,11 +11738,23 @@ function doActionInner(a){
   case "shortcuts":
     showShortcutsDialog();
     break;
+  case "timelineEffect":
+    showTimelineEffectDialog();
+    break;
   case "findReplace":
     showFindReplaceDialog();
     break;
   case "commands":
     showCommandsDialog();
+    break;
+  case "strings":
+    showStringsDialog();
+    break;
+  case "accessibility":
+    showAccessibilityDialog();
+    break;
+  case "sharedLibrary":
+    showSharedLibraryDialog();
     break;
   case "revert":
     revertDocument();
@@ -16546,6 +16568,1030 @@ function showTemplateDialog() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Timeline Effects
+ *
+ * Flash MX 2004's one-click animations: pick a shape, pick Blur or Explode,
+ * and it writes the keyframes for you. Adobe deprecated them, and the usual
+ * reason given is that the generated frames were opaque -- you could not open
+ * one up and nudge it, only delete the effect and start again.
+ *
+ * So they are generated as ORDINARY keyframes here, with the spec kept on the
+ * first one. The frames are editable like any others; the spec is there so the
+ * effect can be re-run with different settings, and "Remove Effect" puts the
+ * original object back. That is the feature without the part that killed it.
+ *
+ * Every effect is a function from (object, params) to a list of frames, so
+ * adding one is adding a generator and nothing else.
+ * ------------------------------------------------------------------ */
+
+/** A deep-ish copy of an object for a generated frame. */
+function fxClone(o) {
+  return o.clone ? o.clone() : JSON.parse(JSON.stringify(o));
+}
+
+/** Ease a 0..1 progress the way the effect's own `ease` asks. */
+function fxEase(t, ease) {
+  if (ease === "in") return t * t;
+  if (ease === "out") return 1 - (1 - t) * (1 - t);
+  if (ease === "both") return t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
+  return t;
+}
+
+var TIMELINE_EFFECTS = [
+  {
+    id: "blurIn", label: "Blur",
+    describe: "Fades and blurs in or out over a span of frames.",
+    params: { frames: 12, amount: 24, direction: "in", ease: "out" },
+    build: function (o, p) {
+      var out = [];
+      for (var i = 0; i < p.frames; i++) {
+        var t = fxEase(p.frames === 1 ? 1 : i / (p.frames - 1), p.ease);
+        var k = p.direction === "in" ? t : 1 - t;
+        var c = fxClone(o);
+        c.alpha = k;
+        /* A real blur filter, not a scale trick: the stack already tweens, so
+           the generated frames get one filter each and the interpolator does
+           the rest if you later turn them into a tween. */
+        c.filters = [{ type: "blur", enabled: true,
+                       blurX: p.amount * (1 - k), blurY: p.amount * (1 - k) }];
+        out.push([c]);
+      }
+      return out;
+    }
+  },
+  {
+    id: "expand", label: "Expand",
+    describe: "Grows or shrinks from the registration point.",
+    params: { frames: 12, from: 0.2, to: 1, ease: "out" },
+    build: function (o, p) {
+      var out = [];
+      var r = regPoint(o);
+      var cx = o.x + o.width * r.x, cy = o.y + o.height * r.y;
+      for (var i = 0; i < p.frames; i++) {
+        var t = fxEase(p.frames === 1 ? 1 : i / (p.frames - 1), p.ease);
+        var k = p.from + (p.to - p.from) * t;
+        var c = fxClone(o);
+        c.width = o.width * k;
+        c.height = o.height * k;
+        // Grown about the registration point, which is what "expand" means --
+        // growing about the top-left corner looks like sliding.
+        c.x = cx - c.width * r.x;
+        c.y = cy - c.height * r.y;
+        out.push([c]);
+      }
+      return out;
+    }
+  },
+  {
+    id: "explode", label: "Explode",
+    describe: "Breaks the shape into pieces that fly apart and fade.",
+    params: { frames: 16, pieces: 8, spread: 160, spin: 180, ease: "out" },
+    build: function (o, p) {
+      /* The pieces are copies scaled down and sent on their own headings.
+         Flash's version cut the artwork up; that needs a boolean split per
+         piece and looks worse for it on anything but a solid rectangle, so
+         this sends whole small copies instead and says so in the dialog. */
+      var n = Math.max(2, Math.min(24, p.pieces));
+      var r = regPoint(o);
+      var cx = o.x + o.width * r.x, cy = o.y + o.height * r.y;
+      var out = [];
+      for (var i = 0; i < p.frames; i++) {
+        var t = fxEase(p.frames === 1 ? 1 : i / (p.frames - 1), p.ease);
+        var frame = [];
+        for (var j = 0; j < n; j++) {
+          var ang = (j / n) * Math.PI * 2;
+          var c = fxClone(o);
+          c.width = o.width / Math.sqrt(n);
+          c.height = o.height / Math.sqrt(n);
+          c.x = cx + Math.cos(ang) * p.spread * t - c.width * r.x;
+          c.y = cy + Math.sin(ang) * p.spread * t - c.height * r.y;
+          c.rotation = (o.rotation || 0) + p.spin * t * (j % 2 ? 1 : -1);
+          c.alpha = Math.max(0, 1 - t);
+          frame.push(c);
+        }
+        out.push(frame);
+      }
+      return out;
+    }
+  },
+  {
+    id: "transform", label: "Transform",
+    describe: "Moves, scales, rotates and fades to a target in one span.",
+    params: { frames: 12, dx: 120, dy: 0, scale: 1, spin: 0, alpha: 1,
+              ease: "both" },
+    build: function (o, p) {
+      var out = [];
+      var r = regPoint(o);
+      var cx = o.x + o.width * r.x, cy = o.y + o.height * r.y;
+      for (var i = 0; i < p.frames; i++) {
+        var t = fxEase(p.frames === 1 ? 1 : i / (p.frames - 1), p.ease);
+        var k = 1 + (p.scale - 1) * t;
+        var c = fxClone(o);
+        c.width = o.width * k;
+        c.height = o.height * k;
+        c.x = cx + p.dx * t - c.width * r.x;
+        c.y = cy + p.dy * t - c.height * r.y;
+        c.rotation = (o.rotation || 0) + p.spin * t;
+        var a0 = o.alpha == null ? 1 : o.alpha;
+        c.alpha = a0 + (p.alpha - a0) * t;
+        out.push([c]);
+      }
+      return out;
+    }
+  },
+  {
+    id: "transition", label: "Transition",
+    describe: "Wipes or fades in from an edge.",
+    params: { frames: 12, mode: "wipe", edge: "left", ease: "out" },
+    build: function (o, p) {
+      var out = [];
+      for (var i = 0; i < p.frames; i++) {
+        var t = fxEase(p.frames === 1 ? 1 : i / (p.frames - 1), p.ease);
+        var c = fxClone(o);
+        if (p.mode === "fade") {
+          c.alpha = t;
+        } else {
+          /* A wipe is the object revealed a slice at a time. With no mask
+             layer to drive it, the slice IS the object: its box grows from the
+             chosen edge, which for a flat fill is indistinguishable and for
+             anything else at least reads as a wipe. */
+          if (p.edge === "left" || p.edge === "right") {
+            c.width = Math.max(1, o.width * t);
+            if (p.edge === "right") c.x = o.x + o.width - c.width;
+          } else {
+            c.height = Math.max(1, o.height * t);
+            if (p.edge === "bottom") c.y = o.y + o.height - c.height;
+          }
+        }
+        out.push([c]);
+      }
+      return out;
+    }
+  },
+  {
+    id: "dropShadow", label: "Drop Shadow",
+    describe: "Adds a shadow behind the object, as a filter.",
+    params: { frames: 1, distance: 6, angle: 45, blur: 8, alpha: 0.5 },
+    build: function (o, p) {
+      var c = fxClone(o);
+      c.filters = (o.filters || []).concat([{
+        type: "dropShadow", enabled: true,
+        distance: p.distance, angle: p.angle, blur: p.blur,
+        color: 0x000000, alpha: p.alpha, strength: 1
+      }]);
+      return [[c]];
+    }
+  },
+  {
+    id: "copyToGrid", label: "Copy to Grid",
+    describe: "Tiles copies of the object into rows and columns.",
+    params: { frames: 1, rows: 3, cols: 3, gapX: 10, gapY: 10 },
+    build: function (o, p) {
+      var frame = [];
+      var rows = Math.max(1, Math.min(20, p.rows));
+      var cols = Math.max(1, Math.min(20, p.cols));
+      for (var ry = 0; ry < rows; ry++) {
+        for (var cxi = 0; cxi < cols; cxi++) {
+          var c = fxClone(o);
+          c.x = o.x + cxi * (o.width + p.gapX);
+          c.y = o.y + ry * (o.height + p.gapY);
+          frame.push(c);
+        }
+      }
+      return [frame];
+    }
+  },
+  {
+    id: "duplicate", label: "Distributed Duplicate",
+    describe: "Copies the object across frames, each one offset a little more.",
+    params: { frames: 10, dx: 20, dy: 0, scale: 1, spin: 0, alpha: 1,
+              trail: false },
+    build: function (o, p) {
+      var out = [];
+      var r = regPoint(o);
+      var cx = o.x + o.width * r.x, cy = o.y + o.height * r.y;
+      var made = [];
+      for (var i = 0; i < p.frames; i++) {
+        var k = Math.pow(p.scale, i);
+        var c = fxClone(o);
+        c.width = o.width * k;
+        c.height = o.height * k;
+        c.x = cx + p.dx * i - c.width * r.x;
+        c.y = cy + p.dy * i - c.height * r.y;
+        c.rotation = (o.rotation || 0) + p.spin * i;
+        var a0 = o.alpha == null ? 1 : o.alpha;
+        c.alpha = Math.max(0, a0 * Math.pow(p.alpha, i));
+        made.push(c);
+        /* With a trail every copy so far stays on screen, so the result is a
+           stamped path; without it each frame holds one copy and the result is
+           a motion. Both are what people reached for this for. */
+        out.push(p.trail ? made.map(fxClone) : [c]);
+      }
+      return out;
+    }
+  }
+];
+
+function timelineEffect(id) {
+  return TIMELINE_EFFECTS.filter(function (e) { return e.id === id; })[0] || null;
+}
+
+/**
+ * Apply a Timeline Effect to the selection.
+ *
+ * Writes ordinary keyframes onto the current layer, starting at the current
+ * frame, and records the spec plus the original objects on the first one so it
+ * can be re-run or removed.
+ */
+function applyTimelineEffect(id, params) {
+  var spec = timelineEffect(id);
+  if (!spec) return { ok: false, why: "unknown effect" };
+  if (!layerEditable()) return { ok: false, why: "this layer is locked or hidden" };
+  if (!selection.length) return { ok: false, why: "nothing is selected" };
+
+  var p = Object.assign({}, spec.params, params || {});
+  p.frames = Math.max(1, Math.min(200, parseInt(p.frames, 10) || spec.params.frames));
+
+  var layer = CL();
+  if (!layer) return { ok: false, why: "there is no layer to put it on" };
+  var start = curFrame;
+  var source = selection.slice();
+
+  /* Every selected object goes through the generator and the results are
+     merged frame by frame, so applying an effect to three shapes animates all
+     three rather than only the first. */
+  var perFrame = [];
+  source.forEach(function (o) {
+    var frames = spec.build(o, p);
+    for (var i = 0; i < frames.length; i++) {
+      if (!perFrame[i]) perFrame[i] = [];
+      perFrame[i] = perFrame[i].concat(frames[i]);
+    }
+  });
+  if (!perFrame.length) return { ok: false, why: "the effect produced no frames" };
+
+  pushUndo();
+
+  /* The originals are remembered on the first generated keyframe, so Remove
+     Effect can put them back exactly. Serialised, because the objects
+     themselves are about to be replaced. */
+  var original = source.map(plainObj);
+
+  // Anything already on the affected frames is replaced: an effect owns its
+  // span, and merging into whatever was there produced unexplainable results.
+  var kfs = [];
+  for (var fi = 0; fi < perFrame.length; fi++) {
+    var kf = layer.insertKeyframe(start + fi);
+    if (!kf) continue;
+    kf.duration = 1;
+    kf.tweenType = "none";
+    kf.objects = perFrame[fi];
+    kfs.push(kf);
+  }
+  if (!kfs.length) return { ok: false, why: "the frames could not be inserted" };
+
+  kfs[0].effect = { id: id, params: p, frames: perFrame.length, original: original };
+  if (doc.totalFrames < start + perFrame.length - 1) {
+    doc.totalFrames = start + perFrame.length - 1;
+  }
+  curFrame = start;
+  selection = kfs[0].objects.slice(0, source.length);
+  return { ok: true, id: id, frames: perFrame.length, keyframe: kfs[0] };
+}
+
+/** The effect on the current frame's keyframe, if there is one. */
+function effectHere() {
+  var kf = CKF();
+  return (kf && kf.effect) ? kf : null;
+}
+
+/** Put the original objects back and drop the generated frames. */
+function removeTimelineEffect() {
+  var kf = effectHere();
+  if (!kf) return { ok: false, why: "there is no effect on this frame" };
+  if (!layerEditable()) return { ok: false, why: "this layer is locked or hidden" };
+  var layer = CL();
+  var fx = kf.effect;
+  pushUndo();
+  // The generated frames after the first go; the first one gets the originals.
+  for (var i = fx.frames - 1; i >= 1; i--) {
+    var at = layer.keyframes.filter(function (k) { return k.index === kf.index + i; })[0];
+    if (at) layer.keyframes.splice(layer.keyframes.indexOf(at), 1);
+  }
+  kf.objects = (fx.original || []).map(reviveObject);
+  kf.duration = 1;
+  delete kf.effect;
+  selection = kf.objects.slice();
+  return { ok: true, restored: kf.objects.length };
+}
+
+function showTimelineEffectDialog() {
+  if (!selection.length && !effectHere()) {
+    showMessage("Timeline Effects",
+      "Select something first. An effect writes its frames from whatever is " +
+      "selected, so there has to be something to animate.");
+    return;
+  }
+  var existing = effectHere();
+  var current = existing ? existing.effect : null;
+  var startId = current ? current.id : TIMELINE_EFFECTS[0].id;
+
+  var fieldsFor = function (id) {
+    var spec = timelineEffect(id);
+    var p = (current && current.id === id) ? current.params : spec.params;
+    var out = [
+      { name: "id", label: "Effect", type: "select", value: id,
+        options: TIMELINE_EFFECTS.map(function (e) { return [e.id, e.label]; }) }
+    ];
+    Object.keys(spec.params).forEach(function (k) {
+      var v = p[k] == null ? spec.params[k] : p[k];
+      if (typeof v === "boolean") {
+        out.push({ name: k, label: k, type: "checkbox", value: v });
+      } else if (typeof v === "number") {
+        out.push({ name: k, label: k, type: "number", value: v });
+      } else if (k === "ease") {
+        out.push({ name: k, label: "Ease", type: "select", value: v,
+                   options: [["linear", "None"], ["in", "In"], ["out", "Out"],
+                             ["both", "In and out"]] });
+      } else if (k === "direction") {
+        out.push({ name: k, label: "Direction", type: "select", value: v,
+                   options: [["in", "In"], ["out", "Out"]] });
+      } else if (k === "mode") {
+        out.push({ name: k, label: "Mode", type: "select", value: v,
+                   options: [["wipe", "Wipe"], ["fade", "Fade"]] });
+      } else if (k === "edge") {
+        out.push({ name: k, label: "From edge", type: "select", value: v,
+                   options: [["left", "Left"], ["right", "Right"],
+                             ["top", "Top"], ["bottom", "Bottom"]] });
+      } else {
+        out.push({ name: k, label: k, value: v });
+      }
+    });
+    return out;
+  };
+
+  var open = function (id) {
+    var spec = timelineEffect(id);
+    showDialog({
+      title: existing ? "Edit Timeline Effect" : "Timeline Effects",
+      message: spec.describe + "\n\nThe frames it writes are ordinary " +
+               "keyframes: open them and nudge them like any others. The " +
+               "settings are kept so you can come back and change them.",
+      fields: fieldsFor(id),
+      okLabel: existing ? "Re-apply" : "Apply",
+      extraButtons: existing ? [{ label: "Remove Effect", onClick: function (v, close) {
+        close();
+        var r = removeTimelineEffect();
+        if (r.ok) fullRefresh();
+        else showMessage("Timeline Effects", "Not removed: " + r.why + ".");
+      } }] : [],
+      onOk: function (v) {
+        if (v.id !== id) { open(v.id); return; }   // the picker changed: reopen
+        var params = {};
+        Object.keys(spec.params).forEach(function (k) {
+          var d = spec.params[k];
+          params[k] = typeof d === "number" ? (parseFloat(v[k]) || 0)
+                    : typeof d === "boolean" ? !!v[k]
+                    : v[k];
+        });
+        /* Re-applying puts the originals back first, so the second run starts
+           from the same place the first one did instead of compounding. */
+        if (existing) {
+          var sel = (existing.effect.original || []).map(reviveObject);
+          removeTimelineEffect();
+          selection = sel.length ? selection : selection;
+        }
+        var r = applyTimelineEffect(v.id, params);
+        if (!r.ok) showMessage("Timeline Effects", "Not applied: " + r.why + ".");
+        fullRefresh();
+      }
+    });
+  };
+  open(startId);
+}
+
+/* ------------------------------------------------------------------ *
+ * Strings and localisation
+ *
+ * Flash's Strings panel: every text field gets an ID, the text itself lives in
+ * a table keyed by ID and language, and the movie picks a language at runtime.
+ * Without it a translated cartoon is a second copy of the whole document, and
+ * the translator has to be given the editor.
+ *
+ * The table rides on the document and is exported with it; the player sets the
+ * fields on frame one. A field with no ID is untranslated and keeps the text
+ * it was authored with, so adding a language to an existing document changes
+ * nothing until an ID is given out.
+ * ------------------------------------------------------------------ */
+
+function docStrings() {
+  if (!doc.strings) doc.strings = { languages: ["en"], active: "en", table: {} };
+  var st = doc.strings;
+  if (!Array.isArray(st.languages) || !st.languages.length) st.languages = ["en"];
+  if (!st.active || st.languages.indexOf(st.active) < 0) st.active = st.languages[0];
+  if (!st.table || typeof st.table !== "object") st.table = {};
+  return st;
+}
+
+/** Every text object in the document, with where it lives. */
+function stringFields() {
+  return frWalk("document")
+    .filter(function (e) { return e.obj.type === "text"; })
+    .map(function (e) {
+      return { obj: e.obj, where: e.where, id: e.obj.stringId || "" };
+    });
+}
+
+/**
+ * The text a field should show in a language.
+ *
+ * Falls back to the first language that HAS the string, and then to the text
+ * on the object. A missing translation showing the original beats a field that
+ * goes blank — on stage you would see the field vanish and have no idea which
+ * of the two things went wrong.
+ */
+function stringFor(id, lang) {
+  var st = docStrings();
+  if (!id) return null;
+  var row = st.table[id];
+  if (!row) return null;
+  if (row[lang] != null && row[lang] !== "") return row[lang];
+  for (var i = 0; i < st.languages.length; i++) {
+    var l = st.languages[i];
+    if (row[l] != null && row[l] !== "") return row[l];
+  }
+  return null;
+}
+
+/** Set one cell of the table. */
+function setString(id, lang, text) {
+  id = String(id || "").trim();
+  if (!id) return false;
+  var st = docStrings();
+  if (st.languages.indexOf(lang) < 0) return false;
+  if (!st.table[id]) st.table[id] = {};
+  st.table[id][lang] = String(text == null ? "" : text);
+  touchDoc();
+  return true;
+}
+
+function addStringLanguage(lang) {
+  lang = String(lang || "").trim().toLowerCase();
+  if (!/^[a-z]{2}(-[a-z]{2})?$/.test(lang)) {
+    return { ok: false, why: "a language is a code like en or pt-br" };
+  }
+  var st = docStrings();
+  if (st.languages.indexOf(lang) >= 0) return { ok: false, why: "it is already there" };
+  st.languages.push(lang);
+  touchDoc();
+  return { ok: true, lang: lang };
+}
+
+function removeStringLanguage(lang) {
+  var st = docStrings();
+  if (st.languages.length <= 1) {
+    return { ok: false, why: "a document needs at least one language" };
+  }
+  var at = st.languages.indexOf(lang);
+  if (at < 0) return { ok: false, why: "it is not in the list" };
+  st.languages.splice(at, 1);
+  Object.keys(st.table).forEach(function (id) { delete st.table[id][lang]; });
+  if (st.active === lang) st.active = st.languages[0];
+  touchDoc();
+  return { ok: true };
+}
+
+/**
+ * Give every text field without an ID one, from its own text.
+ *
+ * Which is the tedious half of localising an existing document, and the half a
+ * tool should do: forty fields each need a stable key, and typing forty keys
+ * is how two of them end up the same.
+ */
+function autoAssignStringIds() {
+  var fields = stringFields().filter(function (f) { return !f.id; });
+  if (!fields.length) return { ok: false, why: "every field already has an ID" };
+  var st = docStrings();
+  var used = {};
+  stringFields().forEach(function (f) { if (f.id) used[f.id] = true; });
+  var n = 0;
+  pushUndo();
+  fields.forEach(function (f) {
+    var base = String(f.obj.text || "text").trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) || "text";
+    var id = base, k = 2;
+    while (used[id]) id = base + "_" + (k++);
+    used[id] = true;
+    f.obj.stringId = id;
+    // Seed the authored text as the first language's translation, so the
+    // panel opens showing what is on the stage rather than empty rows.
+    if (!st.table[id]) st.table[id] = {};
+    if (st.table[id][st.languages[0]] == null) {
+      st.table[id][st.languages[0]] = String(f.obj.text == null ? "" : f.obj.text);
+    }
+    n++;
+  });
+  touchDoc();
+  return { ok: true, assigned: n };
+}
+
+/**
+ * Push the active language's strings onto the fields.
+ *
+ * The objects keep their authored text until this runs, and running it is
+ * reversible by switching back — so a document is never stuck in a language.
+ */
+function applyActiveLanguage() {
+  var st = docStrings();
+  var n = 0;
+  stringFields().forEach(function (f) {
+    if (!f.id) return;
+    var t = stringFor(f.id, st.active);
+    if (t == null) return;
+    if (f.obj.text !== t) { f.obj.text = t; n++; }
+  });
+  if (n) { touchDoc(); fullRefresh(); }
+  return n;
+}
+
+function setActiveLanguage(lang) {
+  var st = docStrings();
+  if (st.languages.indexOf(lang) < 0) return { ok: false, why: "unknown language" };
+  pushUndo();
+  st.active = lang;
+  var n = applyActiveLanguage();
+  return { ok: true, lang: lang, changed: n };
+}
+
+/** The table as a CSV, which is what a translator wants to be handed. */
+function stringsToCSV() {
+  var st = docStrings();
+  var esc = function (v) {
+    var s = String(v == null ? "" : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  var lines = [["id"].concat(st.languages).map(esc).join(",")];
+  Object.keys(st.table).sort().forEach(function (id) {
+    lines.push([id].concat(st.languages.map(function (l) {
+      return st.table[id][l];
+    })).map(esc).join(","));
+  });
+  return lines.join("\n");
+}
+
+/** Read a CSV back, adding languages and rows it brings. */
+function stringsFromCSV(text) {
+  var rows = [];
+  var cur = [], field = "", inQ = false;
+  var src = String(text || "").replace(/\r\n?/g, "\n");
+  for (var i = 0; i < src.length; i++) {
+    var c = src[i];
+    if (inQ) {
+      if (c === '"' && src[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ",") { cur.push(field); field = ""; }
+    else if (c === "\n") { cur.push(field); rows.push(cur); cur = []; field = ""; }
+    else field += c;
+  }
+  if (field.length || cur.length) { cur.push(field); rows.push(cur); }
+  rows = rows.filter(function (r) { return r.length > 1 || (r[0] || "").trim(); });
+  if (rows.length < 2) return { ok: false, why: "that file has no rows in it" };
+
+  var head = rows[0].map(function (h) { return String(h).trim().toLowerCase(); });
+  if (head[0] !== "id") return { ok: false, why: 'the first column must be "id"' };
+  var st = docStrings();
+  pushUndo();
+  var langs = head.slice(1).filter(function (l) { return l; });
+  langs.forEach(function (l) {
+    if (st.languages.indexOf(l) < 0) st.languages.push(l);
+  });
+  var n = 0;
+  for (var r = 1; r < rows.length; r++) {
+    var id = String(rows[r][0] || "").trim();
+    if (!id) continue;
+    if (!st.table[id]) st.table[id] = {};
+    langs.forEach(function (l, ci) {
+      var v = rows[r][ci + 1];
+      if (v != null && v !== "") { st.table[id][l] = v; n++; }
+    });
+  }
+  touchDoc();
+  return { ok: true, cells: n, languages: langs.length };
+}
+
+function showStringsDialog() {
+  var st = docStrings();
+  var fields = stringFields();
+  var withId = fields.filter(function (f) { return f.id; });
+  var listEl = null;
+
+  var draw = function () {
+    if (!listEl) return;
+    listEl.textContent = "";
+    var now = docStrings();
+    stringFields().filter(function (f) { return f.id; }).forEach(function (f) {
+      var row = document.createElement("div");
+      row.className = "str-row";
+      var id = document.createElement("span");
+      id.className = "str-id";
+      id.textContent = f.id;
+      id.title = f.where;
+      row.appendChild(id);
+      var inp = document.createElement("input");
+      inp.className = "props-input str-text";
+      inp.value = (now.table[f.id] && now.table[f.id][now.active]) || "";
+      inp.placeholder = String(f.obj.text || "");
+      inp.addEventListener("change", function () {
+        setString(f.id, now.active, inp.value);
+        applyActiveLanguage();
+      });
+      row.appendChild(inp);
+      listEl.appendChild(row);
+    });
+    if (!listEl.childNodes.length) {
+      var note = document.createElement("div");
+      note.className = "fy-dialog-hint";
+      note.textContent = "No field has a string ID yet. Assign IDs below and " +
+                         "the authored text becomes the first language.";
+      listEl.appendChild(note);
+    }
+  };
+
+  showDialog({
+    title: "Strings",
+    message: fields.length + " text field" + (fields.length === 1 ? "" : "s") +
+             " in this document, " + withId.length + " with an ID. A field " +
+             "with no ID keeps its authored text, so adding a language " +
+             "changes nothing until you give one out.",
+    fields: [
+      { name: "active", label: "Language", type: "select", value: st.active,
+        options: st.languages.map(function (l) { return [l, l]; }),
+        onChange: function (v) { setActiveLanguage(v); draw(); } },
+      { name: "newLang", label: "Add language", value: "",
+        placeholder: "fr, de, pt-br" }
+    ],
+    build: function (body) {
+      listEl = document.createElement("div");
+      listEl.className = "str-list";
+      body.appendChild(listEl);
+      draw();
+    },
+    extraButtons: [
+      { label: "Assign IDs", onClick: function (v, close) {
+          var r = autoAssignStringIds();
+          close();
+          showMessage("Strings", r.ok
+            ? "Gave " + r.assigned + " field" + (r.assigned === 1 ? "" : "s") +
+              " an ID, seeded with the text already on them."
+            : "Nothing to do: " + r.why + ".");
+        } },
+      { label: "Export CSV", onClick: function () {
+          dlFile(stringsToCSV(), "strings.csv", "text/csv");
+        } },
+      { label: "Import CSV", onClick: function (v, close) {
+          var inp = document.createElement("input");
+          inp.type = "file";
+          inp.accept = ".csv,text/csv";
+          inp.addEventListener("change", function () {
+            if (!inp.files[0]) return;
+            var rd = new FileReader();
+            rd.onload = function () {
+              var r = stringsFromCSV(rd.result);
+              close();
+              if (!r.ok) { showMessage("Strings", "Not imported: " + r.why + "."); return; }
+              applyActiveLanguage();
+              showMessage("Strings", "Imported " + r.cells + " string" +
+                (r.cells === 1 ? "" : "s") + " across " + r.languages +
+                " language" + (r.languages === 1 ? "" : "s") + ".");
+            };
+            rd.readAsText(inp.files[0]);
+          });
+          inp.click();
+        } }
+    ],
+    okLabel: "Close",
+    noCancel: true,
+    onOk: function (v) {
+      var want = String(v.newLang || "").trim();
+      if (!want) return;
+      var r = addStringLanguage(want);
+      showMessage("Strings", r.ok
+        ? 'Added "' + r.lang + '". Pick it in the Language list to translate into it.'
+        : "Not added: " + r.why + ".");
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Accessibility
+ *
+ * Flash's Accessibility panel: a name and a description per object, and a
+ * switch to say whether assistive technology should see it at all. A canvas is
+ * one opaque rectangle to a screen reader, so without this an exported movie
+ * is completely unreadable — which is most of why Flash content had the
+ * reputation it did.
+ *
+ * The export writes them as a real alternative: ARIA on the canvas for the
+ * movie's own name, and a hidden list of the named objects, so the content has
+ * a text form even though the artwork does not.
+ * ------------------------------------------------------------------ */
+
+function docAccess() {
+  if (!doc.access) doc.access = { enabled: true, name: "", description: "" };
+  var a = doc.access;
+  if (a.enabled == null) a.enabled = true;
+  if (a.name == null) a.name = "";
+  if (a.description == null) a.description = "";
+  return a;
+}
+
+/** Every object that has something to say to a screen reader. */
+function accessibleObjects() {
+  return frWalk("document")
+    .filter(function (e) {
+      var o = e.obj;
+      if (o.accessible === false) return false;
+      return !!(o.accessName || o.accessDescription ||
+                (o.type === "text" && o.text && o.accessible !== false));
+    })
+    .map(function (e) {
+      var o = e.obj;
+      return {
+        where: e.where,
+        name: o.accessName || (o.type === "text" ? String(o.text || "") : "") ||
+              o.instanceName || o.symbolName || o.type,
+        description: o.accessDescription || "",
+        kind: o.type
+      };
+    });
+}
+
+/**
+ * The accessible markup for an export.
+ *
+ * Deliberately a real alternative rather than an `alt` attribute: a cartoon is
+ * a sequence of named things, and one string cannot carry that. Objects marked
+ * inaccessible are left out entirely, which is what the switch is for —
+ * decoration that is announced is worse than decoration that is ignored.
+ */
+function accessMarkup() {
+  var a = docAccess();
+  if (!a.enabled) {
+    // Explicitly hidden, which is the right answer for pure decoration.
+    return { canvasAttrs: ' aria-hidden="true"', body: "" };
+  }
+  var label = a.name || docPublish().title || "Flashy animation";
+  var attrs = ' role="img" aria-label="' + xmlAttr(label) + '"';
+  if (a.description) attrs += ' aria-describedby="flashy-a11y-desc"';
+  var items = accessibleObjects();
+  var body = '<div id="flashy-a11y" style="position:absolute;width:1px;' +
+             'height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap">';
+  if (a.description) {
+    body += '<p id="flashy-a11y-desc">' + xmlText(a.description) + '</p>';
+  }
+  if (items.length) {
+    body += "<ul>";
+    items.slice(0, 200).forEach(function (it) {
+      body += "<li>" + xmlText(it.name) +
+              (it.description ? " — " + xmlText(it.description) : "") + "</li>";
+    });
+    body += "</ul>";
+  }
+  body += "</div>";
+  return { canvasAttrs: attrs, body: body, count: items.length };
+}
+
+function showAccessibilityDialog() {
+  var a = docAccess();
+  var one = selection.length === 1 ? selection[0] : null;
+  showDialog({
+    title: "Accessibility",
+    message: "A canvas is one opaque rectangle to a screen reader. These " +
+             "become a real text alternative in the export: the movie's name " +
+             "on the canvas, and a hidden list of the named objects." +
+             (one ? "" : "\n\nSelect a single object to set its own name too."),
+    fields: [
+      { name: "enabled", label: "Make movie accessible", type: "checkbox",
+        value: !!a.enabled,
+        hint: "Off marks the whole canvas aria-hidden, which is the right " +
+              "answer for pure decoration." },
+      { name: "name", label: "Movie name", value: a.name,
+        placeholder: docPublish().title || "Flashy animation" },
+      { name: "description", label: "Description", value: a.description }
+    ].concat(one ? [
+      { name: "objAccessible", label: "Object accessible", type: "checkbox",
+        value: one.accessible !== false },
+      { name: "objName", label: "Object name", value: one.accessName || "",
+        placeholder: one.instanceName || one.symbolName || one.type },
+      { name: "objDescription", label: "Object description",
+        value: one.accessDescription || "" }
+    ] : []),
+    onOk: function (v) {
+      pushUndo();
+      a.enabled = !!v.enabled;
+      a.name = String(v.name || "").trim();
+      a.description = String(v.description || "").trim();
+      if (one) {
+        one.accessible = !!v.objAccessible;
+        one.accessName = String(v.objName || "").trim();
+        one.accessDescription = String(v.objDescription || "").trim();
+      }
+      touchDoc();
+      fullRefresh();
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Shared libraries
+ *
+ * Flash had two kinds of sharing. Author-time: pull a symbol out of another
+ * document's library into this one, with a link so it can be refreshed when
+ * the source changes. Runtime: leave the symbol in the other file and load it
+ * when the movie plays.
+ *
+ * Author-time is the one that earns its keep, and it is the one implemented:
+ * the symbol really is in this document, so every export path already handles
+ * it, and `sharedFrom` records where it came from so Update can go and get it
+ * again. Runtime sharing would mean a loader protocol and a second file that
+ * has to still be there — which is exactly why Flash content rotted.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Import symbols from another document's library.
+ *
+ * `data` is a parsed .flashy. Names that clash are suffixed rather than
+ * overwriting: the local symbol might be the one the movie is built on.
+ */
+function importSharedLibrary(data, names, source) {
+  if (!data || !data.library) return { ok: false, why: "that file has no library" };
+  var want = (names && names.length) ? names : Object.keys(data.library);
+  if (!want.length) return { ok: false, why: "that library is empty" };
+  var revived = reviveLibrary(data.library);
+  pushUndo();
+  var added = [], renamed = 0;
+  want.forEach(function (n) {
+    if (!revived[n]) return;
+    var name = n;
+    if (doc.library[name]) {
+      var k = 2;
+      while (doc.library[name + " " + k]) k++;
+      name = name + " " + k;
+      renamed++;
+    }
+    doc.library[name] = revived[n];
+    /* Where it came from, so Update Shared Symbol can fetch it again. The
+       original name is kept separately because the local one may have been
+       suffixed. */
+    doc.library[name].sharedFrom = { source: source || "", symbol: n };
+    added.push(name);
+  });
+  /* Bitmaps and sounds the imported symbols use travel too, or the symbol
+     arrives as an empty box with no clue why. */
+  var assets = 0;
+  ["bitmaps", "sounds"].forEach(function (kind) {
+    Object.keys(data[kind] || {}).forEach(function (k) {
+      if (doc[kind] && doc[kind][k]) return;
+      if (!doc[kind]) doc[kind] = {};
+      doc[kind][k] = data[kind][k];
+      assets++;
+    });
+  });
+  if (!added.length) return { ok: false, why: "none of those symbols were found" };
+  touchDoc();
+  return { ok: true, added: added, renamed: renamed, assets: assets };
+}
+
+/** Which library symbols came from somewhere else. */
+function sharedSymbols() {
+  return Object.keys(doc.library || {})
+    .filter(function (n) { return doc.library[n] && doc.library[n].sharedFrom; })
+    .map(function (n) {
+      return { name: n, from: doc.library[n].sharedFrom };
+    });
+}
+
+/** Replace a shared symbol's contents from a freshly supplied document. */
+function updateSharedSymbol(name, data) {
+  var sym = doc.library[name];
+  if (!sym || !sym.sharedFrom) return { ok: false, why: "that symbol is not shared" };
+  var src = sym.sharedFrom.symbol;
+  if (!data || !data.library || !data.library[src]) {
+    return { ok: false, why: 'that file has no symbol called "' + src + '"' };
+  }
+  var revived = reviveLibrary({ x: data.library[src] }).x;
+  pushUndo();
+  /* The CONTENTS are replaced and the link kept: every instance on the stage
+     points at this name, so replacing the entry wholesale would orphan them. */
+  sym.layers = revived.layers;
+  sym.objects = revived.objects;
+  sym.totalFrames = revived.totalFrames;
+  sym.behavior = revived.behavior;
+  sym.scale9 = revived.scale9;
+  touchDoc();
+  fullRefresh();
+  return { ok: true, name: name };
+}
+
+function showSharedLibraryDialog() {
+  var shared = sharedSymbols();
+  var pick = function (onLoad) {
+    var inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".flashy,.json";
+    inp.addEventListener("change", function () {
+      if (!inp.files[0]) return;
+      var name = inp.files[0].name;
+      var rd = new FileReader();
+      rd.onload = function () {
+        var data;
+        try { data = JSON.parse(rd.result); }
+        catch (e) { showMessage("Shared Library", "That file is not a Flashy document."); return; }
+        onLoad(data, name);
+      };
+      rd.readAsText(inp.files[0]);
+    });
+    inp.click();
+  };
+
+  showDialog({
+    title: "Shared Library",
+    message: "Pull symbols out of another Flashy document into this one. They " +
+             "really are in this document afterwards, so every export already " +
+             "handles them — and the link back is kept, so Update can fetch " +
+             "a newer version." +
+             (shared.length ? "\n\n" + shared.length + " symbol" +
+               (shared.length === 1 ? "" : "s") + " here came from elsewhere: " +
+               shared.map(function (s) { return s.name; }).join(", ") : ""),
+    fields: [],
+    extraButtons: [
+      { label: "Import from file…", onClick: function (v, close) {
+          close();
+          pick(function (data, fileName) {
+            var names = Object.keys(data.library || {});
+            if (!names.length) {
+              showMessage("Shared Library", "That document has an empty library.");
+              return;
+            }
+            showDialog({
+              title: "Import Symbols",
+              message: fileName + " has " + names.length + " symbol" +
+                       (names.length === 1 ? "" : "s") + ".",
+              fields: [
+                { name: "which", label: "Symbol", type: "select", value: "*",
+                  options: [["*", "All of them"]].concat(
+                    names.map(function (n) { return [n, n]; })) }
+              ],
+              okLabel: "Import",
+              onOk: function (v2) {
+                var r = importSharedLibrary(data,
+                  v2.which === "*" ? names : [v2.which], fileName);
+                if (!r.ok) { showMessage("Shared Library", "Not imported: " + r.why + "."); return; }
+                fullRefresh();
+                showMessage("Shared Library",
+                  "Imported " + r.added.length + " symbol" +
+                  (r.added.length === 1 ? "" : "s") +
+                  (r.renamed ? " (" + r.renamed + " renamed to avoid a clash)" : "") +
+                  (r.assets ? " and " + r.assets + " asset" +
+                    (r.assets === 1 ? "" : "s") : "") + ".");
+              }
+            });
+          });
+        } },
+      { label: "Update a shared symbol…", onClick: function (v, close) {
+          if (!shared.length) {
+            showMessage("Shared Library", "No symbol here came from another document.");
+            return;
+          }
+          close();
+          showDialog({
+            title: "Update Shared Symbol",
+            fields: [{ name: "which", label: "Symbol", type: "select",
+                       value: shared[0].name,
+                       options: shared.map(function (s) {
+                         return [s.name, s.name + " (from " +
+                                 (s.from.source || "elsewhere") + ")"];
+                       }) }],
+            okLabel: "Choose file…",
+            onOk: function (v2) {
+              pick(function (data) {
+                var r = updateSharedSymbol(v2.which, data);
+                showMessage("Shared Library", r.ok
+                  ? 'Updated "' + r.name + '" from that file.'
+                  : "Not updated: " + r.why + ".");
+              });
+            }
+          });
+        } }
+    ],
+    okLabel: "Close",
+    noCancel: true
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -17793,6 +18839,10 @@ function serializeLayers(layers){
           // Shape hints: [ax,ay,bx,by] in stage space, a point on the start
           // shape and the point it becomes on the end shape.
           shapeHints:kf.shapeHints?kf.shapeHints.map(function(h){return h.slice();}):null,
+          /* A Timeline Effect's spec, so it can be re-run or removed after a
+             save. Without it the generated frames are exactly as opaque as
+             Flash's were, which is the thing worth fixing about them. */
+          effect:kf.effect?JSON.parse(JSON.stringify(kf.effect)):null,
           objects:kf.objects.map(plainObj)
         };
       })
@@ -17821,6 +18871,9 @@ function serializeLibrary(lib){
          a tree beside it, so it cannot get out of step with what it describes
          and needs no migration for an older document. */
       folder:sym.folder||"",
+      // Where a shared symbol came from, so Update can go back for it.
+      sharedFrom:sym.sharedFrom?{source:sym.sharedFrom.source||"",
+                                 symbol:sym.sharedFrom.symbol||""}:null,
       exportForAS:!!sym.exportForAS,
       linkageName:sym.linkageName||"",
       scale9:sym.scale9?{
@@ -17912,7 +18965,12 @@ function serializeDoc(){
     /* Publish settings: what this document produces, remembered with it.
        Publishing the same movie twice should not mean making the same
        decisions twice. */
-    publish:JSON.parse(JSON.stringify(docPublish()))
+    publish:JSON.parse(JSON.stringify(docPublish())),
+    /* The strings table and the accessibility settings. Both belong to the
+       document rather than to the person: a translation is part of the movie,
+       and so is what it says it is. */
+    strings:JSON.parse(JSON.stringify(docStrings())),
+    access:JSON.parse(JSON.stringify(docAccess()))
   };
 }
 
@@ -17995,6 +19053,16 @@ function exportDocData(){
      a bit in the header that cooperating tools honoured and decompilers
      ignored, so claiming more than this would be a lie. */
   if(pub.protect)d.protect=true;
+  /* The strings table travels, so an exported movie can switch language
+     without being rebuilt. The player reads it on frame one. */
+  var st=docStrings();
+  if(Object.keys(st.table).length){
+    d.strings={languages:st.languages.slice(),active:st.active,
+               table:JSON.parse(JSON.stringify(st.table))};
+  }else{
+    delete d.strings;
+  }
+  delete d.access;   // the markup is already in the page; the data is not needed
   return d;
 }
 function serializeCharacters(cs){
@@ -18054,6 +19122,7 @@ function reviveKeyframe(kd){
   // symbol to this keyframe's span.
   kf.tweenSnap=!!kd.tweenSnap;
   kf.tweenSync=!!kd.tweenSync;
+  kf.effect=(kd.effect&&kd.effect.id)?JSON.parse(JSON.stringify(kd.effect)):null;
   kf.shapeHints=Array.isArray(kd.shapeHints)
     ? kd.shapeHints.filter(function(h){return Array.isArray(h)&&h.length>=4;})
         .map(function(h){return h.slice(0,4).map(Number);})
@@ -18097,6 +19166,10 @@ function reviveLibrary(lib){
       folder:typeof sd.folder==="string"?sd.folder:"",
       exportForAS:!!sd.exportForAS,
       linkageName:typeof sd.linkageName==="string"?sd.linkageName:"",
+      // Where a shared symbol came from, so Update can fetch it again.
+      sharedFrom:(sd.sharedFrom&&sd.sharedFrom.symbol)
+        ?{source:String(sd.sharedFrom.source||""),
+          symbol:String(sd.sharedFrom.symbol)}:null,
       scale9:sd.scale9?{
         left:Number(sd.scale9.left)||0,right:Number(sd.scale9.right)||0,
         top:Number(sd.scale9.top)||0,bottom:Number(sd.scale9.bottom)||0
@@ -18278,6 +19351,29 @@ function exportRuntime(data, canvas, options) {
   });
   var root = stage.root;
   var easing = Flashy.Easing;
+
+  /* The strings table, if the document carries one. `options.language`
+     overrides the authored choice, which is what lets one exported file serve
+     every language rather than one build per locale. */
+  var strings = data.strings || null;
+  if (strings) {
+    strings = {
+      languages: (strings.languages || ["en"]).slice(),
+      active: options.language || strings.active || (strings.languages || ["en"])[0],
+      table: strings.table || {}
+    };
+    if (strings.languages.indexOf(strings.active) < 0) {
+      strings.active = strings.languages[0];
+    }
+    /* Published on the stage, so a page can switch language after load: the
+       display list is rebuilt per frame, so the next frame picks it up. */
+    stage.strings = strings;
+    stage.setLanguage = function (lang) {
+      if (strings.languages.indexOf(lang) < 0) return false;
+      strings.active = lang;
+      return true;
+    };
+  }
 
   function hex(c, dflt) { return parseInt(String(c || dflt).replace("#", ""), 16); }
 
@@ -18776,6 +19872,26 @@ function exportRuntime(data, canvas, options) {
          export passes no `chrome`, so an empty dynamic field stays empty
          instead of shipping the word "Text". */
       var tf = Flashy.TextField.fromObject(o, {});
+      /* The strings table, if the movie carries one: a field with a string ID
+         takes its text from the table for the active language. A field with no
+         ID keeps what it was authored with, so a document that was never
+         localised behaves exactly as before. */
+      if (o.stringId && strings && strings.table) {
+        var row = strings.table[o.stringId];
+        if (row) {
+          var pick = row[strings.active];
+          if (pick == null || pick === "") {
+            // Fall back to any language that HAS it: a field that went blank
+            // would look like the field broke, not like the translation
+            // is missing.
+            for (var li2 = 0; li2 < strings.languages.length; li2++) {
+              var cand = row[strings.languages[li2]];
+              if (cand != null && cand !== "") { pick = cand; break; }
+            }
+          }
+          if (pick != null && pick !== "") tf.text = pick;
+        }
+      }
       // The field draws from its box's top-left; the node sits at the centre.
       tf.x = -hw;
       tf.y = -hh;
@@ -19875,7 +20991,12 @@ function genHTML(callback){
     s+="#flashy-start button{width:88px;height:88px;border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,0.35);color:#fff;font-size:34px;line-height:1;cursor:pointer;padding-left:6px;}\n";
     s+="#flashy-start button:hover{background:rgba(255,255,255,0.18);}\n";
     s+="</style>\n</head>\n<body>\n";
-    s+="<canvas id=\"stage\"></canvas>\n";
+    /* Accessibility. A canvas is one opaque rectangle to a screen reader, so
+       the export carries a real text alternative: the movie's name on the
+       canvas and a hidden list of its named objects. */
+    var a11y=accessMarkup();
+    s+="<canvas id=\"stage\""+a11y.canvasAttrs+"></canvas>\n";
+    if(a11y.body)s+=a11y.body+"\n";
     // A cartoon with a soundtrack needs a user gesture before the browser
     // will let it make noise, so the export opens behind a play button
     // rather than starting silently and confusing the viewer. Silent
@@ -22159,6 +23280,30 @@ function init(){
     docPublish: docPublish,
     comboItems: comboItems,
     addComponent: addComponent,
+    /* Timeline Effects: the generators, and the frames they write. */
+    TIMELINE_EFFECTS: TIMELINE_EFFECTS,
+    timelineEffect: timelineEffect,
+    applyTimelineEffect: applyTimelineEffect,
+    removeTimelineEffect: removeTimelineEffect,
+    effectHere: effectHere,
+    /* Strings and localisation, accessibility, and shared libraries. */
+    docStrings: docStrings,
+    stringFields: stringFields,
+    stringFor: stringFor,
+    setString: setString,
+    addStringLanguage: addStringLanguage,
+    removeStringLanguage: removeStringLanguage,
+    autoAssignStringIds: autoAssignStringIds,
+    applyActiveLanguage: applyActiveLanguage,
+    setActiveLanguage: setActiveLanguage,
+    stringsToCSV: stringsToCSV,
+    stringsFromCSV: stringsFromCSV,
+    docAccess: docAccess,
+    accessibleObjects: accessibleObjects,
+    accessMarkup: accessMarkup,
+    importSharedLibrary: importSharedLibrary,
+    sharedSymbols: sharedSymbols,
+    updateSharedSymbol: updateSharedSymbol,
     BUTTON_STATES: BUTTON_STATES,
     /* Opening a symbol for editing, which is what a double-click does. There
        was no way to reach it except through the stage. */

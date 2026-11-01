@@ -1618,3 +1618,16 @@ input[type="range"].props-input {
    language, the other is something you wrote. */
 .code-chip.snippet { background: #3A4A3A; border-color: #5A6A5A; }
 .code-chip.add-snippet { background: #3A3A4A; border-color: #5A5A6A; }
+
+/* The Strings panel: one row per localised field, in a scrolling list like
+   Find and Replace's. */
+.str-list {
+  max-height: 200px; overflow-y: auto;
+  border: 1px solid #1a1a1a; border-radius: 3px;
+  background: #242424; margin: 4px 0;
+}
+.str-row { display: flex; align-items: center; gap: 6px; padding: 2px 6px;
+           border-bottom: 1px solid #2E2E2E; }
+.str-id { color: #9AB; min-width: 100px; font-size: 11px;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.str-text { flex: 1; }
