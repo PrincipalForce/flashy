@@ -100,6 +100,54 @@
   Easing.cubicBezier = cubicBezierEase;
   Easing.resolve = resolveEasing;
 
+  /* -------------------- Output --------------------
+   *
+   * Where trace() goes.
+   *
+   * `trace()` is the primary debugging affordance of Flash, and it went to the
+   * browser console — which is to say nowhere a user of the editor would ever
+   * look. A sink here means the authoring Output panel, the exported player
+   * and an imported movie's ActionScript all write to the same place.
+   * ------------------------------------------------------------------ */
+  const Output = {
+    lines: [],
+    /** Bounded: a trace in an enterFrame handler fires sixty times a second. */
+    max: 500,
+    _listeners: [],
+
+    write() {
+      const text = Array.prototype.map.call(arguments, v => {
+        if (typeof v === "string") return v;
+        if (v == null) return String(v);
+        try { return JSON.stringify(v); } catch (e) { return String(v); }
+      }).join(" ");
+      this.lines.push(text);
+      if (this.lines.length > this.max) this.lines.splice(0, this.lines.length - this.max);
+      const copy = this._listeners.slice();
+      for (let i = 0; i < copy.length; i++) {
+        try { copy[i](text); } catch (e) { /* a bad listener must not stop a trace */ }
+      }
+      return text;
+    },
+
+    clear() {
+      this.lines.length = 0;
+      const copy = this._listeners.slice();
+      for (let i = 0; i < copy.length; i++) {
+        try { copy[i](null); } catch (e) { /* as above */ }
+      }
+    },
+
+    /** Called with each line as it arrives, and with null when cleared. */
+    onWrite(fn) { this._listeners.push(fn); return fn; },
+    offWrite(fn) {
+      const i = this._listeners.indexOf(fn);
+      if (i >= 0) this._listeners.splice(i, 1);
+    },
+
+    text() { return this.lines.join("\n"); }
+  };
+
   // -------------------- color helpers --------------------
   function toRGBA(color, alpha) {
     if (alpha == null) alpha = 1;
@@ -1295,6 +1343,20 @@
   }
 
   // -------------------- TextField --------------------
+  /**
+   * A text field.
+   *
+   * Three kinds, as in Flash, and the difference is what they can do rather
+   * than how they look:
+   *
+   *   static   drawn and forgotten — a caption
+   *   dynamic  has a name, so a script can write to it: a score, a timer, a
+   *            line of dialogue
+   *   input    the reader can type into it: a name, an answer, a search box
+   *
+   * Without the last two there is no score display, no form and no typed-in
+   * name — an entire class of Flash content is unreachable.
+   */
   class TextField extends DisplayObject {
     constructor(text, opts) {
       super();
@@ -1307,23 +1369,253 @@
       this.stroke   = opts.stroke || null;
       this.strokeWidth = opts.strokeWidth || 0;
       this.lineHeight = opts.lineHeight || null;
+
+      // The box. Zero width means "as wide as the text", which is what a
+      // static caption wants and what this class used to assume always.
+      this.width  = opts.width  || 0;
+      this.height = opts.height || 0;
+
+      this.type = opts.type || 'static';
+      /** Dynamic and input fields can be bound to a name a script reads. */
+      this.variable = opts.variable || '';
+      this.selectable = !!opts.selectable;
+      this.border = !!opts.border;
+      this.borderColor = opts.borderColor != null ? opts.borderColor : 0x000000;
+      this.background = opts.background != null ? opts.background : null;
+      /** single | multiline | multilineNoWrap | password */
+      this.lineType = opts.lineType || 'single';
+      this.letterSpacing = opts.letterSpacing || 0;
+      this.maxChars = opts.maxChars || 0;
+      this.underline = !!opts.underline;
+
+      // Input state. A field only reacts when the Stage has focused it.
+      this.focused = false;
+      this.caret = String(this.text).length;
+      this.mouseEnabled = this.type === 'input' || this.selectable;
     }
+
+    /** What is actually drawn: a password field shows dots, not its value. */
+    displayText() {
+      const t = String(this.text == null ? '' : this.text);
+      if (this.lineType === 'password') return t.replace(/[^\n]/g, '•');
+      return t;
+    }
+
+    fontSize() { return parseInt(this.font, 10) || 24; }
+    lineStep() { return this.lineHeight || this.fontSize() * 1.2; }
+
+    /** Measure a string, honouring letter spacing. */
+    measure(ctx, str) {
+      const w = ctx.measureText(str).width;
+      return this.letterSpacing ? w + this.letterSpacing * str.length : w;
+    }
+
+    /**
+     * The lines to draw.
+     *
+     * `single` collapses newlines — a single-line field that silently grew a
+     * second line would overflow its box with no way to see why. `multiline`
+     * wraps at the box width; `multilineNoWrap` does not.
+     */
+    lines(ctx) {
+      const raw = this.displayText();
+      if (this.lineType === 'single' || this.lineType === 'password') {
+        return [raw.replace(/\n/g, ' ')];
+      }
+      const src = raw.split('\n');
+      if (this.lineType !== 'multiline' || !this.width) return src;
+      const out = [];
+      for (let i = 0; i < src.length; i++) {
+        const words = src[i].split(' ');
+        let line = '';
+        for (let w = 0; w < words.length; w++) {
+          const next = line ? line + ' ' + words[w] : words[w];
+          if (line && this.measure(ctx, next) > this.width) {
+            out.push(line);
+            line = words[w];
+          } else {
+            line = next;
+          }
+        }
+        out.push(line);
+      }
+      return out;
+    }
+
+    /** Draw one line, character by character when letter spacing is in play. */
+    _drawLine(ctx, str, x, y) {
+      if (!this.letterSpacing) {
+        if (this.strokeWidth > 0 && this.stroke != null) {
+          ctx.lineWidth = this.strokeWidth;
+          ctx.strokeStyle = toRGBA(this.stroke, 1);
+          ctx.strokeText(str, x, y);
+        }
+        ctx.fillStyle = toRGBA(this.color, 1);
+        ctx.fillText(str, x, y);
+        return;
+      }
+      /* Canvas gained a `letterSpacing` property only recently, and the whole
+         point of an export is that it runs anywhere — so the spacing is
+         applied by walking the string. */
+      const total = this.measure(ctx, str);
+      let pen = x;
+      if (ctx.textAlign === 'center') pen = x - total / 2;
+      else if (ctx.textAlign === 'right') pen = x - total;
+      const prev = ctx.textAlign;
+      ctx.textAlign = 'left';
+      for (let i = 0; i < str.length; i++) {
+        if (this.strokeWidth > 0 && this.stroke != null) {
+          ctx.lineWidth = this.strokeWidth;
+          ctx.strokeStyle = toRGBA(this.stroke, 1);
+          ctx.strokeText(str[i], pen, y);
+        }
+        ctx.fillStyle = toRGBA(this.color, 1);
+        ctx.fillText(str[i], pen, y);
+        pen += ctx.measureText(str[i]).width + this.letterSpacing;
+      }
+      ctx.textAlign = prev;
+    }
+
     render(ctx) {
       ctx.font = this.font;
       ctx.textAlign = this.align;
       ctx.textBaseline = this.baseline;
-      const lines = String(this.text).split('\n');
-      const lh = this.lineHeight || (parseInt(this.font, 10) || 24) * 1.2;
-      for (let i = 0; i < lines.length; i++) {
-        const y = i * lh;
-        if (this.strokeWidth > 0 && this.stroke != null) {
-          ctx.lineWidth = this.strokeWidth;
-          ctx.strokeStyle = toRGBA(this.stroke, 1);
-          ctx.strokeText(lines[i], 0, y);
-        }
-        ctx.fillStyle = toRGBA(this.color, 1);
-        ctx.fillText(lines[i], 0, y);
+      const lh = this.lineStep();
+      const lines = this.lines(ctx);
+      const boxW = this.width || this.measure(ctx, lines[0] || '');
+      const boxH = this.height || lines.length * lh;
+
+      // Background and border are what make an input field look like one.
+      if (this.background != null) {
+        ctx.fillStyle = toRGBA(this.background, 1);
+        ctx.fillRect(0, 0, boxW, boxH);
       }
+      if (this.border) {
+        ctx.strokeStyle = toRGBA(this.borderColor, 1);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0.5, 0.5, boxW - 1, boxH - 1);
+      }
+
+      const x = this.align === 'center' ? boxW / 2
+              : (this.align === 'right' ? boxW : 0);
+      for (let i = 0; i < lines.length; i++) {
+        this._drawLine(ctx, lines[i], x, i * lh);
+        if (this.underline) {
+          const w = this.measure(ctx, lines[i]);
+          let ux = x;
+          if (this.align === 'center') ux = x - w / 2;
+          else if (this.align === 'right') ux = x - w;
+          ctx.strokeStyle = toRGBA(this.color, 1);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          const uy = i * lh + this.fontSize() + 1;
+          ctx.moveTo(ux, uy);
+          ctx.lineTo(ux + w, uy);
+          ctx.stroke();
+        }
+      }
+
+      /* The caret, while this field has focus. Blinking, because a static bar
+         reads as a character of the text. */
+      if (this.focused && this.type === 'input') {
+        if (Math.floor(Date.now() / 500) % 2 === 0) {
+          const upto = this.displayText().slice(0, this.caret);
+          const run = this.measure(ctx, upto);
+          const first = lines[0] || '';
+          let cx = run;
+          if (this.align === 'center') cx = boxW / 2 - this.measure(ctx, first) / 2 + run;
+          else if (this.align === 'right') cx = boxW - this.measure(ctx, first) + run;
+          ctx.fillStyle = toRGBA(this.color, 1);
+          ctx.fillRect(cx, 0, 1, lh);
+        }
+      }
+    }
+
+    /**
+     * The box this field occupies, for the Stage's hit test.
+     *
+     * A TextField has no `graphics`, so without this the hit test walked past
+     * it and an input field could never be clicked into.
+     */
+    hitBox() {
+      const size = this.fontSize();
+      const text = String(this.text == null ? '' : this.text);
+      return {
+        minX: 0, minY: 0,
+        maxX: this.width || Math.max(size, size * text.length * 0.6),
+        maxY: this.height || this.lineStep() * Math.max(1, text.split('\n').length)
+      };
+    }
+
+    /**
+     * A field built from a document text object.
+     *
+     * One place the document's text fields turn into a renderer, shared by the
+     * authoring stage, the raster exports and the player — the same reason
+     * paintObj is the only painter. Before this the editor had its own text
+     * drawing code and the export had another, and only one of them knew
+     * about alignment.
+     */
+    static fromObject(o, opts) {
+      opts = opts || {};
+      const size = o.fontSize || 24;
+      const f = new TextField(o.text == null ? '' : o.text, {
+        font: (o.fontItalic ? 'italic ' : '') + (o.fontBold ? 'bold ' : '') +
+              size + 'px ' + (o.font || 'Arial'),
+        color: o.fillColor == null ? 0x000000 : o.fillColor,
+        align: o.textAlign || 'left',
+        lineHeight: (o.lineHeight || 1.2) * size,
+        width: Math.abs(o.width || 0),
+        height: Math.abs(o.height || 0),
+        type: o.textType || 'static',
+        variable: o.variableName || '',
+        selectable: !!o.selectable,
+        border: !!o.textBorder,
+        borderColor: o.textBorderColor == null ? 0x000000 : o.textBorderColor,
+        background: o.textBackground ? (o.textBackgroundColor == null ? 0xFFFFFF : o.textBackgroundColor) : null,
+        lineType: o.lineType || 'single',
+        letterSpacing: o.letterSpacing || 0,
+        maxChars: o.maxChars || 0,
+        underline: !!o.fontUnderline
+      });
+      /* On the authoring stage an empty field would be invisible, so it shows
+         its placeholder — but an EXPORT must contain the artwork and nothing
+         else, or every unfilled dynamic field ships reading "Text". */
+      if (opts.chrome && (o.text == null || o.text === '')) f.text = 'Text';
+      return f;
+    }
+
+    /** Apply one key to an input field. Returns true if the text changed. */
+    keyInput(key, ctrlKey) {
+      if (this.type !== 'input') return false;
+      const t = String(this.text == null ? '' : this.text);
+      if (key === 'Backspace') {
+        if (!this.caret) return false;
+        this.text = t.slice(0, this.caret - 1) + t.slice(this.caret);
+        this.caret--;
+        return true;
+      }
+      if (key === 'Delete') {
+        if (this.caret >= t.length) return false;
+        this.text = t.slice(0, this.caret) + t.slice(this.caret + 1);
+        return true;
+      }
+      if (key === 'ArrowLeft') { this.caret = Math.max(0, this.caret - 1); return false; }
+      if (key === 'ArrowRight') { this.caret = Math.min(t.length, this.caret + 1); return false; }
+      if (key === 'Home') { this.caret = 0; return false; }
+      if (key === 'End') { this.caret = t.length; return false; }
+      if (key === 'Enter') {
+        if (this.lineType === 'single' || this.lineType === 'password') return false;
+        key = '\n';
+      }
+      /* Anything that is not a single character is a modifier or a function
+         key, and must not be typed into the field as its own name — which is
+         what happens if you forward every keydown. */
+      if (ctrlKey || key.length !== 1) return false;
+      if (this.maxChars && t.length >= this.maxChars) return false;
+      this.text = t.slice(0, this.caret) + key + t.slice(this.caret);
+      this.caret++;
+      return true;
     }
   }
 
@@ -1687,6 +1979,9 @@
       this._running = false;
       this._raf = null;
       this._bindInput();
+      /** The text field taking keystrokes, or null. */
+      this.focusedText = null;
+      this._bindKeys();
     }
 
     addEventListener(type, fn) {
@@ -1791,6 +2086,12 @@
         const evt = { type, stageX: p.x, stageY: p.y, nativeEvent: e };
         this.dispatchEvent(type, evt);
         const hit = this._hitTest(this.root, p.x, p.y);
+        /* A press moves text focus: into an input field, or out of the one
+           that had it. Flash behaved the same way, and without it a field
+           keeps the keyboard forever once clicked. */
+        if (type === "mouseDown") {
+          this.focusText(hit && hit.type === "input" ? hit : null);
+        }
         if (hit) {
           let node = hit;
           while (node) {
@@ -1845,7 +2146,56 @@
         const b = g._bounds;
         if (x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY) return node;
       }
+      /* A TextField has no `graphics`, so the hit test used to walk straight
+         past it — which meant an input field could never be clicked into and a
+         selectable one could never be reached. */
+      if (typeof node.hitBox === "function") {
+        const tb = node.hitBox();
+        if (x >= tb.minX && x <= tb.maxX && y >= tb.minY && y <= tb.maxY) return node;
+      }
       return null;
+    }
+
+    /* ---- text input -------------------------------------------------- *
+     * One focused field at a time, as in a browser form. The keyboard is
+     * bound to the window rather than the canvas because a canvas is not
+     * focusable without a tabindex, and demanding one of every host page
+     * would make input text work only in our own exports.
+     * ------------------------------------------------------------------ */
+
+    /** Focus a text field, blurring whatever had focus. */
+    focusText(field) {
+      if (this.focusedText === field) return field;
+      if (this.focusedText) this.focusedText.focused = false;
+      this.focusedText = (field && field.type === "input") ? field : null;
+      if (this.focusedText) {
+        this.focusedText.focused = true;
+        this.focusedText.caret = String(this.focusedText.text || "").length;
+      }
+      return this.focusedText;
+    }
+
+    blurText() { return this.focusText(null); }
+
+    _bindKeys() {
+      if (typeof window === "undefined" || this._keysBound) return;
+      this._keysBound = true;
+      this._onKeyDown = (e) => {
+        const f = this.focusedText;
+        if (!f) return;
+        /* Swallow the keys the field consumes, or typing in a form also
+           scrolls the page and Backspace navigates back. Modifier
+           combinations are left alone so Ctrl+R still reloads. */
+        if (!e.ctrlKey && !e.metaKey &&
+            (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete" ||
+             e.key === "Enter" || e.key.indexOf("Arrow") === 0)) {
+          e.preventDefault();
+        }
+        f.keyInput(e.key, e.ctrlKey || e.metaKey);
+        if (f.variable && this.root) this.root[f.variable] = f.text;
+        this.dispatchEvent("textInput", { type: "textInput", field: f, key: e.key });
+      };
+      window.addEventListener("keydown", this._onKeyDown);
     }
   }
 
@@ -2262,6 +2612,9 @@
        exported player. */
     Morph,
     Sound, SoundTrack, Bitmaps,
+    /* Where trace() goes: the authoring Output panel, the exported player and
+       an imported movie's ActionScript all write here. */
+    Output,
     /* Shared with the editor's own stage painter and with the SVG exporter, so
        a glow on the authoring stage is the same glow in every export. */
     Filters,

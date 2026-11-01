@@ -60,7 +60,10 @@
     { id: "transform", title: "Transform", home: "right", with: "props", closed: true },
     /* Scene lists the movie's scenes and switches between them. It joins the
        Library's group — both answer "what is this document made of". */
-    { id: "scene", title: "Scene", home: "right", with: "library", closed: true }
+    { id: "scene", title: "Scene", home: "right", with: "library", closed: true },
+    /* Output joins the Actions group at the bottom: you read a trace while
+       looking at the script that produced it, and both want width. */
+    { id: "output", title: "Output", home: "bottom", with: "actions", closed: true }
   ];
 
   var ZONES = ["right", "bottom"];

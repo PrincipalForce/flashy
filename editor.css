@@ -1329,3 +1329,23 @@ input[type="range"].props-input {
   border-radius: 2px; cursor: crosshair;
   touch-action: none;
 }
+
+/* ── Output panel ──
+   A log, so it scrolls and is appended to rather than rebuilt. Monospace
+   because a trace is usually a value, and tabular digits stop numbers
+   shuffling sideways as they update. */
+.output-body { display: flex; flex-direction: column; min-height: 0; }
+.output-bar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 5px; background: #333; border-bottom: 1px solid #444;
+  flex: 0 0 auto;
+}
+.output-count { color: var(--text-dim); font-size: 10px; margin-left: auto; }
+.output-log {
+  flex: 1; min-height: 0; overflow: auto;
+  background: #1E1E1E; padding: 3px 6px;
+  font: 11px Consolas, "Courier New", monospace;
+  color: #BFD9BF; user-select: text;
+  font-variant-numeric: tabular-nums;
+}
+.output-line { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }

@@ -22,7 +22,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Gradient / Fill Transform | F | ✅ | Drags the two points `fillGrad` already stored in bounding-box fractions — which the canvas painter, the SVG exporter and the runtime all read. Focal point is still missing. |
 | Lasso (+ polygon mode, magic wand) | L | ✅ | Freeform, corner-to-corner polygon, and a magic wand that selects everything sharing the clicked shape's fill. |
 | Pen / Add / Delete / Convert anchor | P | ◐ | Click for a corner, drag for a curve, click the first point to close, double-click or Enter to finish open, Escape to abandon. The command stream carries quadratics, so one drag sets one control point. Add/Delete/Convert anchor are still missing. |
-| Text | T | ◐ | Static only — see §6. |
+| Text | T | ✅ | All three kinds — see §6. |
 | Line | N | ✅ | — |
 | Rectangle (+ primitive, corner radius) | R | ◐ | No corner radius, no primitive re-editing. |
 | Oval (+ primitive, start/end angle, inner radius) | O | ◐ | No arc, pie or donut. |
@@ -129,15 +129,15 @@ the exported player.
 | Feature | Flashy | Gap |
 | --- | --- | --- |
 | Static text, font, size, bold/italic/underline, align, line height | ✅ | — |
-| Dynamic text (bound to a variable, readable by script) | ⬜ | Missing. |
-| Input text (user-editable at runtime) | ⬜ | Missing. |
-| Instance name / variable name on a text field | ⬜ | Missing. |
-| Selectable, Render as HTML, Border/Background | ⬜ | Missing. |
-| Line type: single / multiline / multiline-no-wrap / password | ⬜ | Missing. |
-| Letter spacing, kerning, baseline shift, super/subscript | ⬜ | Missing. |
+| Dynamic text (bound to a variable, readable by script) | ✅ | The clip's `text` proxies the field, and a named instance is published on the root, so `root.score.text = "10"` works in a frame script. |
+| Input text (user-editable at runtime) | ✅ | Click to focus, type, caret, Backspace/Delete/arrows/Home/End, `maxChars`. The Stage's hit test learned about text fields — it only matched nodes with `graphics`, so a field could never be clicked into. |
+| Instance name / variable name on a text field | ✅ | Both; a variable-bound field also publishes its value on the root. |
+| Selectable, Border/Background | ◐ | Selectable, border and background, with their own colours, honoured on the stage and in the SVG export. Render as HTML is still missing. |
+| Line type: single / multiline / multiline-no-wrap / password | ✅ | Multiline wraps at the box width; single collapses newlines rather than silently overflowing; password masks. |
+| Letter spacing | ◐ | Letter spacing, applied by walking the string rather than relying on the canvas `letterSpacing` property an export cannot count on. Kerning, baseline shift and super/subscript remain. |
 | Device fonts vs embedded outlines, character embedding ranges | ⬜ | Missing. |
-| Break Apart text → letters → shapes | ⬜ | Missing. |
-| Anti-alias mode (device / bitmap / animation / readability) | ⬜ | Missing. |
+| Break Apart text → letters → shapes | ✅ | `textToCharacters` — one object per glyph, measured with the painter's own metrics so each piece lands where its letter was. Letters to shapes needs the pen outlines the browser does not expose. |
+| Anti-alias mode (device / bitmap / animation / readability) | ◐ | Recorded on the field and said to be a record — the canvas has one text rasteriser and no way to pick another, so claiming it changes the pixels would be a lie. |
 | Spell check | ⬜ | Missing (low value). |
 
 Without dynamic and input text there is no score display, no form, no typed-in
@@ -150,7 +150,7 @@ name — an entire class of Flash content is unreachable.
 | Frame scripts (run on frame entry in export) | ✅ | `exportRuntime`. |
 | Object handlers (`on` / `onClipEvent`) | ✅ | `flashy-as2.js`, `clipScript`. |
 | Actions panel | ◐ | A bare `<textarea>`: no syntax highlighting, no line numbers, no code hints, no Script Assist, no error marking. |
-| `trace()` + **Output panel** | ⬜ | `trace()` goes nowhere a user can see. The primary debugging affordance of Flash. |
+| `trace()` + **Output panel** | ✅ | `Flashy.Output` is the sink; the panel lists it, clears and copies. `trace()` is now in scope for a JavaScript frame script too — it was in scope for an imported movie's ActionScript and not for a script written here, which was backwards. Test Movie runs in its own window and forwards its lines back. |
 | Movie Explorer | ⬜ | No structural view — no way to find every instance of a symbol, every script, every text block. |
 | Debugger (breakpoints, watch, variable inspector) | ⬜ | Missing. |
 | Behaviors panel (scriptless interactivity) | ⬜ | Missing. |
@@ -170,8 +170,8 @@ name — an entire class of Flash content is unreachable.
 | **Info** (x/y/w/h readout, cursor position) | ✅ | Selection box, pointer position, whether the pointer is on the stage. Colour under cursor is still missing. |
 | **Transform** (numeric scale/rotate/skew) | ✅ | Applies to a whole selection, which Properties does not. Copy-and-apply is still missing. |
 | **History** (+ replay steps, save as command) | ⬜ | A 50-deep undo stack exists but is invisible. |
-| **Output** | ⬜ | §7. |
-| **Scene** | ⬜ | §3. |
+| **Output** | ✅ | §7. |
+| **Scene** | ✅ | §3. |
 | Color Swatches (+ load/save palettes, web-safe) | ⬜ | Missing. |
 | Movie Explorer | ⬜ | §7. |
 | Accessibility | ⬜ | Missing (low value). |

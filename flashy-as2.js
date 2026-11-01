@@ -267,6 +267,12 @@
       getBytesLoaded: function () { return 1000; },
       getBytesTotal: function () { return 1000; },
       trace: function () {
+        /* To the Output sink first — the console is where a trace used to go
+           and is nowhere a user of the editor would look. Still logged as
+           well, because a developer with devtools open expects it there. */
+        if (global.Flashy && global.Flashy.Output) {
+          global.Flashy.Output.write.apply(global.Flashy.Output, arguments);
+        }
         if (global.console) global.console.log.apply(global.console, arguments);
       },
       /* Flash redrew immediately when a mouse handler moved something; without

@@ -17,7 +17,7 @@ const ws = (page, fn) => page.evaluate(fn);
 /* Panels registered `closed: true` in workspace.js. They are part of the
    registry — so they must be accounted for exactly once — but they are not in
    any dock until the Window menu opens them. */
-const CLOSED_BY_DEFAULT = ["align", "info", "transform", "scene"];
+const CLOSED_BY_DEFAULT = ["align", "info", "transform", "scene", "output"];
 
 /** Panel ids in each dock, in order, from the live layout. */
 async function docks(page) {

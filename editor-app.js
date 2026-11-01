@@ -14,7 +14,11 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;}
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Text kinds and field options. `textType` is the big one: a STATIC field is
+   drawn and forgotten, a DYNAMIC one has a name so a script can write to it,
+   and an INPUT one can be typed into. Without the last two there is no score
+   display, no form and no typed-in name. All default to the static behaviour
+   every existing document means. */this.textType="static";this.variableName="";this.selectable=false;this.lineType="single";this.letterSpacing=0;this.maxChars=0;this.textBorder=false;this.textBackground=false;this.textBorderColor="#000000";this.textBackgroundColor="#FFFFFF";this.antiAlias="normal";this.renderAsHtml=false;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});/* `children` (a group's contents) holds OBJECTS, so the shallow slice above would hand the copy the originals and every edit to one group would show up in the other. Deep-clone it, the way KeyFrame.clone deep-clones its own object list. */
 if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});/* `filters` is an array of OBJECTS, so the shallow slice above would hand the copy the same filter specs and editing one object's blur would change the other's. Same bug class as `children`. */if(Array.isArray(s.filters))c.filters=s.filters.map(function(f){return f?JSON.parse(JSON.stringify(f)):f;});if(s.colorEffect)c.colorEffect=JSON.parse(JSON.stringify(s.colorEffect));c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
@@ -613,6 +617,7 @@ var menus=[
     {label:"Info",action:"winInfo",shortcut:"Ctrl+I"},
     {label:"Transform",action:"winTransform",shortcut:"Ctrl+T"},
     {label:"Scene",action:"winScene",shortcut:"Shift+F2"},
+    {label:"Output",action:"winOutput",shortcut:"F2"},
     {label:"AI Assistant",action:"winAI"},
     {type:"sep"},
     {label:"Workspace: Animation",action:"wsAnimation"},
@@ -4051,25 +4056,38 @@ function paintObjRaw(cx,o,opts){
       cx.restore();
     }
   }else if(o.type==="text"){
-    cx.font=(o.fontItalic?"italic ":"")+(o.fontBold?"bold ":"")+(o.fontSize||24)+"px "+(o.font||"Arial");
-    cx.fillStyle=o.fillColor;
-    cx.globalAlpha=fillA;cx.textBaseline="top";
-    cx.textAlign=o.textAlign||"left";
-    var tx=-hw;if(o.textAlign==="center")tx=0;else if(o.textAlign==="right")tx=hw;
-    var lines=String(o.text==null||o.text===""?"Text":o.text).split("\n");
-    var lh=(o.lineHeight||1.2)*(o.fontSize||24);
-    for(var li=0;li<lines.length;li++){
-      cx.fillText(lines[li],tx,-hh+li*lh);
-      if(o.fontUnderline){
-        var m=cx.measureText(lines[li]);
-        cx.save();cx.strokeStyle=o.fillColor;cx.lineWidth=1;
-        cx.beginPath();
-        var ux=tx;if(o.textAlign==="center")ux=tx-m.width/2;else if(o.textAlign==="right")ux=tx-m.width;
-        cx.moveTo(ux,-hh+li*lh+(o.fontSize||24)+1);cx.lineTo(ux+m.width,-hh+li*lh+(o.fontSize||24)+1);
-        cx.stroke();cx.restore();
+    /* Through the engine's own TextField, so the stage, the raster exports and
+       the player draw text with ONE implementation. The editor had its own
+       copy of this, and it knew nothing about wrapping, letter spacing,
+       borders or the three text kinds — all of which an export would then
+       have rendered differently. */
+    if(window.Flashy&&Flashy.TextField&&Flashy.TextField.fromObject){
+      var tf=Flashy.TextField.fromObject(o,{chrome:chrome});
+      cx.save();
+      cx.globalAlpha=fillA;
+      // TextField draws from its box's top-left; the painter is at the centre.
+      cx.translate(-hw,-hh);
+      tf.render(cx);
+      cx.restore();
+      if(chrome&&(o.textType==="dynamic"||o.textType==="input")){
+        /* A dashed box and a label, so a dynamic or input field is
+           identifiable on the stage. They look exactly like static text
+           otherwise, and which kind a field is changes everything about it. */
+        var zz=zoom||1;
+        cx.save();
+        cx.globalAlpha=alpha*0.8;
+        cx.strokeStyle=o.textType==="input"?"#6CC0FF":"#C58BE8";
+        cx.lineWidth=1/zz;
+        cx.setLineDash([4/zz,3/zz]);
+        cx.strokeRect(-hw,-hh,o.width,o.height);
+        cx.setLineDash([]);
+        cx.fillStyle=cx.strokeStyle;
+        cx.font="9px Arial";cx.textBaseline="bottom";cx.textAlign="right";
+        cx.fillText(o.textType==="input"?"input":"dynamic",hw-1,-hh-1);
+        cx.textAlign="start";
+        cx.restore();
       }
     }
-    cx.textAlign="start";
   }else if(o.type==="symbol"){
     var sym=doc.library[o.symbolName];
     if(sym&&depth<SYMBOL_MAX_DEPTH){
@@ -6770,6 +6788,95 @@ function updateProps(){
     // ── Text Properties (additional for text objects) ──
     if(o.type==="text"){
       sect("Text");
+      /* Which KIND of field this is, first — it changes what everything below
+         means. A static field is drawn and forgotten; a dynamic one has a name
+         so a script can write to it; an input one can be typed into. Without
+         the last two there is no score display, no form and no typed-in
+         name. */
+      row("Text type",o.textType||"static",function(v){
+        pushUndo();
+        o.textType=v;
+        // A field you can type into wants a box you can see; a caption does
+        // not. Flash defaulted the same way.
+        if(v==="input"&&!o.textBorder){o.textBorder=true;o.textBackground=true;}
+        if(v!=="static"&&(o.lineType||"single")==="single"&&o.height>(o.fontSize||24)*2){
+          o.lineType="multiline";
+        }
+        fullRefresh();
+      },{type:"select",width:"90px",options:[
+        ["static","Static"],["dynamic","Dynamic"],["input","Input"]
+      ]});
+      if(o.textType==="dynamic"||o.textType==="input"){
+        row("Instance",o.instanceName||"",function(v){
+          pushUndo();o.instanceName=String(v||"").trim();fullRefresh();
+        },{width:"90px"});
+        row("Variable",o.variableName||"",function(v){
+          pushUndo();o.variableName=String(v||"").trim();fullRefresh();
+        },{width:"90px"});
+        /* `root.name`, not a bare `name`: a JavaScript frame script has no
+           scope chain to resolve a bare identifier through, and quietly
+           wrapping somebody's JavaScript in `with(root)` to fake one would
+           change the meaning of every other name in their script. An imported
+           movie's ActionScript does resolve bare names, because AS2 has the
+           scope chain this does not. */
+        note(o.instanceName
+          ? "In a frame script: root."+o.instanceName+".text = \"…\" writes to this field"+
+            (o.textType==="input"?", and reads what was typed.":".")
+          : "Give it an instance name and a script can write to it.");
+        row("Line type",o.lineType||"single",function(v){
+          pushUndo();o.lineType=v;fullRefresh();
+        },{type:"select",width:"110px",options:[
+          ["single","Single line"],["multiline","Multiline"],
+          ["multilineNoWrap","Multiline, no wrap"],["password","Password"]
+        ]});
+        if(o.textType==="input"){
+          row("Max chars",o.maxChars||0,function(v){
+            pushUndo();o.maxChars=Math.max(0,parseInt(v,10)||0);fullRefresh();
+          },{type:"number",width:"50px",unit:"0 = no limit"});
+        }
+      }else{
+        row("Line type",o.lineType||"single",function(v){
+          pushUndo();o.lineType=v;fullRefresh();
+        },{type:"select",width:"110px",options:[
+          ["single","Single line"],["multiline","Multiline"],
+          ["multilineNoWrap","Multiline, no wrap"]
+        ]});
+      }
+      row("Selectable",!!o.selectable,function(v){
+        pushUndo();o.selectable=v;fullRefresh();
+      },{type:"checkbox"});
+      row("Border",!!o.textBorder,function(v){
+        pushUndo();o.textBorder=v;fullRefresh();
+      },{type:"checkbox"});
+      if(o.textBorder){
+        colorRow("Border color",o.textBorderColor||"#000000",function(nc){
+          pushUndo();o.textBorderColor=nc;render();
+        });
+      }
+      row("Background",!!o.textBackground,function(v){
+        pushUndo();o.textBackground=v;fullRefresh();
+      },{type:"checkbox"});
+      if(o.textBackground){
+        colorRow("Background color",o.textBackgroundColor||"#FFFFFF",function(nc){
+          pushUndo();o.textBackgroundColor=nc;render();
+        });
+      }
+      row("Letter spacing",o.letterSpacing||0,function(v){
+        pushUndo();o.letterSpacing=parseFloat(v)||0;render();
+      },{width:"45px",unit:"px"});
+      /* Anti-alias mode is a hint, not a renderer: the canvas has one text
+         rasteriser and no way to pick another, so this records the intent for
+         a future SWF export rather than pretending to change the pixels. */
+      row("Anti-alias",o.antiAlias||"normal",function(v){
+        pushUndo();o.antiAlias=v;fullRefresh();
+      },{type:"select",width:"110px",options:[
+        ["device","Use device fonts"],["normal","Anti-alias for animation"],
+        ["readability","Anti-alias for readability"],["bitmap","Bitmap text (no anti-alias)"]
+      ]});
+      if((o.antiAlias||"normal")!=="normal"){
+        note("Recorded with the field. The canvas has one text rasteriser, so "+
+             "this does not change how it draws here.");
+      }
       row("Font",o.font||"Arial",function(v){pushUndo();o.font=v;render();},{width:"90px"});
       row("Size",o.fontSize||24,function(v){pushUndo();o.fontSize=parseFloat(v)||12;render();},{width:"45px",unit:"px"});
       colorRow("Color",o.fillColor,function(nc){pushUndo();o.fillColor=nc;render();});
@@ -7655,6 +7762,85 @@ function buildEasingEditor(pp,kf,note){
   var b0=bez();
   note("Curve "+b0.map(function(v){return Math.round(v*100)/100;}).join(", ")+
        " — drag the yellow and pink handles.");
+}
+
+/* ------------------------------------------------------------------ *
+ * The Output panel
+ *
+ * Where trace() goes. It went to the browser console, which is to say nowhere
+ * a user of this editor would ever look — and `trace()` is the primary
+ * debugging affordance of Flash. An exported movie writes to Flashy.Output;
+ * Test Movie runs in a window of its own, so that window forwards its lines
+ * back here (see startPreview).
+ *
+ * Built once and appended to, unlike the inspector panels, because a log that
+ * is rebuilt on every refresh loses its scroll position — and you read a log
+ * while something else is happening.
+ * ------------------------------------------------------------------ */
+var outputWired=false;
+
+function outputLog(text){
+  if(window.Flashy&&Flashy.Output)Flashy.Output.write(text);
+  else appendOutputLine(String(text));
+}
+
+function appendOutputLine(text){
+  var log=document.getElementById("outputLog");
+  if(!log)return;
+  if(text===null){
+    log.textContent="";
+    updateOutputCount();
+    return;
+  }
+  var line=document.createElement("div");
+  line.className="output-line";
+  line.textContent=text;
+  log.appendChild(line);
+  // Stay pinned to the newest line, which is the one you are waiting for —
+  // unless the user has scrolled up to read something, in which case moving
+  // the view out from under them would be worse.
+  var atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<24;
+  if(atBottom)log.scrollTop=log.scrollHeight;
+  updateOutputCount();
+}
+
+function updateOutputCount(){
+  var el=document.getElementById("outputCount");
+  if(!el)return;
+  var n=(window.Flashy&&Flashy.Output)?Flashy.Output.lines.length:0;
+  el.textContent=n?(n+(n===1?" line":" lines")):"";
+}
+
+function initOutputPanel(){
+  if(outputWired)return;
+  outputWired=true;
+  var clear=document.getElementById("outputClear");
+  if(clear)clear.addEventListener("click",function(){
+    if(window.Flashy&&Flashy.Output)Flashy.Output.clear();
+    else appendOutputLine(null);
+  });
+  var copy=document.getElementById("outputCopy");
+  if(copy)copy.addEventListener("click",function(){
+    var text=(window.Flashy&&Flashy.Output)?Flashy.Output.text():"";
+    if(navigator.clipboard&&text)navigator.clipboard.writeText(text);
+    copy.textContent="Copied";
+    setTimeout(function(){copy.textContent="Copy";},900);
+  });
+  if(window.Flashy&&Flashy.Output){
+    Flashy.Output.onWrite(appendOutputLine);
+    // Anything traced before the panel existed is still worth showing.
+    Flashy.Output.lines.forEach(appendOutputLine);
+  }
+  /* Test Movie runs in its own window, so its traces arrive as messages.
+     Only lines, and only strings — a message from anywhere else is ignored
+     rather than trusted, because any page could post one. */
+  window.addEventListener("message",function(e){
+    var d=e.data;
+    if(!d||d.type!=="flashy:trace")return;
+    if(typeof d.line!=="string")return;
+    appendOutputLine(d.line);
+  });
+  updateOutputCount();
 }
 
 /**
@@ -9196,6 +9382,7 @@ function doAction(a){
   case "winInfo":    if(workspace())workspace().toggle("info");break;
   case "winTransform":if(workspace())workspace().toggle("transform");break;
   case "winScene":   if(workspace())workspace().toggle("scene");break;
+  case "winOutput":  if(workspace())workspace().toggle("output");break;
   case "wsAnimation":if(workspace())workspace().preset("animation");break;
   case "wsDrawing":  if(workspace())workspace().preset("drawing");break;
   case "wsCoding":   if(workspace())workspace().preset("coding");break;
@@ -12628,6 +12815,7 @@ function initKeys(){
     if(ctrl&&(e.key==="i"||e.key==="I")){e.preventDefault();doAction("winInfo");return;}
     if(ctrl&&(e.key==="t"||e.key==="T")){e.preventDefault();doAction("winTransform");return;}
     if(e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winScene");return;}
+    if(!ctrl&&!e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winOutput");return;}
     if(ctrl&&e.key==="PageUp"){e.preventDefault();doAction("prevScene");return;}
     if(ctrl&&e.key==="PageDown"){e.preventDefault();doAction("nextScene");return;}
     if(ctrl&&e.altKey&&e.shiftKey&&(e.key==="r"||e.key==="R")){e.preventDefault();doAction("rulers");return;}
@@ -13407,7 +13595,7 @@ function exportRuntime(data, canvas, options) {
               if (!(ck in symCompiled)) {
                 symCompiled[ck] = as2
                   ? Flashy.AS2.frameScript(this, list[i], { stage: stage })
-                  : new Function("stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root", "Flashy", list[i]);
+                  : new Function("stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root", "Flashy", "trace", list[i]);
               }
               var run = symCompiled[ck];
               if (!run) continue;
@@ -13419,7 +13607,8 @@ function exportRuntime(data, canvas, options) {
                   function () { self.play(); },
                   function (fv) { self.gotoAndPlay(fv); },
                   function (fv) { self.gotoAndStop(fv); },
-                  stage, root, Flashy);
+                  stage, root, Flashy,
+                  function () { return Flashy.Output.write.apply(Flashy.Output, arguments); });
               }
             } catch (e) {
               if (typeof console !== "undefined") console.error("Flashy: symbol frame script failed", e);
@@ -13624,17 +13813,37 @@ function exportRuntime(data, canvas, options) {
         node.addChild(ginner);
       }
     } else if (o.type === "text") {
-      var size = o.fontSize || 24;
-      var tf = new Flashy.TextField(o.text || "", {
-        font: (o.fontItalic ? "italic " : "") + (o.fontBold ? "bold " : "") + size + "px " + (o.font || "Arial"),
-        color: hex(o.fillColor, "#000"),
-        align: o.textAlign || "left",
-        lineHeight: (o.lineHeight || 1.2) * size
-      });
-      tf.x = o.textAlign === "center" ? 0 : (o.textAlign === "right" ? hw : -hw);
+      /* One text renderer, built from the document object by the engine
+         itself — the same call the authoring stage makes, so a wrapped,
+         letter-spaced, bordered field exports as what was on screen. The
+         export passes no `chrome`, so an empty dynamic field stays empty
+         instead of shipping the word "Text". */
+      var tf = Flashy.TextField.fromObject(o, {});
+      // The field draws from its box's top-left; the node sits at the centre.
+      tf.x = -hw;
       tf.y = -hh;
       node = new Flashy.MovieClip();
       node.addChild(tf);
+      /* A dynamic or input field is reachable from script, which is the whole
+         point of it being one. `text` on the clip proxies the field, so
+         `score.text = "10"` works the way an AS2 author expects, and an input
+         field's typed value is readable the same way. */
+      if (o.textType === "dynamic" || o.textType === "input") {
+        node.__textField = tf;
+        try {
+          Object.defineProperty(node, "text", {
+            configurable: true,
+            get: function () { return tf.text; },
+            set: function (v) { tf.text = v == null ? "" : String(v); }
+          });
+        } catch (e) { /* a sealed node: the field is still on __textField */ }
+        // A variable-bound field publishes its value on the root, which is
+        // where an AS2 script looks for it.
+        if (o.variableName) {
+          tf.variable = o.variableName;
+          root[o.variableName] = tf.text;
+        }
+      }
     } else if (o.type === "bitmap") {
       // Pixels are drawn from the shared asset cache, which the preload below
       // fills. An asset that has not landed yet draws nothing and appears when
@@ -13759,7 +13968,19 @@ function exportRuntime(data, canvas, options) {
        clears it on a cached node too. */
     node.filters = (o.filters && o.filters.length) ? o.filters : null;
     node.colorTransform = Flashy.Filters ? Flashy.Filters.colorEffect(o.colorEffect) : null;
-    if (o.instanceName) node.name = o.instanceName;
+    if (o.instanceName) {
+      node.name = o.instanceName;
+      /* …and published on the root, so a script can reach it by that name.
+         AS2 resolved `score` through the scope chain; a JavaScript frame
+         script has no scope chain to resolve it through, so the inspector's
+         promise that `score.text = "…"` works needed this to be true.
+         Existing properties are never overwritten — an instance called
+         "stop" must not replace the root's stop(). */
+      if (!(o.instanceName in root) || root.__named && root.__named[o.instanceName]) {
+        (root.__named || (root.__named = {}))[o.instanceName] = true;
+        root[o.instanceName] = node;
+      }
+    }
     /* Object handlers — `onClipEvent(load) { … }` and `on(release) { … }`,
        which is where Flash kept a clip's own behaviour and where an import
        puts it. They run here and in Test Movie, never on the authoring
@@ -13944,7 +14165,7 @@ function exportRuntime(data, canvas, options) {
         if (!compiled[key]) {
           compiled[key] = as2
             ? Flashy.AS2.frameScript(root, list[i], { stage: stage })
-            : new Function("stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root", "Flashy", list[i]);
+            : new Function("stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root", "Flashy", "trace", list[i]);
         }
         if (!compiled[key]) continue;
         if (as2) compiled[key]();
@@ -13954,7 +14175,11 @@ function exportRuntime(data, canvas, options) {
             function () { root.play(); },
             function (f) { root.gotoAndPlay(f); },
             function (f) { root.gotoAndStop(f); },
-            stage, root, Flashy);
+            stage, root, Flashy,
+            /* trace() in scope for a JavaScript frame script too. It was in
+               scope for an imported movie's ActionScript and not for a script
+               written in this editor, which is backwards. */
+            function () { return Flashy.Output.write.apply(Flashy.Output, arguments); });
         }
       } catch (e) {
         if (typeof console !== "undefined") console.error("Flashy: frame " + fr + " script failed", e);
@@ -14777,16 +15002,43 @@ function _objToSVGRaw(o, depth) {
       var size = o.fontSize||24;
       var anchor = o.textAlign==="center" ? "middle" : (o.textAlign==="right" ? "end" : "start");
       var tx = o.textAlign==="center" ? 0 : (o.textAlign==="right" ? hw : -hw);
-      var lines = String(o.text==null||o.text===""?"Text":o.text).split("\n");
+      /* The lines the engine's own field would draw, so wrapping and
+         password masking reach the SVG rather than being a canvas-only
+         effect. No `chrome`, so an empty field exports empty instead of
+         shipping the word "Text". */
+      var lines;
+      if (window.Flashy && Flashy.TextField && Flashy.TextField.fromObject) {
+        var svgTf = Flashy.TextField.fromObject(o, {});
+        var meas = document.createElement("canvas").getContext("2d");
+        meas.font = svgTf.font;
+        lines = svgTf.lines(meas);
+      } else {
+        lines = String(o.text == null ? "" : o.text).split("\n");
+      }
       var lh = (o.lineHeight||1.2)*size;
       var out = '<text'+a+' font-size="'+size+'" font-family="'+xmlAttr(o.font||"Arial")+'"'+
         (o.fontBold?' font-weight="bold"':'')+(o.fontItalic?' font-style="italic"':'')+
         (o.fontUnderline?' text-decoration="underline"':'')+
+        (o.letterSpacing?' letter-spacing="'+o.letterSpacing+'"':'')+
         ' fill="'+fl+'" text-anchor="'+anchor+'" dominant-baseline="hanging">\n';
       for (var li=0;li<lines.length;li++) {
         out += '  <tspan x="'+tx+'" y="'+(-hh+li*lh)+'">'+xmlText(lines[li])+'</tspan>\n';
       }
-      return out+'</text>\n';
+      out += '</text>\n';
+      /* Border and background are what make an input field look like one, so
+         they travel into the SVG too. Drawn first, under the text. */
+      var tChrome = '';
+      if (o.textBackground) {
+        tChrome += '<rect x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+
+                   '" height="'+Math.abs(o.height)+'" fill="'+
+                   xmlAttr(o.textBackgroundColor||'#FFFFFF')+'"/>';
+      }
+      if (o.textBorder) {
+        tChrome += '<rect x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+
+                   '" height="'+Math.abs(o.height)+'" fill="none" stroke="'+
+                   xmlAttr(o.textBorderColor||'#000000')+'" stroke-width="1"/>';
+      }
+      return tChrome ? ('<g'+a+'>'+tChrome+'</g>\n'+out) : out;
     case "group":
       // Same shape as the symbol case below: a transform, then children in
       // group space. Without this a grouped drawing vanished from the SVG.
@@ -15496,10 +15748,25 @@ function startPreview(w){
     if(++loaded<scripts.length)return;
     try{
       w.__flashyData=data;
+      /* Pipe the preview's traces back to the Output panel. The preview is a
+         window of its own with its own engine, so its Flashy.Output is a
+         different object — without this, Test Movie's traces land in a panel
+         nobody is looking at. */
+      try{
+        if(w.Flashy&&w.Flashy.Output){
+          w.Flashy.Output.onWrite(function(line){
+            if(line===null)return;
+            try{window.postMessage({type:"flashy:trace",line:String(line)},"*");}
+            catch(e){/* a closed opener: the preview still runs */}
+          });
+        }
+      }catch(e){/* cross-origin preview: traces stay in its own console */}
       // The player is compiled in the preview window, so its timers, input
       // and engine are all that window's own.
       var run=w.eval("("+exportRuntime.toString()+")");
       w.__stage=run(w.__flashyData,w.document.getElementById("stage"),{});
+      outputLog("Test Movie started — "+(data.totalFrames||1)+" frames at "+
+                (data.fps||24)+" fps.");
     }catch(err){
       if(window.console)console.error("Flashy: Test Movie failed",err);
       showMessage("Test Movie","The preview could not start:\n"+((err&&err.message)||err));
@@ -15716,6 +15983,7 @@ function fullRefresh(){
   updateInfoPanel();
   updateTransformPanel();
   updateScenePanel();
+  updateOutputCount();
   updateOnionUI();
   // The Character panel rebuilds from the document rather than tracking it, so
   // one notification after every refresh is all it needs. Note this is
@@ -15827,6 +16095,7 @@ function init(){
     fullyErased:bitmapFullyErased
   };
   initActionsPanel();
+  initOutputPanel();
   initUnloadGuard();
   initAIPanel();
   // Character rigs — the panel in character.js drives the editor through this,
@@ -16016,6 +16285,8 @@ function init(){
       return {index:r.index,name:r.layer.name,y:r.y,h:r.h};
     }); },
     outputLayers: outputLayers,
+    /** The Output panel's sink, so a spec can see what a script traced. */
+    outputLog: outputLog,
     /* Wave-2 shape editing. The specs drive these directly as well as through
        the pointer, because several are pure geometry and testing the geometry
        separately from the gesture is the only way to pin down what the
