@@ -259,6 +259,20 @@
   function localLoops(o) {
     var w = Math.abs(o.width || 0), h = Math.abs(o.height || 0);
     var hw = w / 2, hh = h / 2;
+    /* A parameterised primitive — a rounded rectangle, or an oval arc, pie or
+       donut — comes from Flashy.Primitives, the same geometry the stage and
+       every other export use. Its command stream is in box coordinates, so
+       handing it back through the 'path' branch with pathW/pathH set to the box
+       leaves the scale at 1 and reuses one loop walker. */
+    if (window.Flashy && Flashy.Primitives && Flashy.Primitives.active(o)) {
+      var prim = Flashy.Primitives.path(o);
+      if (prim && prim.length) {
+        var pobj = {};
+        for (var pk in o) if (Object.prototype.hasOwnProperty.call(o, pk)) pobj[pk] = o[pk];
+        pobj.type = 'path'; pobj.path = prim; pobj.pathW = w; pobj.pathH = h;
+        return localLoops(pobj);
+      }
+    }
     if (o.type === 'rect') {
       return [{ closed: true, pts: [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]] }];
     }
@@ -774,7 +788,11 @@
     reportText: reportText,
     Writer: Writer,
     TAG: TAG,
-    TWIPS: TWIPS
+    TWIPS: TWIPS,
+    /* The outline an object contributes, before any twip conversion. Exposed
+       so a spec can check that the writer and the stage agree about a shape
+       without decoding a file. */
+    localLoops: localLoops
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = global.FlashySWFWriter;

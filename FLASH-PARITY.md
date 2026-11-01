@@ -24,8 +24,8 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Pen / Add / Delete / Convert anchor | P | ◐ | Click for a corner, drag for a curve, click the first point to close, double-click or Enter to finish open, Escape to abandon. The command stream carries quadratics, so one drag sets one control point. Add/Delete/Convert anchor are still missing. |
 | Text | T | ✅ | All three kinds — see §6. |
 | Line | N | ✅ | — |
-| Rectangle (+ primitive, corner radius) | R | ◐ | No corner radius, no primitive re-editing. |
-| Oval (+ primitive, start/end angle, inner radius) | O | ◐ | No arc, pie or donut. |
+| Rectangle (+ primitive, corner radius) | R | ✅ | Corner radius is a property, re-editable forever, resolved through `Flashy.Primitives` by all six consumers. |
+| Oval (+ primitive, start/end angle, inner radius) | O | ✅ | Arc, pie and donut, 0° at 12 o'clock, inner radius as a percentage. |
 | PolyStar (polygon / star, sides, point size) | — | ✅ | Emitted as a `path` object, so it inherits gradients, resizing, the eraser's geometry and all four export paths rather than needing a fifth primitive branch in each. |
 | Pencil (Straighten / Smooth / Ink modes) | Y | ✅ | Applied on release, as in Flash. |
 | Brush (size, shape, Paint Normal/Fills/Behind/Selection/Inside) | B | ◐ | Size is now its own control, on the bracket keys. Brush shape and the five paint modes are still missing. |
@@ -245,8 +245,8 @@ Covered by `tests/object-editing.spec.js` (21 specs).
 10. ✅ **PolyStar**, **Lasso** (+ polygon, magic wand), **Ink Bottle**, **Gradient Transform**.
 11. ✅ **Shape ▸ Smooth / Straighten / Optimize / Convert Lines to Fills / Expand Fill / Soften Edges**.
 12. ✅ **Combine Objects** — Union, Intersect, Punch, Crop (on `flashy-geom.js`).
-13. ◐ Pencil modes and brush size shipped; rectangle corner radius and oval
-    start/end angle and inner radius still to do.
+13. ✅ Pencil modes, brush size, rectangle corner radius, and oval start/end
+    angle and inner radius (see Wave 7).
 
 The tool-options strip under the toolbox is now declarative, one spec per tool.
 It had the eraser's two controls hard-coded into `buildToolbox`, which is why
@@ -320,3 +320,48 @@ Swatches**.
     bitmaps, sound, filters and scripts remain: each needs a subsystem of its
     own (glyph tables, JPEG/zlib, MP3 framing, filter tags, an ActionScript
     assembler).
+
+### Wave 7 — the leftovers
+
+33. ✅ **Primitive shapes** — a rectangle's corner radius and an oval's start
+    angle, end angle and inner radius. The point of Flash 8's primitive tools
+    was that the shape stayed *parameterised*: you could re-round a corner or
+    sweep a pie open a week later, rather than having committed to an outline.
+
+    The geometry lives once, in `Flashy.Primitives`, because **six** things
+    need it and have to agree: the canvas painter, the SVG exporter, the
+    exported player, the SWF writer, `Morph.loops`, and the eraser's region
+    maths. A rounded corner that is one shape on the stage and another in the
+    export is worse than no rounded corner — which is the same reason PolyStar
+    emits a `path` rather than a sixth primitive branch in each renderer.
+
+    Three of the six get the outline by handing a synthetic `path` object back
+    through their own path branch, with `pathW`/`pathH` set to the box so the
+    scale factors stay at 1. One loop walker, not four.
+
+    `active()` is deliberately strict: a radius of 0, or an oval from 0° to
+    360° with no hole, is **not** a primitive. Every existing document keeps
+    the cheap `rect`/`oval` renderer it has always had, and nothing allocates
+    a command stream to draw a plain box.
+
+    The parameters tween, in both interpolators — a wedge sweeps open, a
+    corner rounds off, a hole widens. The authoring stage and the exported
+    player each have their own copy of the keyframe interpolator, and teaching
+    only one of them is the exact divergence class this file keeps finding.
+
+    Authoring: sliders in the Properties panel, sticky settings in the tool
+    options strip (set a radius once and every rectangle comes out rounded),
+    and a drag preview that shows the real outline — a pie wedge is as
+    impossible to place by eye from a bounding box as a star is.
+
+    Covered by `tests/primitives.spec.js` (18 specs), which mostly cross-checks
+    the render paths against each other rather than against numbers I chose.
+
+Still open from the enumeration: Pen add/delete/convert anchor; gradient glow
+and gradient bevel filters; Find and Replace; Revert; Match stage size to
+contents; per-layer tint; keyboard-shortcut customisation; tween snap and
+sync; brush shape and the five paint modes; eraser modes and the Faucet;
+bucket gap-closing and Lock Fill; the button Up/Over/Down/Hit authoring view;
+registration-point editing; templates; text kerning, baseline shift and
+super/subscript; Render as HTML; filter presets; the ComboBox component;
+History replay and save-as-command.

@@ -1006,6 +1006,17 @@
          would throw those contents away — Flash made you Break Apart first for
          exactly this reason. The caller falls back to interpolating the
          transform, which is at least still the object. */
+      /* A parameterised primitive morphs from its real outline, not from its
+         bounding box — a pie wedge that grew out of a circle should morph as a
+         wedge. Primitives.path emits box coordinates, so handing it back
+         through the "path" branch with pathW/pathH equal to the box leaves the
+         scale factors at 1 and reuses one loop-walker. */
+      if (Primitives.active(o)) {
+        const prim = Primitives.path(o);
+        if (prim && prim.length) {
+          return this.loops({ ...o, type: "path", path: prim, pathW: w, pathH: h });
+        }
+      }
       if (o.type === "rect") {
         return [emit([-hw, -hh, hw, -hh, hw, hh, -hw, hh])];
       }
@@ -1255,6 +1266,129 @@
       }
       const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
       return { path, x: minX, y: minY, width: w, height: h, pathW: w, pathH: h };
+    }
+  };
+
+  /* -------------------- Shape primitives --------------------
+   *
+   * A rectangle with rounded corners, and an oval that can be an arc, a pie
+   * or a donut. Flash called these the Rectangle and Oval PRIMITIVE tools, and
+   * the point of them is that the parameters stay editable: a rounded
+   * rectangle is still a rectangle with a radius, not a path that has
+   * forgotten it ever had one.
+   *
+   * The geometry lives here, as a path command stream in the same four-opcode
+   * encoding flashy-trace.js uses, because five things need it and must agree:
+   * the canvas painter, the SVG exporter, the exported player, the morph, and
+   * the eraser's region maths. A rounded corner that is one shape on the stage
+   * and another in the export is worse than no rounded corner.
+   * -------------------------------------------------------------------- */
+  const Primitives = {
+    /** True when an object carries primitive parameters worth honouring. */
+    active(o) {
+      if (!o) return false;
+      if (o.type === 'rect') return (o.cornerRadius || 0) > 0;
+      if (o.type === 'oval') {
+        return (o.ovalStart || 0) !== 0 || (o.ovalEnd == null ? 360 : o.ovalEnd) !== 360 ||
+               (o.ovalInner || 0) > 0;
+      }
+      return false;
+    },
+
+    /**
+     * The primitive's outline as a command stream, in a 0,0-origin box of
+     * `w` x `h`. Returns null when the object is not a parameterised
+     * primitive, so every caller can fall back to its plain shape.
+     */
+    path(o) {
+      const w = Math.abs(o.width || 0), h = Math.abs(o.height || 0);
+      if (!w || !h) return null;
+      if (o.type === 'rect') {
+        const r0 = Math.max(0, o.cornerRadius || 0);
+        if (!r0) return null;
+        // A radius larger than half the shorter side would make the corners
+        // overlap, so it is capped rather than allowed to invert the outline.
+        const r = Math.min(r0, Math.min(w, h) / 2);
+        const p = [];
+        p.push(0, 0, r);                      // MOVE, start below the top-left
+        p.push(1, 0, h - r);                  // down the left side
+        p.push(2, 0, h, r, h);                // bottom-left corner
+        p.push(1, w - r, h);                  // along the bottom
+        p.push(2, w, h, w, h - r);            // bottom-right
+        p.push(1, w, r);                      // up the right
+        p.push(2, w, 0, w - r, 0);            // top-right
+        p.push(1, r, 0);                      // along the top
+        p.push(2, 0, 0, 0, r);                // top-left
+        p.push(3);
+        return p;
+      }
+      if (o.type === 'oval') {
+        const start = (o.ovalStart || 0);
+        const end = (o.ovalEnd == null ? 360 : o.ovalEnd);
+        /* The inner radius is a PERCENTAGE of the outer, which is what the
+           Properties panel and the tool options both show — 0 is a solid
+           oval, 50 is a band half the radius wide. */
+        const inner = Math.max(0, Math.min(99, o.ovalInner || 0)) / 100;
+        const sweep = end - start;
+        if (Math.abs(sweep) < 0.01) return null;
+        const full = Math.abs(sweep) >= 359.99;
+        const cx = w / 2, cy = h / 2;
+        const p = [];
+        const arc = (rx, ry, from, to, moveFirst) => {
+          /* Quadratics, one per 45 degrees or less. A quadratic cannot draw a
+             circular arc exactly, but at 45 degrees the error is under a
+             thousandth of the radius — far below a pixel at any size anyone
+             draws — and it keeps the whole outline in one encoding. */
+          const steps = Math.max(1, Math.ceil(Math.abs(to - from) / 45));
+          const step = (to - from) / steps;
+          const rad = d => (d - 90) * Math.PI / 180;    // 0 degrees at the top
+          let a0 = from;
+          const at = d => [cx + Math.cos(rad(d)) * rx, cy + Math.sin(rad(d)) * ry];
+          if (moveFirst) { const s = at(from); p.push(0, s[0], s[1]); }
+          for (let i = 0; i < steps; i++) {
+            const a1 = a0 + step;
+            const mid = (a0 + a1) / 2;
+            const pm = at(mid), p1 = at(a1), p0 = at(a0);
+            // The control point that makes the quadratic pass through the
+            // arc's midpoint: 2*mid - (start + end)/2.
+            p.push(2, 2 * pm[0] - (p0[0] + p1[0]) / 2,
+                      2 * pm[1] - (p0[1] + p1[1]) / 2, p1[0], p1[1]);
+            a0 = a1;
+          }
+        };
+        if (inner > 0) {
+          // A donut (or a ring segment): the outer arc, then the inner one
+          // walked backwards, so the hole is a loop wound the other way.
+          arc(w / 2, h / 2, start, end, true);
+          if (full) {
+            p.push(3);
+            arc((w / 2) * inner, (h / 2) * inner, end, start, true);
+            p.push(3);
+          } else {
+            /* A ring segment is one loop: out along the outer arc, straight
+               in across the end cap, back along the inner arc, and closed
+               across the start cap. The explicit line is what makes the cap
+               straight — without it the first inner quadratic would curve
+               across the gap. */
+            const rad = d => (d - 90) * Math.PI / 180;
+            p.push(1, cx + Math.cos(rad(end)) * (w / 2) * inner,
+                      cy + Math.sin(rad(end)) * (h / 2) * inner);
+            arc((w / 2) * inner, (h / 2) * inner, end, start, false);
+            p.push(3);
+          }
+        } else if (full) {
+          arc(w / 2, h / 2, start, end, true);
+          p.push(3);
+        } else {
+          // A pie: out from the centre, round, and back.
+          p.push(0, cx, cy);
+          arc(w / 2, h / 2, start, end, false);
+          p.push(1, cx, cy);
+          p.push(3);
+        }
+        return p;
+      }
+      return null;
     }
   };
 
@@ -2730,6 +2864,9 @@
     /* Shape tweening: a real outline morph, shared with the editor and the
        exported player. */
     Morph,
+    /* Rounded rectangles and oval arcs/pies/donuts. One geometry, shared by
+       the painter, the SVG export, the player, the morph and the eraser. */
+    Primitives,
     Sound, SoundTrack, Bitmaps,
     /* Where trace() goes: the authoring Output panel, the exported player and
        an imported movie's ActionScript all write here. */

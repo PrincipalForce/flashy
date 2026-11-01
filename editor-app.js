@@ -900,6 +900,12 @@ function buildToolbox(){
 
 /** Per-tool settings, each one a plain object the tool reads at use time. */
 var polyStar={shape:"polygon",sides:5,point:0.5};
+/* Primitive-shape settings, sticky across draws the way Flash's Options panel
+   was: set a corner radius once and every rectangle you drag comes out rounded
+   until you set it back. The objects store their own copy, so changing the
+   tool later does not reshape what is already on the stage. */
+var rectPrim={cornerRadius:0};
+var ovalPrim={start:0,end:360,inner:0};
 var brushSize=12;
 var pencilMode="smooth";          // smooth | straighten | ink
 var lassoMode="freeform";         // freeform | polygon | wand
@@ -953,6 +959,34 @@ function toolOptionSpec(tool){
        hidden:function(){return polyStar.shape!=="star";},
        get:function(){return polyStar.point;},
        set:function(v){polyStar.point=v;updateToolOptions();}}
+    ];
+  }
+  if(tool==="rect"){
+    return [
+      {type:"label",text:function(){
+        return rectPrim.cornerRadius>0?"Corner "+rectPrim.cornerRadius+" px":"Square corners";
+      }},
+      {type:"range",min:0,max:60,step:1,title:"Corner radius for new rectangles",
+       get:function(){return rectPrim.cornerRadius;},
+       set:function(v){rectPrim.cornerRadius=v;updateToolOptions();}}
+    ];
+  }
+  if(tool==="oval"){
+    return [
+      {type:"label",text:function(){
+        if(ovalPrim.start===0&&ovalPrim.end===360)
+          return ovalPrim.inner>0?"Donut "+ovalPrim.inner+"%":"Full oval";
+        return ovalPrim.start+"° to "+ovalPrim.end+"°";
+      }},
+      {type:"range",min:0,max:360,step:1,title:"Start angle for new ovals",
+       get:function(){return ovalPrim.start;},
+       set:function(v){ovalPrim.start=v;updateToolOptions();}},
+      {type:"range",min:0,max:360,step:1,title:"End angle for new ovals",
+       get:function(){return ovalPrim.end;},
+       set:function(v){ovalPrim.end=v;updateToolOptions();}},
+      {type:"range",min:0,max:99,step:1,title:"Inner radius, as a percentage",
+       get:function(){return ovalPrim.inner;},
+       set:function(v){ovalPrim.inner=v;updateToolOptions();}}
     ];
   }
   if(tool==="lasso"){
@@ -4004,7 +4038,31 @@ function paintObjRaw(cx,o,opts){
   /* Box fractions -> the centre-origin space the shapes draw in. */
   var boxMap=function(fx,fy){return [(-hw)+fx*(o.width||0),(-hh)+fy*(o.height||0)];};
 
-  if(o.type==="rect"){
+  var primPath=(window.Flashy&&Flashy.Primitives&&Flashy.Primitives.active(o))
+    ? Flashy.Primitives.path(o) : null;
+  if(primPath&&window.FlashyTrace){
+    /* A rounded rectangle or an oval arc/pie/donut. The outline comes from
+       Flashy.Primitives, which is also what the SVG export, the player, the
+       morph and the eraser read — a rounded corner that is one shape on the
+       stage and another in the export is worse than no rounded corner. */
+    cx.save();
+    cx.translate(-hw,-hh);
+    cx.beginPath();
+    FlashyTrace.pathToContext(primPath,cx);
+    if(fillOn){
+      cx.fillStyle=fillStyleFor(cx,o,function(fx,fy){
+        return [fx*(o.width||0),fy*(o.height||0)];
+      },fillA);
+      cx.globalAlpha=fillA;
+      // Even-odd, so a donut's inner loop is a hole rather than a second ring.
+      cx.fill("evenodd");
+    }
+    if(strokeOn){
+      cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth;
+      cx.globalAlpha=strokeA;applyStroke();cx.stroke();
+    }
+    cx.restore();
+  }else if(o.type==="rect"){
     if(fillOn){cx.fillStyle=fillStyleFor(cx,o,boxMap,fillA);cx.globalAlpha=fillA;cx.fillRect(-hw,-hh,o.width,o.height);}
     if(strokeOn){
       cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth;
@@ -4302,6 +4360,14 @@ function interpObj(a,b,t,easing,kf){
   // motion tween between two differently skewed keyframes snapped at the end.
   tmp.skewX=lerp("skewX",0);tmp.skewY=lerp("skewY",0);
   tmp.alpha=lerp("alpha",1);
+  /* Primitive parameters tween as well — a pie wedge sweeping open, a corner
+     rounding off, a donut's hole widening. These are the shape's dimensions,
+     not decoration, so they belong with scale and skew rather than with the
+     filter stack. */
+  tmp.cornerRadius=lerp("cornerRadius",0);
+  tmp.ovalStart=lerp("ovalStart",0);
+  tmp.ovalEnd=lerp("ovalEnd",360);
+  tmp.ovalInner=lerp("ovalInner",0);
   /* Filters and the Colour Effect tween too, which is how a glow pulses and
      a tint fades. Only when the two keyframes agree about the SHAPE of the
      stack — same filters, in the same order — because there is no sensible
@@ -4622,6 +4688,32 @@ function drawPrev(){
   if(!dragPreview)return;
   ctx.save();
   var p=dragPreview;
+  /* A primitive in progress previews its real outline, not its box. A pie
+     wedge or a rounded rectangle is impossible to place by eye from a
+     rectangle, for the same reason a star is. */
+  var prevPrim=null;
+  if(p.type==="rect"&&rectPrim.cornerRadius>0){
+    prevPrim={type:"rect",cornerRadius:rectPrim.cornerRadius};
+  }else if(p.type==="oval"&&(ovalPrim.start!==0||ovalPrim.end!==360||ovalPrim.inner>0)){
+    prevPrim={type:"oval",ovalStart:ovalPrim.start,ovalEnd:ovalPrim.end,ovalInner:ovalPrim.inner};
+  }
+  if(prevPrim&&window.Flashy&&Flashy.Primitives&&window.FlashyTrace){
+    var bx=Math.min(p.x1,p.x2),by=Math.min(p.y1,p.y2);
+    prevPrim.width=Math.abs(p.x2-p.x1);prevPrim.height=Math.abs(p.y2-p.y1);
+    var pcmds=(prevPrim.width>1&&prevPrim.height>1)?Flashy.Primitives.path(prevPrim):null;
+    if(pcmds){
+      // Box coordinates to screen: offset to the drag origin, then s2c.
+      var sorig=s2c(bx,by),sunit=s2c(bx+1,by+1);
+      var kx=sunit.x-sorig.x,ky=sunit.y-sorig.y;
+      ctx.beginPath();
+      FlashyTrace.pathToContext(
+        FlashyTrace.pathTransform(pcmds,kx,ky,sorig.x,sorig.y),ctx);
+      ctx.strokeStyle="#0066FF";ctx.lineWidth=1;ctx.setLineDash([3,3]);
+      ctx.stroke();ctx.setLineDash([]);
+      ctx.restore();
+      return;
+    }
+  }
   if(p.type==="rect"||p.type==="oval"||p.type==="line"||p.type==="text"){
     var p1=s2c(Math.min(p.x1,p.x2),Math.min(p.y1,p.y2));
     var p2=s2c(Math.max(p.x1,p.x2),Math.max(p.y1,p.y2));
@@ -5240,6 +5332,13 @@ function onMouseUp(e){
         obj.fillColor=fillColor;obj.fillAlpha=fillAlpha;
         obj.strokeColor=strokeColor;obj.strokeAlpha=strokeAlpha;
         obj.strokeWidth=strokeWidth;
+        // Carry the tool's primitive settings onto the shape it just made.
+        if(curTool==="rect"&&rectPrim.cornerRadius>0)obj.cornerRadius=rectPrim.cornerRadius;
+        if(curTool==="oval"){
+          if(ovalPrim.start!==0)obj.ovalStart=ovalPrim.start;
+          if(ovalPrim.end!==360)obj.ovalEnd=ovalPrim.end;
+          if(ovalPrim.inner>0)obj.ovalInner=ovalPrim.inner;
+        }
         kf2.objects.push(obj);
         selection=[obj];
       }
@@ -6512,6 +6611,19 @@ function showTLContextMenu(x,y,items){
   },0);
 }
 
+/* An angle typed into a field, kept inside 0..360. Out of range wraps rather
+   than clamping, so typing -90 means 270 and 450 means 90 — which is what a
+   rotating dial does and what Flash accepted. */
+function clampDeg(v){
+  var n=parseFloat(v);
+  if(!isFinite(n))return 0;
+  n=n%360;
+  if(n<0)n+=360;
+  // 360 typed in means a whole turn, not nothing.
+  if(n===0&&parseFloat(v)>=360)return 360;
+  return n;
+}
+
 // === Properties Panel ===
 function updateProps(){
   var pp=document.getElementById("propsPanel");
@@ -6800,6 +6912,45 @@ function updateProps(){
       row("Nodes",nodes,function(){},{type:"readonly"});
       note("A traced outline. Editing W and H rescales it, and the fill below is "+
            "the colour the trace assigned — change it like any other shape.");
+    }
+
+    /* ── Rectangle corners ──
+       Flash's Rectangle tool carried a corner-radius setting; the shape stayed
+       a rectangle you could re-round at any time rather than becoming a frozen
+       outline. Same here: the radius is a property, and every render path
+       resolves it through Flashy.Primitives. */
+    if(o.type==="rect"){
+      sect("Rectangle");
+      var maxR=Math.min(Math.abs(o.width||0),Math.abs(o.height||0))/2;
+      sliderRow("Corner radius",Math.min(o.cornerRadius||0,maxR),0,Math.max(1,maxR),0.5,function(v){
+        pushUndo();o.cornerRadius=v;render();
+      },{unit:"px"});
+      note("0 is a square corner. The radius is clamped to half the shorter "+
+           "side, so a square at full radius is a circle.");
+    }
+
+    /* ── Oval start, end and inner radius ──
+       Flash 8's Oval Primitive tool: an arc, a pie wedge or a donut without
+       leaving the oval behind. ovalStart/ovalEnd are degrees clockwise from
+       12 o'clock; ovalInner is a percentage of the radius. */
+    if(o.type==="oval"){
+      sect("Oval");
+      row("Start angle",o.ovalStart||0,function(v){
+        pushUndo();o.ovalStart=clampDeg(v);render();updateProps();
+      },{width:"50px",unit:"°"});
+      row("End angle",o.ovalEnd==null?360:o.ovalEnd,function(v){
+        pushUndo();o.ovalEnd=clampDeg(v);render();updateProps();
+      },{width:"50px",unit:"°"});
+      sliderRow("Inner radius",o.ovalInner||0,0,99,1,function(v){
+        pushUndo();o.ovalInner=v;render();
+      },{unit:"%"});
+      if((o.ovalStart||0)!==0||(o.ovalEnd==null?360:o.ovalEnd)!==360){
+        note("A partial oval. With an inner radius it is an arc band; without "+
+             "one it is a pie wedge closed through the centre.");
+      }else if((o.ovalInner||0)>0){
+        note("A donut: the inner loop is a hole, cut by the even-odd rule in "+
+             "every render path including the export.");
+      }
     }
 
     /* Fill and stroke belong to the artwork, not to a symbol instance —
@@ -12943,6 +13094,15 @@ function objectRegion(o){
   var G=window.FlashyGeom;
   if(!G)return null;
   var hw=Math.abs((o.width||0)/2),hh=Math.abs((o.height||0)/2);
+  if(window.Flashy&&Flashy.Primitives&&Flashy.Primitives.active(o)){
+    // A rounded rectangle is erased round its real corners, not its box.
+    var pp=Flashy.Primitives.path(o);
+    if(pp){
+      var pm=matMul(objMatrix(o),[1,0,0,1,-hw,-hh]);
+      var psc=Math.max(1e-6,Math.hypot(pm[0],pm[1]),Math.hypot(pm[2],pm[3]));
+      return matApplyLoops(pm,G.normalize(G.pathToLoops(pp,ERASE_FLATTEN/psc)));
+    }
+  }
   if(o.type==="rect"){
     return matApplyLoops(objMatrix(o),G.normalize([G.rectLoop(-hw,-hh,hw*2,hh*2)]));
   }
@@ -15931,17 +16091,23 @@ function exportRuntime(data, canvas, options) {
       var stroked = (o.strokeStyle || "solid") !== "none" && (o.strokeWidth || 0) > 0;
       var sa = o.strokeAlpha != null ? o.strokeAlpha : 1;
 
-      if (o.type === "path") {
+      /* A parameterised primitive — a rounded rectangle, or an oval arc, pie
+         or donut — resolves to a command stream from Flashy.Primitives, which
+         IS shipped with the export, and is then replayed by the same code path
+         a traced outline uses. One geometry, five consumers. */
+      var primCmds = (Flashy.Primitives && Flashy.Primitives.active(o))
+        ? Flashy.Primitives.path(o) : null;
+      if (o.type === "path" || primCmds) {
         /* A traced outline. The command stream is replayed inline rather than
            through FlashyTrace, because this whole function is serialised into
            the export and the tracer is not shipped with it — the encoding is
            four opcodes, and duplicating the reader is cheaper than embedding
            an authoring-time module in every exported cartoon.
            0 moveTo x y · 1 lineTo x y · 2 quadTo cx cy x y · 3 closePath */
-        var cmds = o.path;
+        var cmds = primCmds || o.path;
         if (cmds && cmds.length) {
-          var psx = o.pathW ? (o.width / o.pathW) : 1;
-          var psy = o.pathH ? (o.height / o.pathH) : 1;
+          var psx = primCmds ? 1 : (o.pathW ? (o.width / o.pathW) : 1);
+          var psy = primCmds ? 1 : (o.pathH ? (o.height / o.pathH) : 1);
           if (filled) {
             // Even-odd: holes ride along as extra loops in the same path.
             if (!gradFill(g, o, function (fx, fy) {
@@ -16482,6 +16648,16 @@ function exportRuntime(data, canvas, options) {
            interpolator. */
         o.skewX = (a.skewX || 0) + ((b.skewX || 0) - (a.skewX || 0)) * t;
         o.skewY = (a.skewY || 0) + ((b.skewY || 0) - (a.skewY || 0)) * t;
+        /* Primitive parameters, same as the authoring interpolator: a wedge
+           sweeps open in the export too. */
+        var num = function (key, dflt) {
+          var av = a[key] == null ? dflt : a[key], bv = b[key] == null ? dflt : b[key];
+          return av + (bv - av) * t;
+        };
+        o.cornerRadius = num("cornerRadius", 0);
+        o.ovalStart = num("ovalStart", 0);
+        o.ovalEnd = num("ovalEnd", 360);
+        o.ovalInner = num("ovalInner", 0);
         if (Flashy.Filters) {
           o.filters = Flashy.Filters.lerpFilters(a.filters, b.filters, t);
           o.colorEffect = Flashy.Filters.lerpColorEffect(a.colorEffect, b.colorEffect, t);
@@ -17393,6 +17569,18 @@ function _objToSVGRaw(o, depth) {
   var gdefs = grad ? grad.defs : "";
   var st = (!o.strokeWidth||(o.strokeStyle||"solid")==="none") ? "none" : xmlAttr(o.strokeColor||"#000");
   var sw = o.strokeWidth||0;
+  /* A parameterised primitive — a rounded rectangle, or an oval arc, pie or
+     donut — emits its own outline from the same geometry the painter uses, so
+     the SVG and the stage cannot disagree about the shape. */
+  if (window.Flashy && Flashy.Primitives && Flashy.Primitives.active(o) && window.FlashyTrace) {
+    var prim = Flashy.Primitives.path(o);
+    if (prim) {
+      var pd = FlashyTrace.pathToSVG(FlashyTrace.pathTransform(prim, 1, 1, -hw, -hh));
+      // Even-odd, so a donut's inner loop is a hole rather than a second ring.
+      return gdefs + '<path' + a + ' d="' + pd + '" fill="' + fl +
+             '" fill-rule="evenodd" stroke="' + st + '" stroke-width="' + sw + '"/>\n';
+    }
+  }
   switch (o.type) {
     case "rect":
       return gdefs+'<rect'+a+' x="'+(-hw)+'" y="'+(-hh)+'" width="'+Math.abs(o.width)+'" height="'+Math.abs(o.height)+'" fill="'+fl+'" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
@@ -18915,6 +19103,10 @@ function init(){
     /** The active tool — the same call a toolbox click makes. */
     curTool: function(){ return curTool; },
     setTool: setTool,
+    /* The Rectangle and Oval tools' primitive settings, which are what the
+       Options panel edits and what a newly dragged shape inherits. */
+    rectPrim: function(){ return rectPrim; },
+    ovalPrim: function(){ return ovalPrim; },
     /** Timeline pixels-per-frame — the timeline is zoomable. */
     tlFrameWidth: function(){ return TL_FW_(); },
     /** Timeline cell selection: a rectangle of layers x frames. */
