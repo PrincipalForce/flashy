@@ -98,3 +98,73 @@ test("the Actions tab edits the current keyframe's frame script", async ({ page 
   await page.evaluate(() => { window._flashyAI.setCurFrame(11); window._flashyAI.fullRefresh(); });
   await expect(ta).toHaveValue("stop();");
 });
+
+/* Soloing a layer. Working on one layer in a stack means looking at all the
+   others; these are the three ways in and the way back out. */
+async function visibility(page) {
+  return page.evaluate(() =>
+    window._flashyAI.currentLayers().map((l) => l.visible !== false));
+}
+
+test("Hide Other Layers shows the current one alone, and Show All undoes it", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+  await page.evaluate(() => window._flashyAI.setCurLayer(1));
+  expect(await visibility(page)).toEqual([true, true]);
+
+  await page.evaluate(() => window._flashyEditor.doAction("hideOthers"));
+  expect(await visibility(page)).toEqual([false, true]);
+
+  await page.evaluate(() => window._flashyEditor.doAction("showAllLayers"));
+  expect(await visibility(page)).toEqual([true, true]);
+});
+
+test("soloing is one undo step, not one per layer", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+  await page.evaluate(() => {
+    window._flashyAI.setCurLayer(0);
+    window._flashyEditor.doAction("hideOthers");
+  });
+  expect(await visibility(page)).toEqual([true, false]);
+
+  await page.evaluate(() => window._flashyEditor.doAction("undo"));
+  expect(await visibility(page)).toEqual([true, true]);
+});
+
+test("Alt-clicking the eye solos the layer, and again puts the others back", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+
+  // The eye of the upper layer — the rows are drawn top layer first.
+  const eye = page.locator(".layer-row").nth(0).locator(".layer-btn").first();
+  await eye.click({ modifiers: ["Alt"] });
+  const soloed = await visibility(page);
+  expect(soloed.filter(Boolean).length).toBe(1);
+
+  await page.locator(".layer-row").nth(0).locator(".layer-btn").first()
+    .click({ modifiers: ["Alt"] });
+  expect(await visibility(page)).toEqual([true, true]);
+
+  // A plain click is still a plain toggle, and only touches its own layer.
+  await page.locator(".layer-row").nth(0).locator(".layer-btn").first().click();
+  expect((await visibility(page)).filter(Boolean).length).toBe(1);
+  await page.locator(".layer-row").nth(1).locator(".layer-btn").first().click();
+  expect(await visibility(page)).toEqual([false, false]);
+});
+
+test("the layer bar has a solo button that toggles", async ({ page }) => {
+  await openEditor(page);
+  await loadDoc(page, sampleDoc());
+  const solo = page.locator('#tl-layers button[title="Show this layer only"]');
+  await expect(solo).toHaveCount(1);
+
+  await solo.click();
+  expect((await visibility(page)).filter(Boolean).length).toBe(1);
+
+  // Now it offers the way back, in the same place.
+  const back = page.locator('#tl-layers button[title="Show all layers"]');
+  await expect(back).toHaveCount(1);
+  await back.click();
+  expect(await visibility(page)).toEqual([true, true]);
+});

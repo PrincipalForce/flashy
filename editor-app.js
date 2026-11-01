@@ -53,6 +53,35 @@ function currentTotalFrames(){
   }
   return doc.totalFrames;
 }
+/**
+ * Show one layer and hide the rest — of the timeline being edited, so inside
+ * a symbol it solos within the symbol, which is where you are working.
+ */
+function soloLayer(idx){
+  var layers=currentLayers();
+  if(!layers.length)return;
+  pushUndo();
+  layers.forEach(function(l,i){l.visible=(i===idx);});
+  fullRefresh();
+}
+
+function showAllLayers(){
+  var layers=currentLayers();
+  if(!layers.length)return;
+  if(layers.every(function(l){return l.visible!==false;}))return;
+  pushUndo();
+  layers.forEach(function(l){l.visible=true;});
+  fullRefresh();
+}
+
+/** True when `idx` is the only layer currently showing. */
+function isSoloed(idx){
+  var layers=currentLayers();
+  return layers.length>1&&layers.every(function(l,i){
+    return (i===idx)===(l.visible!==false);
+  });
+}
+
 function currentMaxFrame(){
   var layers=currentLayers();
   var m=1;
@@ -428,7 +457,10 @@ var menus=[
     {label:"Fit in Window",action:"zoomFit",shortcut:"Ctrl+2"},
     {type:"sep"},
     {label:"Show Grid",action:"grid",shortcut:"Ctrl+''''"},
-    {label:"Snap to Grid",action:"snap"}
+    {label:"Snap to Grid",action:"snap"},
+    {type:"sep"},
+    {label:"Hide Other Layers",action:"hideOthers"},
+    {label:"Show All Layers",action:"showAllLayers"}
   ]},
   {label:"Insert",items:[
     {label:"New Symbol...",action:"newSymbol",shortcut:"Ctrl+F8"},
@@ -3783,8 +3815,20 @@ function updateLayers(){
     var visBtn=document.createElement("button");
     visBtn.className="layer-btn";
     visBtn.textContent=l.visible?"\u25C9":"\u25CE";
-    visBtn.title="Toggle visibility";
-    visBtn.addEventListener("click",function(e){e.stopPropagation();l.visible=!l.visible;fullRefresh();});
+    visBtn.title="Toggle visibility \u2014 Alt-click to show this layer only";
+    visBtn.addEventListener("click",function(e){
+      e.stopPropagation();
+      /* Alt-click solos, the way it does in Flash, and alt-clicking the
+         layer that is already alone puts the others back — otherwise the
+         gesture is a one-way trip through the menu. */
+      if(e.altKey){
+        if(isSoloed(i))showAllLayers();
+        else soloLayer(i);
+        return;
+      }
+      l.visible=!l.visible;
+      fullRefresh();
+    });
     row.appendChild(visBtn);
     var lockBtn=document.createElement("button");
     lockBtn.className="layer-btn";
@@ -3827,6 +3871,18 @@ function updateLayers(){
     layers.splice(curLayer,0,dup);fullRefresh();
   });
   btnBar.appendChild(dupBtn);
+  /* The same thing as a button, because a feature only in a menu and an
+     Alt-click is a feature most people never find. It reads as a toggle:
+     solo this layer, or show them all again. */
+  var soloBtn=document.createElement("button");
+  soloBtn.style.cssText=dupBtn.style.cssText;
+  var soloed=isSoloed(curLayer);
+  soloBtn.textContent=soloed?"\u25C9":"\u25CE";
+  soloBtn.title=soloed?"Show all layers":"Show this layer only";
+  soloBtn.addEventListener("click",function(){
+    doAction(isSoloed(curLayer)?"showAllLayers":"hideOthers");
+  });
+  btnBar.appendChild(soloBtn);
   lp.appendChild(btnBar);
 }
 /* ------------------------------------------------------------------ *
@@ -5878,6 +5934,15 @@ function doAction(a){
       }
       fullRefresh();
     }
+    break;
+  /* Working on one layer in a stack of fifty means looking at forty-nine
+     you are not working on. Flash's answer, and now this one: solo the
+     current layer, and put them all back when you are done. */
+  case "hideOthers":
+    soloLayer(curLayer);
+    break;
+  case "showAllLayers":
+    showAllLayers();
     break;
   case "addLayer":
     pushUndo();
