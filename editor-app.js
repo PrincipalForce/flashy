@@ -518,6 +518,10 @@ var menus=[
     {label:"Publish Settings...",action:"publishSettings"},
     {label:"Publish",action:"publish",shortcut:"Ctrl+F12"},
     {label:"Size Report...",action:"sizeReport"},
+    {label:"HTML Template...",action:"htmlTemplate"},
+    {label:"Sound Settings...",action:"soundSettings"},
+    {type:"sep"},
+    {label:"Print...",action:"print",shortcut:"Ctrl+P"},
     {type:"sep"},
     // No accelerator: Ctrl+R and Ctrl+Shift+R are the browser's reload, which
     // a page cannot reliably intercept. (The Ctrl+R on Import Sound below has
@@ -8794,6 +8798,9 @@ function initOutputPanel(){
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
   timelineEffect:"Timeline Effect",
+  htmlTemplate:"HTML Template",
+  soundSettings:"Sound Settings",
+  print:"Print",
   embedFont:"Embed Font",
   spellCheck:"Check Spelling",
   debugScript:"Debug Frame Script",
@@ -11780,6 +11787,15 @@ function doActionInner(a){
     break;
   case "embedFont":
     showFontEmbedDialog();
+    break;
+  case "htmlTemplate":
+    showTemplateEditor();
+    break;
+  case "soundSettings":
+    showSoundSettingsDialog();
+    break;
+  case "print":
+    showPrintDialog();
     break;
   case "spellCheck":
     showSpellCheckDialog();
@@ -18805,6 +18821,563 @@ function applyProofFix(o, issue) {
 }
 
 /* ------------------------------------------------------------------ *
+ * HTML templates and alignment
+ *
+ * Flash's publish templates were a plain file with `$XX$` placeholders, and
+ * that convention is kept exactly: a template anyone wrote for Flash reads
+ * the same way here. The point is that an exported movie usually has to land
+ * inside somebody's page, and until now the only option was the page Flashy
+ * writes.
+ * ------------------------------------------------------------------ */
+
+var HTML_PLACEHOLDERS = [
+  ["$TITLE$", "the movie's title from Publish Settings"],
+  ["$WIDTH$", "the stage width in pixels"],
+  ["$HEIGHT$", "the stage height in pixels"],
+  ["$BGCOLOR$", "the background colour"],
+  ["$FPS$", "the frame rate"],
+  ["$MOVIE$", "the canvas, the engine and the player — all of it"],
+  ["$STYLE$", "the stylesheet Flashy would have written"],
+  ["$ALIGN$", "the CSS that places the canvas, from the alignment setting"]
+];
+
+var DEFAULT_HTML_TEMPLATE =
+  "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n" +
+  "<title>$TITLE$</title>\n<style>\n$STYLE$\n$ALIGN$\n</style>\n" +
+  "</head>\n<body>\n$MOVIE$\n</body>\n</html>";
+
+/**
+ * The CSS for an alignment setting.
+ *
+ * Flash's alignment was a pair of nine-way choices, and it only ever meant
+ * where the movie sits when the window is bigger than it. Expressed as flexbox
+ * so the canvas keeps its own pixel size -- scaling it to fit is a separate
+ * setting and conflating the two was Flash's own mistake.
+ */
+function alignCSS(hAlign, vAlign) {
+  var h = { left: "flex-start", center: "center", right: "flex-end" }[hAlign] || "center";
+  var v = { top: "flex-start", middle: "center", bottom: "flex-end" }[vAlign] || "center";
+  return "body{justify-content:" + h + ";align-items:" + v + ";}";
+}
+
+/** Fill a template's placeholders. Unknown `$X$` text is left alone. */
+function fillHTMLTemplate(tpl, values) {
+  var out = String(tpl == null ? "" : tpl);
+  HTML_PLACEHOLDERS.forEach(function (p) {
+    var key = p[0];
+    var v = values[key.replace(/\$/g, "")];
+    // Split and join rather than a regex: a replacement containing `$&` or
+    // `$1` would otherwise be mangled, and $MOVIE$ is a whole script.
+    out = out.split(key).join(v == null ? "" : String(v));
+  });
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Printing, and matching the stage to paper
+ *
+ * Flash could print the frames of a movie and could size the stage to the
+ * printer. Both are about a cartoon that has to exist on paper -- a storyboard
+ * handed round a room, or a strip for a client who will not open a browser.
+ * ------------------------------------------------------------------ */
+
+/* Paper at 72 points to the inch, which is the unit a stage is already in.
+   The margin is the printable area most desktop printers actually give. */
+var PAPER_SIZES = {
+  a4: { label: "A4", w: 595, h: 842 },
+  a5: { label: "A5", w: 420, h: 595 },
+  letter: { label: "US Letter", w: 612, h: 792 },
+  legal: { label: "US Legal", w: 612, h: 1008 },
+  a3: { label: "A3", w: 842, h: 1191 }
+};
+var PRINT_MARGIN = 36;        // half an inch
+
+/**
+ * Resize the stage to a sheet of paper.
+ *
+ * The artwork is NOT moved: the point is to find out what fits, and shifting
+ * everything would hide the answer. Match Stage Size to Contents is the
+ * command for the other direction.
+ */
+function matchStageToPaper(size, landscape) {
+  var p = PAPER_SIZES[size];
+  if (!p) return { ok: false, why: "unknown paper size" };
+  var w = Math.round((landscape ? p.h : p.w) - PRINT_MARGIN * 2);
+  var h = Math.round((landscape ? p.w : p.h) - PRINT_MARGIN * 2);
+  pushUndo();
+  doc.width = w;
+  doc.height = h;
+  centerStage();
+  fullRefresh();
+  return { ok: true, width: w, height: h, paper: p.label };
+}
+
+/**
+ * Build a printable page: one frame per sheet, or a contact sheet of them.
+ *
+ * Rasterised through renderFrameToCanvas, which is the same path the sprite
+ * sheet and the video use -- so what prints is what those produce, not a
+ * fourth interpretation of the document.
+ */
+function buildPrintHTML(opts) {
+  opts = opts || {};
+  var size = PAPER_SIZES[opts.paper] || PAPER_SIZES.a4;
+  var landscape = !!opts.landscape;
+  var pageW = landscape ? size.h : size.w;
+  var pageH = landscape ? size.w : size.h;
+  var from = Math.max(1, parseInt(opts.from, 10) || 1);
+  var to = Math.max(from, Math.min(currentMaxFrame(), parseInt(opts.to, 10) || from));
+  var perPage = Math.max(1, Math.min(16, parseInt(opts.perPage, 10) || 1));
+  // Bounded: 200 rasterised frames is already more paper than anyone wants,
+  // and each one is a full-stage render held as a data URL.
+  if (to - from + 1 > 200) to = from + 199;
+
+  var shots = [];
+  for (var f = from; f <= to; f++) {
+    var cv = renderFrameToCanvas(f, doc.width, doc.height);
+    var url;
+    try { url = cv.toDataURL("image/png"); }
+    catch (e) { url = null; }
+    if (url) shots.push({ frame: f, url: url });
+  }
+  if (!shots.length) return { ok: false, why: "no frames could be rendered" };
+
+  var cols = perPage === 1 ? 1 : (perPage <= 4 ? 2 : (perPage <= 9 ? 3 : 4));
+  var cell = Math.floor((pageW - PRINT_MARGIN * 2) / cols);
+  var s = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n";
+  s += "<title>" + xmlText(docPublish().title || "Flashy") + "</title>\n";
+  s += "<style>\n";
+  s += "@page{size:" + (landscape ? "landscape" : "portrait") + ";margin:" +
+       PRINT_MARGIN + "pt;}\n";
+  s += "body{margin:0;font:11px/1.4 Arial,sans-serif;color:#000;}\n";
+  s += ".sheet{display:grid;grid-template-columns:repeat(" + cols +
+       ",1fr);gap:8pt;}\n";
+  s += ".shot{break-inside:avoid;page-break-inside:avoid;text-align:center;}\n";
+  s += ".shot img{max-width:" + (cell - 10) + "pt;height:auto;border:1px solid #999;}\n";
+  s += ".shot figcaption{margin-top:2pt;color:#444;}\n";
+  /* One frame to a page means a real page break between them; a contact sheet
+     lets the grid flow and only breaks between rows. */
+  if (perPage === 1) s += ".shot{page-break-after:always;break-after:page;}\n";
+  s += "</style>\n</head>\n<body>\n<div class=\"sheet\">\n";
+  shots.forEach(function (sh) {
+    s += '<figure class="shot"><img src="' + sh.url + '" alt="Frame ' +
+         sh.frame + '"><figcaption>Frame ' + sh.frame + "</figcaption></figure>\n";
+  });
+  s += "</div>\n</body>\n</html>";
+  return { ok: true, html: s, frames: shots.length, pageW: pageW, pageH: pageH };
+}
+
+/**
+ * Edit the HTML template.
+ *
+ * A textarea rather than a file picker: the template is small, it belongs to
+ * the document, and the placeholder list has to be in front of you while you
+ * write it.
+ */
+function showTemplateEditor() {
+  var pub = docPublish();
+  var ta = null;
+  showDialog({
+    title: "HTML Template",
+    message: "Flash's own $XX$ placeholders, so a template written for Flash " +
+             "reads the same here. $MOVIE$ is the whole movie — canvas, " +
+             "engine and player — so a template cannot accidentally ship " +
+             "half of it.",
+    fields: [],
+    build: function (body) {
+      var list = document.createElement("div");
+      list.className = "dbg-list";
+      HTML_PLACEHOLDERS.forEach(function (p) {
+        var row = document.createElement("div");
+        row.className = "dbg-row";
+        var n = document.createElement("span");
+        n.className = "dbg-name";
+        n.textContent = p[0];
+        var v = document.createElement("span");
+        v.className = "dbg-value";
+        v.textContent = p[1];
+        row.appendChild(n);
+        row.appendChild(v);
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+      ta = document.createElement("textarea");
+      ta.className = "fy-dialog-input";
+      ta.style.cssText = "width:100%;height:160px;font:11px/1.4 Consolas,monospace;" +
+                         "white-space:pre;resize:vertical";
+      ta.spellcheck = false;
+      ta.value = pub.template || DEFAULT_HTML_TEMPLATE;
+      body.appendChild(ta);
+    },
+    extraButtons: [
+      { label: "Reset", onClick: function () {
+          if (ta) ta.value = DEFAULT_HTML_TEMPLATE;
+        } },
+      { label: "Use Flashy's page", onClick: function (v, close) {
+          pushUndo();
+          docPublish().template = null;
+          close();
+          showMessage("HTML Template", "Back to the page Flashy writes.");
+        } }
+    ],
+    okLabel: "Save",
+    onOk: function () {
+      if (!ta) return;
+      var text = String(ta.value || "");
+      if (text.indexOf("$MOVIE$") < 0) {
+        /* Without it the page has no movie in it at all, which is the one
+           mistake worth refusing rather than publishing. */
+        showMessage("HTML Template",
+          "That template has no $MOVIE$ in it, so the page would contain no " +
+          "movie. Add $MOVIE$ where the animation should go.");
+        return;
+      }
+      pushUndo();
+      docPublish().template = text;
+      touchDoc();
+    }
+  });
+}
+
+function showPrintDialog() {
+  var pub = docPublish();
+  showDialog({
+    title: "Print",
+    message: "Frames are rasterised through the same path the sprite sheet " +
+             "and the video use, so what prints is what those produce.",
+    fields: [
+      { name: "from", label: "From frame", type: "number", value: curFrame,
+        min: 1, max: currentMaxFrame() },
+      { name: "to", label: "To frame", type: "number", value: curFrame,
+        min: 1, max: currentMaxFrame() },
+      { name: "perPage", label: "Frames per page", type: "number", value: 1,
+        min: 1, max: 16,
+        hint: "1 gives a page each; more lays them out as a contact sheet, " +
+              "which is what a storyboard wants." },
+      { name: "paper", label: "Paper", type: "select",
+        value: pub.printPaper || "a4",
+        options: Object.keys(PAPER_SIZES).map(function (k) {
+          return [k, PAPER_SIZES[k].label];
+        }) },
+      { name: "landscape", label: "Landscape", type: "checkbox",
+        value: !!pub.printLandscape }
+    ],
+    okLabel: "Print",
+    extraButtons: [{ label: "Match Stage to Paper", onClick: function (v, close) {
+      close();
+      var r = matchStageToPaper(v.paper, v.landscape);
+      showMessage("Print", r.ok
+        ? "The stage is now " + r.width + " x " + r.height +
+          " — " + r.paper + " at 72dpi, less a half-inch margin. The artwork " +
+          "has not moved: the point is to see what fits."
+        : "Not changed: " + r.why + ".");
+    } }],
+    onOk: function (v) {
+      pub.printPaper = v.paper;
+      pub.printLandscape = !!v.landscape;
+      touchDoc();
+      var built = buildPrintHTML(v);
+      if (!built.ok) {
+        showMessage("Print", "Nothing to print: " + built.why + ".");
+        return;
+      }
+      /* A window rather than the editor's own page: printing the editor would
+         print the panels. It is left open rather than closed after printing,
+         because a print dialog that is cancelled should not take the preview
+         with it. */
+      var w = window.open("", "_blank");
+      if (!w) {
+        // A blocked pop-up: offer the file instead, which still prints.
+        dlFile(built.html, "flashy-print.html", "text/html");
+        showMessage("Print",
+          "The print window was blocked, so the pages were downloaded " +
+          "instead — open the file and print it from there.");
+        return;
+      }
+      w.document.write(built.html);
+      w.document.close();
+      w.focus();
+      // After the images have decoded, or the page prints blank.
+      setTimeout(function () { try { w.print(); } catch (e) { /* user closed it */ } }, 400);
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Per-sound export settings
+ *
+ * Flash let every sound carry its own compression, because one music bed and
+ * twenty blips want completely different settings and a single document-wide
+ * quality is wrong for both.
+ *
+ * There is no MP3 encoder here and writing one would be a project of its own.
+ * What there IS: the decoded samples, which can be made mono and resampled
+ * before being written back as WAV. That is real compression -- halving the
+ * rate halves the bytes -- and it is honest about what it does, which
+ * pretending to re-encode would not be.
+ * ------------------------------------------------------------------ */
+
+var SOUND_RATES = [
+  ["original", "Keep the original"],
+  ["22050", "22 kHz"],
+  ["11025", "11 kHz"],
+  ["5512", "5 kHz"]
+];
+
+function soundSettings(name) {
+  var a = doc.sounds && doc.sounds[name];
+  if (!a) return null;
+  if (!a.exportSettings) {
+    a.exportSettings = { rate: "original", mono: false, trim: false };
+  }
+  return a.exportSettings;
+}
+
+/** A decoded buffer for an asset, if the engine has one. */
+function decodedSound(name) {
+  if (!window.Flashy || !Flashy.Sound || !Flashy.Sound._buffers) return null;
+  return Flashy.Sound._buffers[name] || null;
+}
+
+/**
+ * Write a buffer of samples out as a WAV data URL.
+ *
+ * 16-bit PCM, which every browser decodes and which is the only format that
+ * can be written here without an encoder. The point is not that WAV is small;
+ * it is that mono at 11 kHz is a quarter of the bytes of stereo at 44, and
+ * for a blip nobody can tell.
+ */
+function samplesToWAV(channels, rate) {
+  var n = channels[0].length;
+  var ch = channels.length;
+  var bytes = 44 + n * ch * 2;
+  var buf = new ArrayBuffer(bytes);
+  var v = new DataView(buf);
+  var str = function (at, s) {
+    for (var i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i));
+  };
+  str(0, "RIFF");
+  v.setUint32(4, bytes - 8, true);
+  str(8, "WAVEfmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);              // PCM
+  v.setUint16(22, ch, true);
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * ch * 2, true);
+  v.setUint16(32, ch * 2, true);
+  v.setUint16(34, 16, true);
+  str(36, "data");
+  v.setUint32(40, n * ch * 2, true);
+  var at = 44;
+  for (var i2 = 0; i2 < n; i2++) {
+    for (var c = 0; c < ch; c++) {
+      var sample = Math.max(-1, Math.min(1, channels[c][i2]));
+      v.setInt16(at, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      at += 2;
+    }
+  }
+  var bin = "";
+  var u8 = new Uint8Array(buf);
+  for (var k = 0; k < u8.length; k += 0x8000) {
+    bin += String.fromCharCode.apply(null, u8.subarray(k, k + 0x8000));
+  }
+  return "data:audio/wav;base64," + btoa(bin);
+}
+
+/**
+ * Apply an asset's export settings and return the new data URL.
+ *
+ * Returns null when there is nothing to do, so the caller can ship the
+ * original bytes untouched -- which is almost always smaller than anything
+ * this can produce, because the original is usually already compressed.
+ */
+function recodeSound(name) {
+  var a = doc.sounds && doc.sounds[name];
+  if (!a) return null;
+  var set = soundSettings(name);
+  if (!set || (set.rate === "original" && !set.mono && !set.trim)) return null;
+  var buf = decodedSound(name);
+  if (!buf) return null;
+
+  var srcRate = buf.sampleRate;
+  var want = set.rate === "original" ? srcRate : parseInt(set.rate, 10);
+  if (!(want > 0)) want = srcRate;
+  var srcCh = [];
+  for (var c = 0; c < buf.numberOfChannels; c++) srcCh.push(buf.getChannelData(c));
+
+  // Mono first: mixing down before resampling is half the work of after.
+  var mixed = srcCh;
+  if (set.mono && srcCh.length > 1) {
+    var mono = new Float32Array(srcCh[0].length);
+    for (var i = 0; i < mono.length; i++) {
+      var sum = 0;
+      for (var c2 = 0; c2 < srcCh.length; c2++) sum += srcCh[c2][i];
+      mono[i] = sum / srcCh.length;
+    }
+    mixed = [mono];
+  }
+
+  /* Linear resampling. A proper job would low-pass first to stop aliasing;
+     at these rates, for the blips this is for, the aliasing is inaudible and
+     the filter would cost more than the saving. */
+  var out = mixed;
+  if (want !== srcRate) {
+    var ratio = want / srcRate;
+    var len = Math.max(1, Math.floor(mixed[0].length * ratio));
+    out = mixed.map(function (src) {
+      var dst = new Float32Array(len);
+      for (var j = 0; j < len; j++) {
+        var at = j / ratio;
+        var i0 = Math.floor(at), i1 = Math.min(src.length - 1, i0 + 1);
+        var t = at - i0;
+        dst[j] = src[i0] * (1 - t) + src[i1] * t;
+      }
+      return dst;
+    });
+  }
+
+  // Trim leading and trailing silence, which is often most of a recorded blip.
+  if (set.trim) {
+    var first = 0, last = out[0].length - 1;
+    var loud = function (i) {
+      for (var c3 = 0; c3 < out.length; c3++) if (Math.abs(out[c3][i]) > 0.004) return true;
+      return false;
+    };
+    while (first < last && !loud(first)) first++;
+    while (last > first && !loud(last)) last--;
+    if (last > first) {
+      out = out.map(function (src) { return src.subarray(first, last + 1); });
+    }
+  }
+
+  return { data: samplesToWAV(out, want), rate: want,
+           channels: out.length, samples: out[0].length };
+}
+
+/** Roughly how many bytes an asset's data URL costs. */
+function soundBytes(dataUrl) {
+  var s = String(dataUrl || "");
+  var at = s.indexOf(",");
+  return at < 0 ? s.length : Math.round((s.length - at - 1) * 3 / 4);
+}
+
+/** Apply every asset's settings, for an export. Returns a report. */
+function recodeAllSounds(sounds) {
+  var report = [];
+  Object.keys(sounds || {}).forEach(function (name) {
+    var set = doc.sounds && doc.sounds[name] && doc.sounds[name].exportSettings;
+    if (!set) return;
+    var r = recodeSound(name);
+    if (!r) return;
+    var before = soundBytes(sounds[name].data);
+    var after = soundBytes(r.data);
+    /* Only when it actually helps. Resampling an MP3 into WAV usually makes
+       it BIGGER, and shipping a bigger file because a setting said to would
+       be the opposite of what the setting is for. */
+    if (after >= before) {
+      report.push({ name: name, before: before, after: before, skipped: true });
+      return;
+    }
+    sounds[name] = { name: name, mediaType: "audio/wav", data: r.data,
+                     duration: r.samples / r.rate };
+    report.push({ name: name, before: before, after: after, rate: r.rate,
+                  channels: r.channels });
+  });
+  return report;
+}
+
+function showSoundSettingsDialog() {
+  var names = Object.keys(doc.sounds || {});
+  if (!names.length) {
+    showMessage("Sound Settings",
+      "This document has no sounds in it yet. File ▸ Import Sound adds one.");
+    return;
+  }
+  var listEl = null;
+
+  var draw = function () {
+    if (!listEl) return;
+    listEl.textContent = "";
+    names.forEach(function (n) {
+      var set = soundSettings(n);
+      var row = document.createElement("div");
+      row.className = "dbg-row";
+      var nm = document.createElement("span");
+      nm.className = "dbg-name";
+      nm.textContent = n;
+      row.appendChild(nm);
+
+      var rate = document.createElement("select");
+      rate.className = "props-select";
+      rate.style.width = "92px";
+      SOUND_RATES.forEach(function (r) {
+        var op = document.createElement("option");
+        op.value = r[0]; op.textContent = r[1];
+        if (set.rate === r[0]) op.selected = true;
+        rate.appendChild(op);
+      });
+      rate.addEventListener("change", function () {
+        set.rate = rate.value; touchDoc(); draw();
+      });
+      row.appendChild(rate);
+
+      [["mono", "Mono"], ["trim", "Trim"]].forEach(function (f) {
+        var lab = document.createElement("label");
+        lab.style.cssText = "display:flex;align-items:center;gap:2px;color:#BBB";
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!set[f[0]];
+        cb.addEventListener("change", function () {
+          set[f[0]] = cb.checked; touchDoc(); draw();
+        });
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(f[1]));
+        row.appendChild(lab);
+      });
+
+      var size = document.createElement("span");
+      size.className = "dbg-value";
+      var before = soundBytes(doc.sounds[n].data);
+      var hasBuffer = !!decodedSound(n);
+      if (set.rate === "original" && !set.mono && !set.trim) {
+        size.textContent = Math.round(before / 1024) + " KB, unchanged";
+      } else if (!hasBuffer) {
+        size.textContent = "not decoded yet";
+        size.title = "The sound is decoded when it loads; reopen the document " +
+                     "if this persists.";
+      } else {
+        var r = recodeSound(n);
+        var after = r ? soundBytes(r.data) : before;
+        size.textContent = Math.round(before / 1024) + " KB → " +
+          Math.round(after / 1024) + " KB" + (after >= before ? " (no saving)" : "");
+      }
+      row.appendChild(size);
+      listEl.appendChild(row);
+    });
+  };
+
+  showDialog({
+    title: "Sound Settings",
+    message: "One music bed and twenty blips want completely different " +
+             "settings, which is why these are per sound.\n\n" +
+             "There is no MP3 encoder here. What these do is real but " +
+             "different: the decoded samples are made mono, resampled and " +
+             "trimmed, then written back as WAV. Mono at 11 kHz is a quarter " +
+             "of the bytes of stereo at 44, and for a blip nobody can tell. " +
+             "A setting that would make a file BIGGER is skipped.",
+    fields: [],
+    build: function (body) {
+      listEl = document.createElement("div");
+      listEl.className = "dbg-list";
+      body.appendChild(listEl);
+      draw();
+    },
+    okLabel: "Close",
+    noCancel: true
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -19948,6 +20521,9 @@ function initKeys(){
       e.preventDefault();doAction("editMultiple");return;
     }
     if(ctrl&&!e.shiftKey&&(e.key==="f"||e.key==="F")){e.preventDefault();doAction("findReplace");return;}
+    /* Ctrl+P is intercepted: the browser's own print would print the editor's
+       panels, which is never what was meant. */
+    if(ctrl&&(e.key==="p"||e.key==="P")){e.preventDefault();doAction("print");return;}
     if(ctrl&&e.key==="z"){e.preventDefault();doAction("undo");return;}
     if(ctrl&&e.key==="y"){e.preventDefault();doAction("redo");return;}
     if(ctrl&&e.key==="s"){e.preventDefault();doAction("save");return;}
@@ -20107,7 +20683,11 @@ function serializeSounds(sounds){
   Object.keys(sounds||{}).forEach(function(name){
     var a=sounds[name];
     if(!a||!a.data)return;
-    out[name]={name:name,mediaType:a.mediaType||"audio/mpeg",data:a.data,duration:a.duration||0};
+    out[name]={name:name,mediaType:a.mediaType||"audio/mpeg",data:a.data,
+               duration:a.duration||0,
+               // Per-sound export settings, only when they are not the default.
+               exportSettings:a.exportSettings?
+                 JSON.parse(JSON.stringify(a.exportSettings)):null};
   });
   return out;
 }
@@ -20116,7 +20696,10 @@ function reviveSounds(sounds){
   Object.keys(sounds||{}).forEach(function(name){
     var a=sounds[name];
     if(!a||!a.data)return;
-    out[name]={name:name,mediaType:a.mediaType||"audio/mpeg",data:a.data,duration:a.duration||0};
+    out[name]={name:name,mediaType:a.mediaType||"audio/mpeg",data:a.data,
+               duration:a.duration||0,
+               exportSettings:(a.exportSettings&&typeof a.exportSettings==="object")
+                 ?JSON.parse(JSON.stringify(a.exportSettings)):null};
   });
   return out;
 }
@@ -20293,6 +20876,11 @@ function exportDocData(){
   var keep={};
   Object.keys(d.fonts||{}).forEach(function(k){ if(wanted[k])keep[k]=d.fonts[k]; });
   if(Object.keys(keep).length)d.fonts=keep; else delete d.fonts;
+  /* Per-sound export settings, applied to the exported COPY: the document
+     keeps its original audio, so a setting can be changed back. */
+  // The report is for the Size Report, not for the movie; recodeAllSounds
+  // rewrites d.sounds in place and the return value is discarded here.
+  if(d.sounds)recodeAllSounds(d.sounds);
   var st=docStrings();
   if(Object.keys(st.table).length){
     d.strings={languages:st.languages.slice(),active:st.active,
@@ -21922,6 +22510,13 @@ function docPublish(){
      other tools not to decompile it. */
   if(p.omitTrace==null)p.omitTrace=false;
   if(p.protect==null)p.protect=false;
+  /* The page the movie lands in. `template` null means the one Flashy writes;
+     a string is a user template with Flash's own `$XX$` placeholders. */
+  if(p.template==null)p.template=null;
+  if(p.hAlign==null)p.hAlign="center";
+  if(p.vAlign==null)p.vAlign="middle";
+  if(p.printPaper==null)p.printPaper="a4";
+  if(p.printLandscape==null)p.printLandscape=false;
   return p;
 }
 
@@ -21953,6 +22548,16 @@ function showPublishSettingsDialog(){
        value:!!p.omitTrace,
        hint:"Strips trace() calls out of the exported scripts. A released "+
             "movie logging to the console is noise at best."},
+      {name:"hAlign",label:"Align across",type:"select",value:p.hAlign,
+       options:[["left","Left"],["center","Centre"],["right","Right"]]},
+      {name:"vAlign",label:"Align down",type:"select",value:p.vAlign,
+       options:[["top","Top"],["middle","Middle"],["bottom","Bottom"]],
+       hint:"Where the movie sits when the window is bigger than it. Scaling "+
+            "it to fit is the setting above; Flash conflated the two."},
+      {name:"useTemplate",label:"Use my own HTML",type:"checkbox",
+       value:p.template!=null,
+       hint:"A template with Flash's own $XX$ placeholders. Leave this off "+
+            "and Flashy writes the page."},
       {name:"protect",label:"Protect from import",type:"checkbox",
        value:!!p.protect,
        hint:"Marks the output as not-for-import. It was always a request "+
@@ -21988,6 +22593,13 @@ function showPublishSettingsDialog(){
       p.videoFps=Math.max(1,Math.min(60,parseInt(v.videoFps,10)||24));
       p.omitTrace=!!v.omitTrace;
       p.protect=!!v.protect;
+      p.hAlign=v.hAlign;
+      p.vAlign=v.vAlign;
+      /* Ticking the box seeds the default template rather than opening an
+         empty box: a placeholder language is far easier to learn from a
+         working example than from a list. */
+      if(v.useTemplate&&p.template==null)p.template=DEFAULT_HTML_TEMPLATE;
+      if(!v.useTemplate)p.template=null;
       touchDoc();
       outputLog("Publish settings saved.");
     }
@@ -22209,77 +22821,105 @@ function genHTML(callback){
     getAS2Source(docHasClipScripts(d),function(as2Src){
     if(as2Src)engineSrc=engineSrc+"\n"+as2Src;
     var sc="<"+"script>",sce="</"+"script>";
-    var s="<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n";
     /* The publish settings, where they land in the output: the page title, its
        background, how the canvas is scaled and whether the movie loops. Six
        separate export commands each had these hard-coded, and none of them
        remembered a choice. */
     var pub=docPublish();
-    s+="<title>"+xmlText(pub.title||"Flashy Animation")+"</title>\n";
-    s+="<style>\n";
-    s+="*{margin:0;padding:0;box-sizing:border-box;}\n";
-    s+="body{background:"+(pub.background||"#111")+
+
+    /* Built as three pieces — the stylesheet, the markup, and the page that
+       holds them — because a user template needs the first two and writes the
+       third itself. Assembling them in one string, as this used to, meant a
+       template could only be bolted on by taking the page apart again. */
+    var style="";
+    style+="*{margin:0;padding:0;box-sizing:border-box;}\n";
+    style+="body{background:"+(pub.background||"#111")+
        ";display:flex;align-items:center;justify-content:center;min-height:100vh;overflow:hidden;}\n";
     /* Scale. "Match movie" is the historic behaviour and stays the default;
        Fit keeps the aspect ratio inside the window, Fill crops to cover it,
        and Percent is a flat multiplier. All of it in CSS, so the canvas keeps
        its own pixel size and the drawing stays sharp. */
     if(pub.scaleMode==="fit"){
-      s+="canvas{display:block;max-width:100vw;max-height:100vh;object-fit:contain;}\n";
+      style+="canvas{display:block;max-width:100vw;max-height:100vh;object-fit:contain;}\n";
     }else if(pub.scaleMode==="fill"){
-      s+="canvas{display:block;width:100vw;height:100vh;object-fit:cover;}\n";
+      style+="canvas{display:block;width:100vw;height:100vh;object-fit:cover;}\n";
     }else if(pub.scaleMode==="percent"){
       var pc=Math.max(10,Math.min(400,pub.scalePercent||100))/100;
-      s+="canvas{display:block;width:"+Math.round(doc.width*pc)+"px;height:"+
+      style+="canvas{display:block;width:"+Math.round(doc.width*pc)+"px;height:"+
          Math.round(doc.height*pc)+"px;}\n";
     }else{
-      s+="canvas{display:block;}\n";
+      style+="canvas{display:block;}\n";
     }
-    s+="#flashy-start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);cursor:pointer;}\n";
-    s+="#flashy-start button{width:88px;height:88px;border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,0.35);color:#fff;font-size:34px;line-height:1;cursor:pointer;padding-left:6px;}\n";
-    s+="#flashy-start button:hover{background:rgba(255,255,255,0.18);}\n";
-    s+="</style>\n</head>\n<body>\n";
+    style+="#flashy-start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);cursor:pointer;}\n";
+    style+="#flashy-start button{width:88px;height:88px;border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,0.35);color:#fff;font-size:34px;line-height:1;cursor:pointer;padding-left:6px;}\n";
+    style+="#flashy-start button:hover{background:rgba(255,255,255,0.18);}\n";
+    // Alignment: where the movie sits when the window is bigger than it.
+    var align=alignCSS(pub.hAlign,pub.vAlign);
+
     /* Accessibility. A canvas is one opaque rectangle to a screen reader, so
        the export carries a real text alternative: the movie's name on the
        canvas and a hidden list of its named objects. */
     var a11y=accessMarkup();
-    s+="<canvas id=\"stage\""+a11y.canvasAttrs+"></canvas>\n";
-    if(a11y.body)s+=a11y.body+"\n";
+    var movie="<canvas id=\"stage\""+a11y.canvasAttrs+"></canvas>\n";
+    if(a11y.body)movie+=a11y.body+"\n";
     // A cartoon with a soundtrack needs a user gesture before the browser
     // will let it make noise, so the export opens behind a play button
     // rather than starting silently and confusing the viewer. Silent
     // exports keep starting immediately.
     var hasSound=Object.keys(d.sounds||{}).length>0;
     if(hasSound){
-      s+="<div id=\"flashy-start\"><button type=\"button\" aria-label=\"Play\">&#9658;</button></div>\n";
+      movie+="<div id=\"flashy-start\"><button type=\"button\" aria-label=\"Play\">&#9658;</button></div>\n";
     }
     // Embed the full Flashy engine inline
-    s+=sc+"\n"+engineSrc+"\n"+sce+"\n";
+    movie+=sc+"\n"+engineSrc+"\n"+sce+"\n";
     // …then the shared player, serialised straight out of exportRuntime().
     //
     // The stage is published as window.__stage, which is the handle File ▸
     // Import from URL looks for — so an exported animation can be loaded back
     // into the editor. Until now our own exports were the one kind of Flashy
     // page our own importer could not read.
-    s+=sc+"\n";
-    s+="var __data = "+JSON.stringify(d)+";\n";
-    s+="var __run = "+exportRuntime.toString()+";\n";
-    s+="var __canvas = document.getElementById('stage');\n";
+    movie+=sc+"\n";
+    movie+="var __data = "+JSON.stringify(d)+";\n";
+    movie+="var __run = "+exportRuntime.toString()+";\n";
+    movie+="var __canvas = document.getElementById('stage');\n";
     if(hasSound){
       // Hold the first frame until the viewer presses play, then unlock audio
       // and start — so the soundtrack is actually audible from frame one.
-      s+="var __gate = document.getElementById('flashy-start');\n";
-      s+="window.__stage = __run(__data, __canvas, {autoplay:false, loop:"+
+      movie+="var __gate = document.getElementById('flashy-start');\n";
+      movie+="window.__stage = __run(__data, __canvas, {autoplay:false, loop:"+
          (pub.loop?"true":"false")+"});\n";
-      s+="__gate.addEventListener('click', function(){\n";
-      s+="  __gate.remove();\n";
-      s+="  Promise.resolve(Flashy.Sound.unlock()).then(function(){ window.__stage.start(); });\n";
-      s+="});\n";
+      movie+="__gate.addEventListener('click', function(){\n";
+      movie+="  __gate.remove();\n";
+      movie+="  Promise.resolve(Flashy.Sound.unlock()).then(function(){ window.__stage.start(); });\n";
+      movie+="});\n";
     }else{
-      s+="window.__stage = __run(__data, __canvas, {loop:"+
+      movie+="window.__stage = __run(__data, __canvas, {loop:"+
          (pub.loop?"true":"false")+"});\n";
     }
-    s+=sce+"\n</body>\n</html>";
+    movie+=sce+"\n";
+
+    var s;
+    if(pub.template){
+      /* A user template takes over the page. The movie — canvas, engine,
+         player and all — is handed over as ONE placeholder, so a template
+         cannot accidentally ship half of it. */
+      s=fillHTMLTemplate(pub.template,{
+        TITLE:pub.title||"Flashy Animation",
+        WIDTH:doc.width,
+        HEIGHT:doc.height,
+        BGCOLOR:pub.background||doc.backgroundColor||"#111",
+        FPS:doc.fps||24,
+        STYLE:style,
+        ALIGN:align,
+        MOVIE:movie
+      });
+    }else{
+      s="<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n";
+      s+="<title>"+xmlText(pub.title||"Flashy Animation")+"</title>\n";
+      s+="<style>\n"+style+align+"\n</style>\n</head>\n<body>\n";
+      s+=movie;
+      s+="</body>\n</html>";
+    }
     callback(s);
     });
   });
@@ -24584,6 +25224,19 @@ function init(){
     effectHere: effectHere,
     /* Strings and localisation, accessibility, and shared libraries. */
     /* Font embedding and the proofreader. */
+    /* Templates, printing and per-sound export settings. */
+    HTML_PLACEHOLDERS: HTML_PLACEHOLDERS,
+    DEFAULT_HTML_TEMPLATE: DEFAULT_HTML_TEMPLATE,
+    alignCSS: alignCSS,
+    fillHTMLTemplate: fillHTMLTemplate,
+    PAPER_SIZES: PAPER_SIZES,
+    matchStageToPaper: matchStageToPaper,
+    buildPrintHTML: buildPrintHTML,
+    soundSettings: soundSettings,
+    recodeSound: recodeSound,
+    recodeAllSounds: recodeAllSounds,
+    soundBytes: soundBytes,
+    samplesToWAV: samplesToWAV,
     docFonts: docFonts,
     fontsInUse: fontsInUse,
     embedCharsFor: embedCharsFor,

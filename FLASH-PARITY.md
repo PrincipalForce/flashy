@@ -187,7 +187,7 @@ name — an entire class of Flash content is unreachable.
 | Loop / repeat count | ✅ | Both, and they are different things: loop is forever, repeat 3 is three times and then silence. A BufferSource has no loop count, so a repeat is a loop with a scheduled stop. |
 | **Edit Envelope** (fade in/out, custom volume envelope, pan, L/R) | ✅ | Two draggable lanes over the sound's own waveform — an envelope is drawn against what you can hear. Scheduled on a real GainNode and StereoPannerNode rather than polled, so it stays accurate while the main thread is busy drawing. |
 | Effect presets (Fade In, Fade Out, Fade L→R, Fade R→L, Left, Right, Custom) | ✅ | `Flashy.SoundTrack.envelopeFor` is the one table, so the dialog, the authoring preview and the published movie cannot disagree about what "Fade In" is. Picking a preset fills the curve in, so you can start from one and adjust it. |
-| Per-sound compression / export settings | ⬜ | Missing. |
+| Per-sound compression / export settings | ◐ | Per-asset rate, mono and trim-silence, with the before and after size shown. No MP3 encoder: the decoded samples are made mono, resampled and trimmed and written back as WAV. A setting that would make a file BIGGER is reported and skipped. |
 | Auto lip sync | ✅ | Beyond Flash — a genuine Flashy advantage. |
 
 ## 10. Publishing
@@ -196,7 +196,7 @@ name — an entire class of Flash content is unreachable.
 | --- | --- | --- |
 | Export HTML, sprite sheet, video, SVG, JS module, embed snippet | ✅ | — |
 | **Publish Settings** (one dialog, multiple targets, remembered per document) | ✅ | One dialog, saved with the document, and a Publish command (Ctrl+F12) that produces every ticked target in sequence — sequentially because five downloads fired at one instant is how a browser decides to block four of them. |
-| HTML template, dimensions, playback, scale | ◐ | Page title, background, loop, and four scale modes (match movie, fit, fill, percent) — all in CSS, so the canvas keeps its pixel size and the drawing stays sharp. A user-supplied HTML template and alignment remain. |
+| HTML template, dimensions, playback, scale | ✅ | Page title, background, loop, four scale modes, nine-way alignment, and a user template using Flash’s own `$XX$` placeholders — `$MOVIE$` is the whole movie, so a template cannot accidentally ship half of it. |
 | **Bandwidth Profiler / Size Report** | ✅ | Weight by kind and by asset, heaviest first, with a share bar per line; the busiest frame; and download times at 3G, 4G and broadband. Measured from the EXPORT document, so guides and scene structure are not counted — they are not published either. |
 | Protect from import, omit trace actions | ✅ | Both in Publish Settings. Omit Trace Actions strips `trace()` statements out of the exported copy, conservatively — only a balanced statement on its own line goes, because a regex loose enough to catch every shape of trace can cut a line in half. Protect from Import is a marker, which is all it ever was. |
 | SWF export | ◐ | `flashy-swf-write.js` writes SWF 6: shapes (solid and gradient fills, real strokes), symbols as sprites, frames, labels, the stage, and transforms with alpha. Text, bitmaps, sounds, filters and scripts are REPORTED as missing rather than silently dropped. The project's own parser is the writer's test oracle. |
@@ -206,7 +206,7 @@ name — an entire class of Flash content is unreachable.
 | Feature | Flashy | Gap |
 | --- | --- | --- |
 | Document Settings (size, fps, background) | ✅ | — |
-| Match stage size to contents / printer | ◐ | Match Stage Size to Contents measures every frame of the scene through each object’s own matrix, resizes the stage and shifts the artwork to the origin. No printer support. |
+| Match stage size to contents / printer | ✅ | Match Stage Size to Contents measures every frame through each object’s own matrix. Match Stage to Paper sizes it to A3–A5, Letter or Legal at 72dpi less a half-inch margin, and does NOT move the artwork — the point is to see what fits. Print rasterises a frame range as sheets or a contact sheet. |
 | Templates / New from Template | ✅ | Three built-ins — banner, slideshow, looping sprite — each a real document loaded through the ordinary path, not a list of settings. |
 | Recent files | ◐ | Desktop shell only. |
 | Save As / Save a Copy / Revert | ✅ | Save As, Save a Copy (which deliberately does NOT mark the document saved) and Revert, which keeps a copy of the saved document rather than relying on undo history. |
@@ -755,8 +755,8 @@ than quietly dropped:
 * **SWF text, bitmaps, sound, filters and scripts** — glyph tables, JPEG/zlib,
   MP3 framing, filter tags, an ActionScript assembler. The writer reports each
   as missing rather than silently dropping it.
-* **Runtime** shared libraries, **per-sound compression**, **multiple
-  documents in one window**, and **Edit in New Window** on the web build.
+* **Runtime** shared libraries, **multiple documents in one window**, and
+  **Edit in New Window** on the web build.
 * **A user-supplied HTML template** and publish **alignment**.
 
 Both of the small leftovers above are now done as well: the registration point
@@ -873,3 +873,55 @@ a name, inserted at the caret.
     elsewhere in the same string.
 
     Covered by `tests/fonts-spelling.spec.js` (21 specs).
+
+### Wave 11 — getting the movie out
+
+62. ✅ **A user HTML template, and alignment.** An exported cartoon usually
+    has to land inside somebody else’s page, and the only option was the page
+    Flashy writes.
+
+    Flash’s `$XX$` placeholder convention is kept exactly, so a template
+    written for Flash reads the same way here. This needed `genHTML` rebuilt
+    rather than patched: a template needs the stylesheet and the markup as
+    separate pieces, and the old version assembled them straight into one
+    string. `$MOVIE$` is the whole movie — canvas, engine and player — handed
+    over as one placeholder, so a template cannot accidentally ship half of
+    it. A template with no `$MOVIE$` in it is refused, because the page would
+    contain no movie: the one mistake worth stopping rather than publishing.
+
+    Alignment is where the movie sits when the window is bigger than it,
+    expressed as flexbox so the canvas keeps its own pixel size. Scaling it to
+    fit is a separate setting — conflating the two was Flash’s own mistake.
+
+63. ✅ **Printing, and Match Stage to Paper.** A storyboard gets handed round
+    a room. Frames are rasterised through `renderFrameToCanvas`, the same path
+    the sprite sheet and the video use, so what prints is what those produce
+    rather than a fourth interpretation of the document. One frame to a page,
+    or a contact sheet of up to sixteen.
+
+    Match Stage to Paper sizes the stage to A3–A5, Letter or Legal at 72
+    points to the inch less a half-inch margin — and deliberately does not
+    move the artwork, because the point is to find out what fits and shifting
+    everything would hide the answer.
+
+    Ctrl+P is intercepted: the browser’s own print would print the editor’s
+    panels, which is never what was meant. A blocked pop-up falls back to
+    downloading the pages, which still print.
+
+64. ◐ **Per-sound export settings.** One music bed and twenty blips want
+    completely different settings, which is why Flash made these per sound.
+
+    There is no MP3 encoder here and writing one would be a project of its
+    own. What there IS: the decoded samples, which can be mixed to mono,
+    resampled and trimmed of silence, then written back as 16-bit WAV. That is
+    real compression — mono at 11 kHz is an eighth of the bytes of stereo at
+    44.1, and for a blip nobody can tell — and it is honest about what it
+    does, which pretending to re-encode would not be.
+
+    A recode that would make a file BIGGER is reported and skipped: an
+    already-compressed original usually beats anything this can produce, and
+    shipping a bigger file because a setting was ticked is the opposite of
+    what the setting is for. A sound with no decoded buffer ships untouched
+    rather than silent or truncated.
+
+    Covered by `tests/output-print.spec.js` (20 specs).
