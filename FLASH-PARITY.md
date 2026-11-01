@@ -28,9 +28,9 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Oval (+ primitive, start/end angle, inner radius) | O | ✅ | Arc, pie and donut, 0° at 12 o'clock, inner radius as a percentage. |
 | PolyStar (polygon / star, sides, point size) | — | ✅ | Emitted as a `path` object, so it inherits gradients, resizing, the eraser's geometry and all four export paths rather than needing a fifth primitive branch in each. |
 | Pencil (Straighten / Smooth / Ink modes) | Y | ✅ | Applied on release, as in Flash. |
-| Brush (size, shape, Paint Normal/Fills/Behind/Selection/Inside) | B | ◐ | Size is now its own control, on the bracket keys. Brush shape and the five paint modes are still missing. |
-| Eraser (+ modes, Faucet) | E | ◐ | Size and round/square shape only; no erase modes, no Faucet. |
-| Paint Bucket (+ gap size, Lock Fill) | K | ◐ | No gap closing, no lock fill. |
+| Brush (size, shape, Paint Normal/Fills/Behind/Selection/Inside) | B | ✅ | Size on the bracket keys, nine tips as nine distance metrics, and all five paint modes. A shaped tip or a non-Normal mode commits a filled `path` — which is what Flash’s brush always produced. |
+| Eraser (+ modes, Faucet) | E | ✅ | Size, round/square shape, all five erase modes, and the Faucet. The modes are a filter in front of one unchanged erase: only which objects are offered to it changes. |
+| Paint Bucket (+ gap size, Lock Fill) | K | ✅ | Gap closing as a pixel count, and Lock Fill. An empty click floods: the frame is rasterised, the ink dilated by the gap, flooded, dilated back to meet the lines, and traced through the same marching-squares contour tracer a brush stroke uses. |
 | Ink Bottle (apply stroke style to a shape) | S | ✅ | The paint bucket's other half. |
 | Eyedropper | I | ✅ | — |
 | Hand | H | ✅ | — |
@@ -479,3 +479,71 @@ History replay and save-as-command.
     break the moment a field was added.
 
     Covered by `tests/document-commands.spec.js` (21 specs).
+
+### Wave 7c — what a stroke is allowed to touch
+
+40. ✅ **Brush tips and the five paint modes.** The modes are the half that
+    matters: Paint Behind lets you put a background in without masking
+    anything, and Paint Inside lets you colour a shape without going over the
+    lines. Without them the brush is a thick pencil.
+
+    Flash’s merge-drawing model made a tip and a mode one thing; an
+    object-based editor makes them two, and both already had a home:
+
+    * a TIP is a distance metric, and `FlashyGeom.strokeRegion` was already
+      parameterised by one (it took a `square` boolean for the eraser). That
+      generalised to `tipMetric` — Chebyshev or Euclidean, measured in a
+      rotated and squashed frame — and Flash’s nine tips are all one of those
+      four parameters apart. The short axis is capped at the long one and a
+      tall tip is a wide one at 90°, which keeps the footprint inside
+      `radius` in every direction: the scratch grid’s padding depends on it.
+    * a MODE is either a z-order choice or a clip. Normal is the top of the
+      display list, Behind is the bottom (which IS Paint Behind), and Fills is
+      just under the lowest line-like object. Selection and Inside intersect
+      the stroke with artwork that is already there — Inside against whatever
+      the stroke STARTED on, so starting on empty stage paints nothing, as in
+      Flash.
+
+    A shaped tip or a non-Normal mode commits a filled `path` rather than a
+    polyline, which is what Flash’s brush always produced anyway — so the
+    stroke inherits the eraser, the four render paths and every export for
+    free. A round tip painting normally keeps the cheap polyline, so the common
+    case and every existing document are untouched.
+
+    Lock Fill rides along: keep the colour the first stroke used, which still
+    matters the moment the swatch changes under you mid-drawing.
+
+41. ✅ **Eraser modes and the Faucet.** Five modes as a filter in front of one
+    unchanged erase — nothing about the geometry changes, only which objects
+    are offered to it. Spared objects are deliberately not counted as
+    `skipped`, because that counter drives the "nothing was erased" message
+    and a mode doing its job is not a confusion to explain.
+
+    The Faucet is a click, not a drag: dragging a 24px eraser across a large
+    fill to get rid of it is an absurd amount of work for an obvious request.
+
+42. ✅ **Paint Bucket gap closing and Lock Fill.** The bucket only ever
+    recoloured an object it hit, so clicking inside a pencil circle did
+    nothing at all — there was no fill object there to recolour and no way to
+    tell from the stage why.
+
+    Now an empty click floods. The frame is rasterised on a TRANSPARENT ground
+    (not through `renderFrameToCanvas`, which paints the background first and
+    would leave the flood unable to tell artwork from empty stage), the ink
+    dilated by the gap setting — which is what closes the gaps — flooded from
+    the click, dilated back out to meet the real lines, and traced into a path
+    through `FlashyGeom.marchingSquares`, now exported because a stroke and a
+    flood produce the same thing: a boolean grid that has to become loops.
+
+    A flood that reaches the edge of the stage is REFUSED, with the gap setting
+    named in the message. Silently filling the whole background because the
+    outline had a break in it would be far worse than refusing. And the fill
+    lands behind the lines, because a fill painted on top of the outline it was
+    poured into hides exactly the thing that defined it.
+
+    One behaviour change fell out of this: a click on a shape with no fill, or
+    on a line, no longer recolours it. `hitTest` claims a bounding box, so an
+    unfilled rectangle was swallowing every click inside it and the flood would
+    never have run.
+
+    Covered by `tests/paint-modes.spec.js` (23 specs).

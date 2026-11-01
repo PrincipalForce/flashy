@@ -930,15 +930,47 @@ function toolOptionSpec(tool){
        set:function(v){setEraserSize(v);}},
       {type:"choice",title:"Eraser shape",
        options:[["round","●","Round"],["square","■","Square"]],
-       get:function(){return eraserShape;},set:setEraserShape}
+       get:function(){return eraserShape;},set:setEraserShape},
+      /* Flash's five erase modes: a filter in front of one unchanged erase. */
+      {type:"choice",title:"Erase mode",
+       options:[["normal","N","Erase Normal — lines and fills alike"],
+                ["fills","F","Erase Fills — leave the lines alone"],
+                ["lines","L","Erase Lines — leave the fills alone"],
+                ["selected","S","Erase Selected Fills — only the fills you picked"],
+                ["inside","I","Erase Inside — only the shape the stroke starts on"]],
+       get:function(){return eraserMode;},
+       set:function(v){eraserMode=v;updateToolOptions();}},
+      {type:"choice",title:"Faucet — one click removes a whole fill or line",
+       options:[["off","○","Faucet off"],["on","◑","Faucet on"]],
+       get:function(){return eraserFaucet?"on":"off";},
+       set:function(v){eraserFaucet=(v==="on");updateToolOptions();}}
     ];
   }
   if(tool==="brush"){
     return [
+      {type:"choice",title:"Brush tip",
+       options:BRUSH_TIPS.map(function(t){return [t.id,t.label,t.title];}),
+       get:function(){return brushTip;},
+       set:function(v){brushTip=v;updateToolOptions();}},
       {type:"label",text:function(){return brushSize+" px";}},
       {type:"range",min:1,max:120,step:1,title:"Brush size — [ and ] change it too",
        get:function(){return brushSize;},
-       set:function(v){brushSize=Math.max(1,Math.min(200,v));updateToolOptions();}}
+       set:function(v){brushSize=Math.max(1,Math.min(200,v));updateToolOptions();}},
+      /* Flash's five paint modes. Normal and Behind are a z-order choice,
+         Fills is a z-order choice with a rule, and Selection and Inside clip
+         the stroke to artwork that is already there. */
+      {type:"choice",title:"Paint mode",
+       options:[["normal","N","Paint Normal — over everything"],
+                ["fills","F","Paint Fills — under the lines, over the fills"],
+                ["behind","B","Paint Behind — only where nothing else is"],
+                ["selection","S","Paint Selection — only inside the selected artwork"],
+                ["inside","I","Paint Inside — only inside the shape the stroke starts on"]],
+       get:function(){return brushMode;},
+       set:function(v){brushMode=v;updateToolOptions();}},
+      {type:"choice",title:"Lock Fill — keep the colour this stroke started with",
+       options:[["off","○","Lock Fill off"],["on","◉","Lock Fill on"]],
+       get:function(){return brushLocked?"on":"off";},
+       set:function(v){setFillLocked(v==="on");}}
     ];
   }
   if(tool==="pencil"){
@@ -997,6 +1029,28 @@ function toolOptionSpec(tool){
       {type:"range",min:0,max:99,step:1,title:"Inner radius, as a percentage",
        get:function(){return ovalPrim.inner;},
        set:function(v){ovalPrim.inner=v;updateToolOptions();}}
+    ];
+  }
+  if(tool==="bucket"){
+    return [
+      {type:"label",text:function(){
+        return bucketGap?("Close "+bucketGap+" px"):"No gap closing";
+      }},
+      /* Flash's Close Small Gaps, as a number rather than its four presets:
+         the presets were only ever a guess at the same number, and a drawing
+         knows how big its own gaps are. */
+      {type:"range",min:0,max:12,step:1,
+       title:"How wide a break in an outline the fill may cross",
+       get:function(){return bucketGap;},
+       set:function(v){bucketGap=Math.max(0,Math.min(12,v));updateToolOptions();}},
+      {type:"choice",title:"Lock Fill — keep the colour the first fill used",
+       options:[["off","○","Lock Fill off"],["on","◉","Lock Fill on"]],
+       get:function(){return bucketLocked?"on":"off";},
+       set:function(v){
+         bucketLocked=(v==="on");
+         lockedFill=bucketLocked?fillColor:null;
+         updateToolOptions();
+       }}
     ];
   }
   if(tool==="lasso"){
@@ -5138,6 +5192,17 @@ function onMouseDown(e){
   }else if(curTool==="pencil"||curTool==="brush"){
     dragPreview={type:curTool,points:[p.x,p.y]};
   }else if(curTool==="eraser"){
+    /* The Faucet is a click, not a drag: one click removes a whole fill or a
+       whole line. Dragging a 24px eraser across a large fill to get rid of it
+       is an absurd amount of work for an obvious request. */
+    if(eraserFaucet){
+      var fres=faucetAt(p.x,p.y);
+      if(fres.ok)fullRefresh();
+      else if(fres.locked)showMessage("Faucet","This layer is locked or hidden.");
+      else if(fres.why)showMessage("Faucet","Nothing was removed: "+fres.why+".");
+      dragging=false;
+      return;
+    }
     dragPreview={type:"eraser",points:[p.x,p.y]};
   }else if(curTool==="text"){
     dragPreview={type:"text",x1:p.x,y1:p.y,x2:p.x,y2:p.y};
@@ -5148,14 +5213,18 @@ function onMouseDown(e){
     else{zoom=Math.min(10,zoom*1.5);}
     updateZoomUI();render();dragging=false;
   }else if(curTool==="bucket"){
-    var hit4=hitTest(p.x,p.y);
-    if(hit4){
-      pushUndo();
-      hit4.fillColor=fillColor;
-      hit4.fillAlpha=fillAlpha;
-      hit4.fillType="solid";
-      selection=[hit4];
-      render();updateProps();
+    var bres=bucketFillAt(p.x,p.y);
+    if(bres.ok){
+      fullRefresh();
+    }else if(bres.locked){
+      showMessage("Paint Bucket","This layer is locked or hidden.");
+    }else if(bres.escaped){
+      /* The commonest bucket failure, and the one worth explaining: a leak
+         means the outline is open, and filling the whole stage instead would
+         be far worse than refusing. */
+      showMessage("Paint Bucket","The fill leaked out. "+bres.why+".");
+    }else if(bres.why){
+      showMessage("Paint Bucket","Nothing was filled: "+bres.why+".");
     }
     dragging=false;
   }else if(curTool==="eyedrop"){
@@ -5373,6 +5442,21 @@ function onMouseUp(e){
     if(dragPreview&&dragPreview.points&&dragPreview.points.length>2){
       pushUndo();
       var kf3=CKF();if(!kf3){var l2=CL();if(l2){kf3=l2.insertKeyframe(curFrame);}}
+      /* A shaped tip or a paint mode other than Normal commits a filled
+         REGION rather than a polyline, which is what Flash's brush always
+         produced. A round tip painting normally keeps the cheap polyline, so
+         the common case and every existing document are untouched. */
+      if(kf3&&curTool==="brush"&&brushNeedsRegion()){
+        var br=commitBrushStroke(dragPreview.points.slice(),kf3);
+        dragPreview=null;
+        if(!br.ok){
+          doUndo();
+          showMessage("Brush","Nothing was painted: "+
+            (br.why||"the stroke produced no area")+".");
+        }
+        fullRefresh();
+        return;
+      }
       if(kf3){
         var pts=dragPreview.points;
         var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
@@ -13479,6 +13563,9 @@ function eraseStroke(points,opts){
   var kf=layer.getKeyframeAt(curFrame);
   if(!kf)return {erased:0,skipped:0,removed:0};
 
+  /* Erase Inside resolves against the object the stroke STARTED on, so that
+     object is found once here rather than per-object inside the loop. */
+  var startedOn=(eraserMode==="inside")?hitTest(points[0],points[1]):null;
   var rb=G.bounds(region);
   var out=[],erased=0,skipped=0,removed=0,touched=false;
   /* The undo snapshot is taken lazily. snap() serialises the whole document,
@@ -13502,6 +13589,12 @@ function eraseStroke(points,opts){
     if(ox1+pad<rb.minX||ox0-pad>rb.maxX||oy1+pad<rb.minY||oy0-pad>rb.maxY){
       out.push(o);continue;
     }
+    /* The eraser's mode decides what it may touch before it touches
+       anything: Erase Lines over a coloured drawing, or Erase Fills over an
+       inked one, is the difference between a clean-up and a disaster. Not
+       counted as `skipped` either, because these objects were deliberately
+       spared rather than quietly missed. */
+    if(!eraserAllows(o,startedOn)){out.push(o);continue;}
     /* Symbols, text and rig parts are left alone, the way Flash leaves a group
        alone: there is a right way to erase inside one (open it, or break it
        apart) and silently rewriting it from out here is not it. */
@@ -15106,6 +15199,458 @@ function revertDocument() {
     }
   });
   return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Brush tips and paint modes
+ *
+ * Flash's Brush had nine tip shapes and five paint modes, and the modes are
+ * the half that matters: Paint Behind let you put a background in without
+ * masking anything, and Paint Inside let you colour a shape without going
+ * over the lines. Without them the brush is a thick pencil.
+ *
+ * Both are expressible here without a new object type, because this editor is
+ * object-based and Flash's merge-drawing model was not:
+ *
+ *   * a TIP is a distance metric, and `FlashyGeom.strokeRegion` already takes
+ *     one — a shaped brush commits as a filled `path`, which is what Flash's
+ *     brush always produced anyway;
+ *   * a MODE is either a z-order choice (Normal, Behind, Fills) or a clip
+ *     (Selection, Inside), and both are things the existing geometry and
+ *     display list already do.
+ *
+ * A round tip in Normal mode still commits as the cheap `brush` polyline, so
+ * every existing document and the common case are untouched.
+ * ------------------------------------------------------------------ */
+
+/** Flash's nine tips: a metric each, and a glyph for the options strip. */
+var BRUSH_TIPS = [
+  { id: "round",     label: "●", title: "Round",
+    tip: { kind: "round" } },
+  { id: "square",    label: "■", title: "Square",
+    tip: { kind: "square" } },
+  { id: "oval",      label: "▬", title: "Wide oval",
+    tip: { kind: "round", ratio: 0.4 } },
+  { id: "ovalTall",  label: "▌", title: "Tall oval",
+    tip: { kind: "round", ratio: 0.4, angle: 90 } },
+  { id: "rect",      label: "▃", title: "Wide rectangle",
+    tip: { kind: "square", ratio: 0.35 } },
+  { id: "rectTall",  label: "▐", title: "Tall rectangle",
+    tip: { kind: "square", ratio: 0.35, angle: 90 } },
+  { id: "slash",     label: "╱", title: "Slanted, rising",
+    tip: { kind: "square", ratio: 0.2, angle: -45 } },
+  { id: "backslash", label: "╲", title: "Slanted, falling",
+    tip: { kind: "square", ratio: 0.2, angle: 45 } },
+  { id: "line",      label: "─", title: "Thin horizontal",
+    tip: { kind: "square", ratio: 0.12 } }
+];
+
+var brushTip = "round";
+var brushMode = "normal";     // normal | fills | behind | selection | inside
+var brushLocked = false;      // Lock Fill: see lockedFillFor()
+
+/** The tip descriptor for the current brush, as FlashyGeom wants it. */
+function brushTipSpec(id) {
+  var found = BRUSH_TIPS.filter(function (t) { return t.id === (id || brushTip); })[0];
+  return found ? found.tip : { kind: "round" };
+}
+
+/** True when the brush's settings need a filled region rather than a stroke. */
+function brushNeedsRegion() {
+  return brushTip !== "round" || brushMode !== "normal";
+}
+
+/**
+ * Where in the display list a brush stroke lands, for the z-order modes.
+ *
+ * Normal is on top, which is where a new object always goes. Behind is at the
+ * bottom, which is Paint Behind exactly: the stroke shows only where nothing
+ * else covers it. Fills sits just under the lowest line-like object, so lines
+ * stay on top of the paint and fills do not — which is what Paint Fills
+ * means once "fill" and "line" are separate objects rather than one canvas.
+ */
+function brushInsertIndex(kf, mode) {
+  if (!kf) return 0;
+  if (mode === "behind") return 0;
+  if (mode !== "fills") return kf.objects.length;
+  var isLine = function (o) {
+    if (o.type === "line" || o.type === "pencil") return true;
+    // A shape with a stroke and no fill is a line by any useful definition.
+    return (o.fillType || "solid") === "none" && (o.strokeWidth || 0) > 0;
+  };
+  for (var i = 0; i < kf.objects.length; i++) {
+    if (isLine(kf.objects[i])) return i;
+  }
+  return kf.objects.length;
+}
+
+/**
+ * The region a clipping paint mode confines the stroke to.
+ *
+ * Paint Selection clips to the selected artwork; Paint Inside clips to
+ * whatever the stroke STARTED on, which is why it needs the first point and
+ * not the whole stroke — starting on empty space paints nothing at all, as in
+ * Flash. Returns null when the mode does not clip.
+ */
+function brushClipRegion(mode, x0, y0) {
+  var G = window.FlashyGeom;
+  if (!G) return null;
+  var sources = null;
+  if (mode === "selection") {
+    sources = selection.slice();
+    if (!sources.length) return { empty: true, why: "nothing is selected" };
+  } else if (mode === "inside") {
+    var hit = hitTest(x0, y0);
+    if (!hit) return { empty: true, why: "the stroke started on empty stage" };
+    sources = [hit];
+  } else {
+    return null;
+  }
+  var loops = [];
+  sources.forEach(function (o) {
+    var r = objectRegion(o);
+    if (r && r.length) loops = loops.length ? G.union(loops, r) : G.normalize(r);
+  });
+  if (!loops.length) {
+    return { empty: true, why: "that artwork has no filled area to paint into" };
+  }
+  return { loops: loops };
+}
+
+/**
+ * Commit a brush stroke, honouring the tip and the paint mode.
+ *
+ * Returns what happened, so the caller can explain a stroke that painted
+ * nothing instead of leaving the user to wonder.
+ */
+function commitBrushStroke(points, kf) {
+  var G = window.FlashyGeom, T = window.FlashyTrace;
+  if (!points || points.length < 4 || !kf) return { ok: false };
+
+  if (!brushNeedsRegion() || !G || !T) {
+    // The cheap path: a round tip painting normally is the polyline it always
+    // was, and nothing downstream has to change.
+    return { ok: true, region: false };
+  }
+
+  var clip = brushClipRegion(brushMode, points[0], points[1]);
+  if (clip && clip.empty) return { ok: false, why: clip.why };
+
+  var region = G.strokeRegion(points, Math.max(0.5, brushSize / 2), brushTipSpec());
+  if (!region || !region.length) return { ok: false, why: "the stroke was too short" };
+  if (clip && clip.loops) {
+    region = G.intersection(region, clip.loops);
+    if (!region || !region.length) {
+      return { ok: false, why: brushMode === "inside"
+        ? "the stroke stayed outside the shape it started on"
+        : "the stroke missed the selected artwork" };
+    }
+  }
+
+  var b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  region.forEach(function (loop) {
+    for (var i = 0; i < loop.length; i += 2) {
+      b.x0 = Math.min(b.x0, loop[i]); b.x1 = Math.max(b.x1, loop[i]);
+      b.y0 = Math.min(b.y0, loop[i + 1]); b.y1 = Math.max(b.y1, loop[i + 1]);
+    }
+  });
+  var w = Math.max(1, b.x1 - b.x0), h = Math.max(1, b.y1 - b.y0);
+  var o = new EditorObject("path");
+  o.path = G.loopsToPath(G.translateLoops(region, -b.x0, -b.y0));
+  o.pathW = w; o.pathH = h;
+  o.x = b.x0; o.y = b.y0; o.width = w; o.height = h;
+  /* A brush stroke is a FILL, which is what Flash's brush produced: it has no
+     outline of its own, and giving it one would draw a dark edge round every
+     stroke. */
+  o.fillType = "solid";
+  o.fillColor = brushLocked ? lockedFillColor() : fillColor;
+  o.fillAlpha = fillAlpha;
+  o.strokeStyle = "none";
+  o.strokeWidth = 0;
+  kf.objects.splice(brushInsertIndex(kf, brushMode), 0, o);
+  selection = [o];
+  return { ok: true, region: true, obj: o };
+}
+
+/* Lock Fill: Flash's option that made every stroke reuse the fill the last
+   one used, so a gradient could be painted across several strokes without
+   restarting at each one. With solid colours it is simply "keep the colour I
+   started with" — which still matters the moment the swatch changes under you
+   mid-drawing. */
+var lockedFill = null;
+function lockedFillColor() {
+  if (!lockedFill) lockedFill = fillColor;
+  return lockedFill;
+}
+function setFillLocked(on) {
+  brushLocked = !!on;
+  lockedFill = on ? fillColor : null;
+  updateToolOptions();
+}
+
+/* ------------------------------------------------------------------ *
+ * Eraser modes and the Faucet
+ *
+ * Flash's eraser had five modes and a Faucet, and the point of all six is the
+ * same: deciding WHAT the eraser is allowed to touch before it touches it.
+ * Erase Lines over a coloured drawing, or Erase Fills over an inked one, is
+ * the difference between a clean-up and a disaster.
+ *
+ * The modes are a filter in front of one unchanged erase: nothing about the
+ * geometry changes, only which objects are offered to it.
+ * ------------------------------------------------------------------ */
+
+var eraserMode = "normal";    // normal | fills | lines | selected | inside
+var eraserFaucet = false;
+
+/** True when an object reads as a LINE rather than a fill. */
+function isLineLike(o) {
+  if (!o) return false;
+  if (o.type === "line" || o.type === "pencil") return true;
+  // A shape with a stroke and no fill is a line by any useful definition.
+  return (o.fillType || "solid") === "none" && (o.strokeWidth || 0) > 0;
+}
+
+/**
+ * Whether the current eraser mode lets this object be touched.
+ *
+ * `inside` is resolved against the object the stroke STARTED on, which is
+ * why it needs that extra argument — and why starting on empty stage erases
+ * nothing, exactly as in Flash.
+ */
+function eraserAllows(o, startedOn) {
+  switch (eraserMode) {
+    case "fills": return !isLineLike(o);
+    case "lines": return isLineLike(o);
+    case "selected": return !isLineLike(o) && selection.indexOf(o) >= 0;
+    case "inside": return o === startedOn;
+    default: return true;
+  }
+}
+
+/**
+ * The Faucet: one click deletes a whole fill or a whole line.
+ *
+ * Flash put it on the eraser because it is the same intent at a different
+ * scale — "this should not be here" — and dragging a 24px eraser over a large
+ * fill to remove it is an absurd amount of work for an obvious request.
+ */
+function faucetAt(x, y) {
+  var layer = CL();
+  if (!layer || layer.locked || layer.visible === false) {
+    return { ok: false, locked: true };
+  }
+  var kf = layer.getKeyframeAt(curFrame);
+  if (!kf) return { ok: false };
+  var hit = hitTest(x, y);
+  if (!hit) return { ok: false, why: "there is nothing there" };
+  if (hit.type === "symbol" || hit.type === "text" || isRigPart(hit)) {
+    return { ok: false, why: "the Faucet works on shapes, not on symbols or text" };
+  }
+  var idx = kf.objects.indexOf(hit);
+  if (idx < 0) return { ok: false, why: "that artwork is not on this frame" };
+  pushUndo();
+  kf.objects.splice(idx, 1);
+  selection = [];
+  return { ok: true, obj: hit };
+}
+
+/* ------------------------------------------------------------------ *
+ * Paint Bucket: gap closing and Lock Fill
+ *
+ * Flash's bucket filled the AREA an outline enclosed, and "Close Small Gaps"
+ * let it do that even when the outline had a break in it — which hand-drawn
+ * outlines always do. Flashy's bucket only ever recoloured an object it hit,
+ * so clicking inside a pencil circle did nothing at all: there was no fill
+ * object there to recolour, and no way to tell from the stage why.
+ *
+ * So an empty click floods instead. The frame is rasterised, the ink dilated
+ * by the gap setting (which is what closes the gaps), flooded from the click,
+ * dilated back out to meet the real lines, and traced into a path — through
+ * the same marching-squares contour tracer a brush stroke uses, because a
+ * second one would drift.
+ * ------------------------------------------------------------------ */
+
+var bucketGap = 2;            // in stage pixels; 0 is "don't close gaps"
+var bucketLocked = false;     // Lock Fill, as on the brush
+
+/**
+ * Flood the current frame from a point and return the enclosed area as loops.
+ *
+ * Returns null when the point is not enclosed — which is the important case:
+ * a flood that escapes to the edge of the stage would otherwise fill the
+ * whole background, and silently filling everything is far worse than
+ * refusing and saying why.
+ */
+function bucketFloodRegion(x, y, gap) {
+  var G = window.FlashyGeom;
+  if (!G) return null;
+  var w = Math.max(1, Math.round(doc.width)), h = Math.max(1, Math.round(doc.height));
+  if (x < 0 || y < 0 || x >= w || y >= h) return null;
+  // A cap, so a poster-sized stage degrades in resolution rather than hanging.
+  var MAX = 1200;
+  var scale = Math.min(1, MAX / Math.max(w, h));
+  var gw = Math.max(1, Math.round(w * scale)), gh = Math.max(1, Math.round(h * scale));
+
+  var cv = document.createElement("canvas");
+  cv.width = gw; cv.height = gh;
+  var cx = cv.getContext("2d", { willReadFrequently: true });
+  cx.scale(scale, scale);
+  /* Deliberately NOT renderFrameToCanvas: that paints the background colour
+     first, and the flood has to tell artwork from empty stage. A transparent
+     ground makes "ink" simply "alpha". */
+  /* What is actually VISIBLE on this frame, layer visibility included: a line
+     on a hidden layer is not something the user can see holding the paint in,
+     so it must not hold it in. */
+  frameObjects(outputLayers(currentLayers()), curFrame).forEach(function (o) {
+    paintObj(cx, o, { chrome: false });
+  });
+  var data;
+  try { data = cx.getImageData(0, 0, gw, gh).data; }
+  catch (e) { return null; }
+
+  var n = gw * gh;
+  var ink = new Uint8Array(n);
+  for (var i = 0; i < n; i++) ink[i] = data[i * 4 + 3] > 24 ? 1 : 0;
+
+  var gpx = Math.max(0, Math.round((gap == null ? bucketGap : gap) * scale));
+  var closed = gpx > 0 ? dilateMask(ink, gw, gh, gpx) : ink;
+
+  var sx = Math.min(gw - 1, Math.max(0, Math.round(x * scale)));
+  var sy = Math.min(gh - 1, Math.max(0, Math.round(y * scale)));
+  if (closed[sy * gw + sx]) return { onInk: true };
+
+  // Four-connected flood over the non-ink cells.
+  var fill = new Uint8Array(n);
+  var stack = [sy * gw + sx];
+  fill[stack[0]] = 1;
+  var escaped = false;
+  while (stack.length) {
+    var at = stack.pop();
+    var ax = at % gw, ay = (at - ax) / gw;
+    if (ax === 0 || ay === 0 || ax === gw - 1 || ay === gh - 1) escaped = true;
+    var push = function (nx2, ny2) {
+      if (nx2 < 0 || ny2 < 0 || nx2 >= gw || ny2 >= gh) return;
+      var k = ny2 * gw + nx2;
+      if (fill[k] || closed[k]) return;
+      fill[k] = 1; stack.push(k);
+    };
+    push(ax + 1, ay); push(ax - 1, ay); push(ax, ay + 1); push(ax, ay - 1);
+  }
+  if (escaped) return { escaped: true };
+
+  /* Grow the fill back out by the gap, then take away the real ink: without
+     this the fill stops `gap` pixels short of every line and leaves a halo. */
+  var grown = gpx > 0 ? dilateMask(fill, gw, gh, gpx) : fill;
+  var field = new Float64Array(n);
+  for (var j = 0; j < n; j++) field[j] = (grown[j] && !ink[j]) ? 1 : -1;
+
+  var cell = 1 / scale;
+  var loops = G.clean(G.marchingSquares(field, gw, gh, 0, 0, cell));
+  if (!loops || !loops.length) return null;
+  return { loops: G.normalize(loops) };
+}
+
+/**
+ * Grow a boolean mask by `r` cells, as a two-pass Chebyshev dilation.
+ *
+ * Separable, so it is O(n·r) in two sweeps rather than O(n·r²) with a disc —
+ * and a square growth is the right shape anyway: gap closing cares how far
+ * apart the two ends of a break are, not which direction the break runs.
+ */
+function dilateMask(mask, w, h, r) {
+  var out = new Uint8Array(w * h);
+  var tmp = new Uint8Array(w * h);
+  var i, j, k;
+  for (j = 0; j < h; j++) {
+    var run = -1;
+    for (i = 0; i < w; i++) {
+      if (mask[j * w + i]) run = r;
+      if (run >= 0) { tmp[j * w + i] = 1; run--; }
+    }
+    run = -1;
+    for (i = w - 1; i >= 0; i--) {
+      if (mask[j * w + i]) run = r;
+      if (run >= 0) { tmp[j * w + i] = 1; run--; }
+    }
+  }
+  for (i = 0; i < w; i++) {
+    var vrun = -1;
+    for (j = 0; j < h; j++) {
+      if (tmp[j * w + i]) vrun = r;
+      if (vrun >= 0) { out[j * w + i] = 1; vrun--; }
+    }
+    vrun = -1;
+    for (j = h - 1; j >= 0; j--) {
+      if (tmp[j * w + i]) vrun = r;
+      if (vrun >= 0) { out[j * w + i] = 1; vrun--; }
+    }
+  }
+  void k;
+  return out;
+}
+
+/**
+ * One bucket click.
+ *
+ * On an existing shape it recolours it, which is what it always did. On empty
+ * stage it floods, which is what Flash's bucket actually was.
+ */
+function bucketFillAt(x, y) {
+  /* Only a shape that HAS a fill is recoloured. An outline with no fill, or a
+     line, is the case the flood exists for: pouring paint into a pencil circle
+     must fill the circle, not tint the pencil. hitTest claims a bounding box,
+     so without this an unfilled rectangle would swallow every click inside it
+     and the flood would never run. */
+  var hit = hitTest(x, y);
+  if (hit && (isLineLike(hit) || (hit.fillType || "solid") === "none")) hit = null;
+  var color = bucketLocked ? lockedFillColor() : fillColor;
+  if (hit) {
+    if (hit.type === "symbol" || hit.type === "text" || isRigPart(hit)) {
+      return { ok: false, why: "the bucket works on shapes, not on symbols or text" };
+    }
+    pushUndo();
+    hit.fillColor = color;
+    hit.fillAlpha = fillAlpha;
+    hit.fillType = "solid";
+    selection = [hit];
+    return { ok: true, recolored: true, obj: hit };
+  }
+  var layer = CL();
+  if (!layer || layer.locked || layer.visible === false) return { ok: false, locked: true };
+  var kf = layer.getKeyframeAt(curFrame);
+  if (!kf) return { ok: false, why: "this frame has nothing to fill into" };
+
+  var G = window.FlashyGeom, T = window.FlashyTrace;
+  if (!G || !T) return { ok: false, why: "the geometry module is unavailable" };
+  var flood = bucketFloodRegion(x, y);
+  if (!flood) return { ok: false, why: "nothing there could be measured" };
+  if (flood.onInk) return { ok: false, why: "that point is on a line, not inside one" };
+  if (flood.escaped) {
+    return { ok: false, escaped: true,
+      why: bucketGap > 0
+        ? "the outline has a gap wider than " + bucketGap + " pixels, so the " +
+          "fill leaked out — raise Close Gaps, or close the outline"
+        : "that area is not enclosed, so the fill would cover the whole stage" };
+  }
+
+  var b = G.bounds(flood.loops);
+  var w = Math.max(1, b.maxX - b.minX), h = Math.max(1, b.maxY - b.minY);
+  var o = new EditorObject("path");
+  o.path = G.loopsToPath(G.translateLoops(flood.loops, -b.minX, -b.minY));
+  o.pathW = w; o.pathH = h;
+  o.x = b.minX; o.y = b.minY; o.width = w; o.height = h;
+  o.fillType = "solid";
+  o.fillColor = color;
+  o.fillAlpha = fillAlpha;
+  o.strokeStyle = "none";
+  o.strokeWidth = 0;
+  pushUndo();
+  /* Behind the lines, always. A fill painted on top of the outline it was
+     poured into hides exactly the thing that defined it. */
+  kf.objects.splice(brushInsertIndex(kf, "fills"), 0, o);
+  selection = [o];
+  return { ok: true, filled: true, obj: o };
 }
 
 /* ------------------------------------------------------------------ *
@@ -20386,6 +20931,54 @@ function init(){
       shortcutOverrides[chord]=action; saveShortcutOverrides();
     },
     clearShortcutOverrides: function(){ shortcutOverrides={}; saveShortcutOverrides(); },
+    /* Brush tips and paint modes, the eraser's modes and Faucet, and the
+       bucket's gap-closing flood. All of them decide WHAT a stroke is allowed
+       to affect, which a spec can check far more precisely than a pointer. */
+    /* The current fill and stroke, which every drawing tool reads. There was
+       no way to set them except through the colour picker's own UI. */
+    colors: function(){
+      return {fill:fillColor,fillAlpha:fillAlpha,stroke:strokeColor,
+              strokeAlpha:strokeAlpha,strokeWidth:strokeWidth};
+    },
+    setColors: function(o){
+      if(o.fill!=null)fillColor=o.fill;
+      if(o.fillAlpha!=null)fillAlpha=o.fillAlpha;
+      if(o.stroke!=null)strokeColor=o.stroke;
+      if(o.strokeAlpha!=null)strokeAlpha=o.strokeAlpha;
+      if(o.strokeWidth!=null)strokeWidth=o.strokeWidth;
+      updateColorUI();
+    },
+    BRUSH_TIPS: BRUSH_TIPS,
+    brushSettings: function(){
+      return {tip:brushTip,mode:brushMode,size:brushSize,locked:brushLocked};
+    },
+    setBrush: function(o){
+      if(o.tip!=null)brushTip=o.tip;
+      if(o.mode!=null)brushMode=o.mode;
+      if(o.size!=null)brushSize=o.size;
+      if(o.locked!=null)setFillLocked(o.locked);
+      updateToolOptions();
+    },
+    brushTipSpec: brushTipSpec,
+    brushInsertIndex: brushInsertIndex,
+    commitBrushStroke: commitBrushStroke,
+    eraserSettings: function(){ return {mode:eraserMode,faucet:eraserFaucet}; },
+    setEraser: function(o){
+      if(o.mode!=null)eraserMode=o.mode;
+      if(o.faucet!=null)eraserFaucet=!!o.faucet;
+      updateToolOptions();
+    },
+    isLineLike: isLineLike,
+    faucetAt: faucetAt,
+    bucketSettings: function(){ return {gap:bucketGap,locked:bucketLocked}; },
+    setBucket: function(o){
+      if(o.gap!=null)bucketGap=o.gap;
+      if(o.locked!=null){bucketLocked=!!o.locked;lockedFill=o.locked?fillColor:null;}
+      updateToolOptions();
+    },
+    bucketFillAt: bucketFillAt,
+    bucketFloodRegion: bucketFloodRegion,
+    dilateMask: dilateMask,
     /* Anchor editing: the Pen's other three jobs, and the stream surgery they
        perform. Exposed because a spec can aim at them far more precisely than
        it can point at a quadratic. */

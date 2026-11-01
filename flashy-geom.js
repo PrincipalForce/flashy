@@ -262,21 +262,58 @@
   }
 
   /** Distance from a point to a segment, Euclidean or Chebyshev (square brush). */
-  function distToSegment(px, py, ax, ay, bx, by, square) {
+  /**
+   * A brush or eraser tip, as a distance metric.
+   *
+   * The tip's shape IS the unit ball of the metric: a round tip is Euclidean,
+   * a square one is Chebyshev, and a flattened or slanted tip is either of
+   * those measured in a rotated, squashed frame. Flash's nine brush tips are
+   * all one of those four parameters away from each other, so one metric
+   * covers the lot and the stroke code never learns their names.
+   *
+   * `tip` is {kind: "round"|"square", ratio, angle}; `true` still means a
+   * square tip, which is what the eraser has always passed.
+   *
+   * `ratio` is at most 1 — the SHORT axis as a fraction of the long one — so
+   * the footprint never reaches further than `radius` in any direction. A tall
+   * tip is a wide one at 90 degrees, which keeps the grid padding in
+   * strokeRegion honest.
+   */
+  function tipMetric(tip) {
+    if (tip === true) tip = { kind: "square" };
+    else if (typeof tip === "string") tip = { kind: tip };
+    else if (!tip) tip = { kind: "round" };
+    var cheb = (tip.kind === "square" || tip.kind === "rect");
+    var ratio = tip.ratio == null ? 1 : Math.max(0.02, Math.min(1, tip.ratio));
+    var ang = -(tip.angle || 0) * Math.PI / 180;
+    var cs = Math.cos(ang), sn = Math.sin(ang);
+    if (ratio === 1 && !ang) {
+      // The two common tips, without the rotation arithmetic.
+      return cheb ? function (dx, dy) { return Math.max(Math.abs(dx), Math.abs(dy)); }
+                  : function (dx, dy) { return Math.hypot(dx, dy); };
+    }
+    return function (dx, dy) {
+      var rx = dx * cs - dy * sn;
+      var ry = (dx * sn + dy * cs) / ratio;
+      return cheb ? Math.max(Math.abs(rx), Math.abs(ry)) : Math.hypot(rx, ry);
+    };
+  }
+
+  function distToSegment(px, py, ax, ay, bx, by, metric) {
     var dx = bx - ax, dy = by - ay;
     var len2 = dx * dx + dy * dy;
     var t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
     if (t < 0) t = 0; else if (t > 1) t = 1;
     var qx = px - (ax + dx * t), qy = py - (ay + dy * t);
-    // A square brush is a square at every point along the stroke, so its
-    // footprint is the Chebyshev ball — but the nearest point on the segment
-    // under Chebyshev is not the Euclidean one, so sample the square's own
-    // metric from the Euclidean foot and from both endpoints.
-    if (!square) return Math.hypot(qx, qy);
-    var cheb = Math.max(Math.abs(qx), Math.abs(qy));
-    var ea = Math.max(Math.abs(px - ax), Math.abs(py - ay));
-    var eb = Math.max(Math.abs(px - bx), Math.abs(py - by));
-    return Math.min(cheb, ea, eb);
+    if (!metric) return Math.hypot(qx, qy);
+    /* The nearest point on the segment under a non-Euclidean metric is not
+       the Euclidean one, so the tip's own metric is sampled from the
+       Euclidean foot and from both endpoints and the smallest taken. Three
+       samples is enough for a tip at most a few pixels across, and solving it
+       exactly would cost more than the whole stroke. */
+    return Math.min(metric(qx, qy),
+                    metric(px - ax, py - ay),
+                    metric(px - bx, py - by));
   }
 
   /**
@@ -297,8 +334,15 @@
    *     its vertices come out of interpolating the field, so they do not
    *     coincide with anything by construction.
    */
-  function strokeRegion(points, radius, square) {
+  function strokeRegion(points, radius, tip) {
     radius = Math.max(0.01, radius);
+    /* A round tip skips the metric entirely: it is the overwhelmingly common
+       case and the plain hypot below is measurably quicker than a call
+       through a closure for every grid cell. */
+    var metric = (tip === false || tip == null ||
+                  tip === "round" || (tip && tip.kind === "round" &&
+                  (tip.ratio == null || tip.ratio === 1) && !tip.angle))
+      ? null : tipMetric(tip);
     var pts = resample(points, Math.max(0.25, radius * 0.5));
     var n = pts.length / 2;
     if (n === 0) return [];
@@ -328,7 +372,7 @@
           // Cheap reject before the square root.
           if (Math.min(ay, by2) - radius > py || Math.max(ay, by2) + radius < py) continue;
           if (Math.min(ax, bx2) - radius > px || Math.max(ax, bx2) + radius < px) continue;
-          var d = distToSegment(px, py, ax, ay, bx2, by2, square);
+          var d = distToSegment(px, py, ax, ay, bx2, by2, metric);
           if (d < best) best = d;
         }
         // Positive inside. `best` stays Infinity far from the stroke.
@@ -796,6 +840,16 @@
     dabLoop: dabLoop,
     capsuleLoop: capsuleLoop,
     strokeRegion: strokeRegion,
+    tipMetric: tipMetric,
+    /* The contour tracer, exported because the Paint Bucket's gap-closing
+       flood fill produces exactly the same thing a stroke does — a boolean
+       grid that has to become loops. A second marching-squares would drift
+       from this one, and this one is the tested one.
+
+       `field` is positive inside, laid out row-major in an `nx` by `ny` grid
+       whose (0,0) cell centre is at (x0,y0) and whose spacing is `cell`. */
+    marchingSquares: marchingSquares,
+    clean: clean,
     resample: resample,
     boolOp: boolOp,
     difference: difference,
