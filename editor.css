@@ -1631,3 +1631,28 @@ input[type="range"].props-input {
 .str-id { color: #9AB; min-width: 100px; font-size: 11px;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .str-text { flex: 1; }
+
+/* ── The debugger ──
+   The gutter is clickable now, so a line number is a row rather than a line of
+   text: a breakpoint has to be visible and hittable. */
+.code-gutter .gutter-line {
+  cursor: pointer; padding: 0 4px 0 0; border-radius: 2px;
+}
+.code-gutter .gutter-line:hover { background: #3A3A3A; color: #DDD; }
+.code-gutter .gutter-line.bp { background: #8B2E2E; color: #FFF; }
+.code-gutter .gutter-line.paused { background: #B8902A; color: #1A1A1A; }
+.code-gutter .gutter-line.err { color: #FF8080; }
+
+.dbg-list {
+  max-height: 150px; overflow-y: auto;
+  border: 1px solid #1a1a1a; border-radius: 3px;
+  background: #242424; margin: 3px 0;
+}
+.dbg-row { display: flex; align-items: center; gap: 6px; padding: 2px 6px;
+           font-size: 11px; border-bottom: 1px solid #2E2E2E; }
+.dbg-row.bad .dbg-value { color: #D88; }
+.dbg-name { color: #9CF; min-width: 80px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbg-value { color: #CCC; flex: 1; overflow: hidden;
+             text-overflow: ellipsis; white-space: nowrap; }
+.props-note.error { color: #FF9090; }

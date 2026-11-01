@@ -67,6 +67,10 @@
     /* History joins Properties' group: both answer "what is the state of this
        thing", and you step back through history while watching the stage. */
     { id: "history", title: "History", home: "right", with: "props", closed: true },
+    /* The debugger docks with the Actions panel, because that is where the
+       script and its gutter are: a breakpoint is set in one and read in the
+       other, and having to hunt for the second panel defeats the point. */
+    { id: "debugger", title: "Debugger", home: "right", with: "actions", closed: true },
     /* The Movie Explorer is a list you browse, so it joins the Library's
        group; Behaviors edits one object, so it joins Properties'. */
     { id: "explorer", title: "Movie Explorer", home: "right", with: "library", closed: true },

@@ -18,8 +18,8 @@ const ws = (page, fn) => page.evaluate(fn);
    registry — so they must be accounted for exactly once — but they are not in
    any dock until the Window menu opens them. */
 const CLOSED_BY_DEFAULT = [
-  "align", "info", "transform", "scene", "output", "history", "explorer",
-  "behaviors", "swatches",
+  "align", "info", "transform", "scene", "output", "history", "debugger",
+  "explorer", "behaviors", "swatches",
 ];
 
 /** Panel ids in each dock, in order, from the live layout. */

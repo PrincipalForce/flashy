@@ -672,6 +672,8 @@ var menus=[
     {type:"sep"},
     {label:"Enable Simple Buttons",action:"simpleButtons",shortcut:"Ctrl+Alt+B"},
     {type:"sep"},
+    {label:"Debug Frame Script",action:"debugScript",shortcut:"Ctrl+Shift+Enter"},
+    {type:"sep"},
     {label:"Go to First Frame",action:"gotoFirst",shortcut:"Home"},
     {label:"Go to Last Frame",action:"gotoLast",shortcut:"End"},
     {type:"sep"},
@@ -692,6 +694,7 @@ var menus=[
     {label:"Scene",action:"winScene",shortcut:"Shift+F2"},
     {label:"Output",action:"winOutput",shortcut:"F2"},
     {label:"History",action:"winHistory",shortcut:"Ctrl+F10"},
+    {label:"Debugger",action:"winDebugger"},
     {label:"Movie Explorer",action:"winExplorer",shortcut:"Alt+F3"},
     {label:"Behaviors",action:"winBehaviors",shortcut:"Shift+F3"},
     {label:"Color Swatches",action:"winSwatches",shortcut:"Ctrl+F9"},
@@ -8761,6 +8764,8 @@ function initOutputPanel(){
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
   timelineEffect:"Timeline Effect",
+  debugScript:"Debug Frame Script",
+  winDebugger:"Debugger",
   strings:"Strings",
   accessibility:"Accessibility",
   sharedLibrary:"Shared Library",
@@ -11746,6 +11751,19 @@ function doActionInner(a){
     break;
   case "commands":
     showCommandsDialog();
+    break;
+  case "debugScript":
+    var dbr=debugCurrentScript({});
+    if(!dbr.ok){
+      showMessage("Debugger","Cannot debug: "+dbr.why+".");
+    }else{
+      if(workspace())workspace().show("debugger");
+      updateDebuggerPanel();
+    }
+    break;
+  case "winDebugger":
+    if(workspace())workspace().toggle("debugger");
+    updateDebuggerPanel();
     break;
   case "strings":
     showStringsDialog();
@@ -17592,6 +17610,710 @@ function showSharedLibraryDialog() {
 }
 
 /* ------------------------------------------------------------------ *
+ * The debugger
+ *
+ * Flash's had breakpoints, stepping, a watch list and a variable inspector,
+ * and the thing it was actually for was never the crash: it was finding out
+ * what a value WAS when the movie did something you did not expect.
+ *
+ * JavaScript cannot be suspended mid-statement, which is the usual reason a
+ * tool like this gets written off. But a GENERATOR can be: so a script being
+ * debugged is recompiled as a generator with a `yield` before each statement,
+ * and the debugger drives it one `next()` at a time. That makes stepping real
+ * rather than a simulation of it.
+ *
+ * The variable inspector works the same way round. An `eval` closure is handed
+ * out from inside the generator body, so it sees the script's own locals --
+ * which is the only way to inspect a local at all, short of writing a parser.
+ * ------------------------------------------------------------------ */
+
+/* The one constructor the standard does not expose by name. */
+var GeneratorFunction = Object.getPrototypeOf(function* () {}).constructor;
+
+/** The arguments every frame script is compiled against, in order. */
+var DBG_SCOPE = ["stop", "play", "gotoAndPlay", "gotoAndStop", "stage", "root",
+                 "Flashy", "trace"];
+
+/**
+ * Scan a script for the places a `yield` can go.
+ *
+ * Three things have to be told apart, and all three caught me out first time:
+ *
+ *   * a `{` that opens a BLOCK from one that opens an object literal. A
+ *     statement inside a block is a perfectly good yield site; one inside a
+ *     literal is a syntax error. The two are distinguished by what precedes
+ *     the brace -- after `=`, `(`, `,`, `:` or `return` it is a value, and
+ *     otherwise it is a block.
+ *   * a line that is entirely inside a block comment, which must not be
+ *     treated as the preceding code for the next line's boundary test.
+ *   * a LOOP body, which needs a yield of its own even when the whole loop is
+ *     on one line: a loop you cannot stop inside is a loop you cannot debug,
+ *     and `while (true) { … }` would otherwise spin forever between yields.
+ *
+ * Returns `{lines, loops}` -- statement starts, and the character offsets of
+ * loop-body braces that want a yield inserted after them.
+ */
+function dbgScan(src) {
+  var text = String(src == null ? "" : src);
+  var lines = text.split("\n");
+  var stmt = [], loops = [];
+  var exprDepth = 0;           // ( and [
+  var braces = [];             // "block" | "object", innermost last
+  var inStr = null, inTemplate = false, inBlock = false;
+  var prev = "";               // the last line of real code, comments stripped
+  var offset = 0;              // character offset of the current line's start
+
+  /**
+   * What a `{` here opens, decided from the token before it -- the only thing
+   * that can tell them apart without parsing.
+   *
+   * Three kinds, and the third is the one that bites:
+   *
+   *   block  -- a statement body. Statements inside it CAN take a yield.
+   *   object -- a value. A yield inside is a syntax error.
+   *   fn     -- a nested function or arrow body. A yield there is WORSE than a
+   *             syntax error: outside a generator `yield` is an ordinary
+   *             identifier, so `yield [1, f];` parses as indexing a variable
+   *             called `yield` and the script compiles and then misbehaves at
+   *             run time. A separate kind, so the reason is written down.
+   *
+   * `case 1: {` is read as an object because `:` precedes it, so statements in
+   * that rare form get no yield. That loses a breakpoint; guessing the other
+   * way loses the whole script.
+   */
+  var bracePrecedes = function (before) {
+    var t = before.replace(/\s+$/, "");
+    if (!t) return "block";
+    if (/=>$/.test(t)) return "fn";
+    if (/\bfunction\b[^{};]*$/.test(t)) return "fn";
+    // `do`, `else`, `try` and `finally` are always followed by a block.
+    if (/\b(do|else|try|finally)$/.test(t)) return "block";
+    if (/[=(,:[?]$/.test(t)) return "object";
+    if (/\b(return|typeof|new|in|of)$/.test(t)) return "object";
+    return "block";
+  };
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var trimmed = line.trim();
+    /* Inside an object literal or a nested function body a yield cannot go --
+       see bracePrecedes. Open BLOCK braces are fine: that is just being
+       inside an if, a loop, a try or an else. */
+    var openNonBlock = braces.indexOf("object") >= 0 || braces.indexOf("fn") >= 0;
+    var boundary = exprDepth === 0 && !openNonBlock && !inStr && !inTemplate &&
+                   !inBlock && (prev === "" || /[;{}:]$/.test(prev));
+    // Blank lines, comments and a bare closing brace are not worth stopping
+    // on: stopping on `}` reports a line where nothing happens.
+    var worth = trimmed && !/^\/\//.test(trimmed) && !/^\/\*/.test(trimmed) &&
+                !/^[}\])]+;?$/.test(trimmed);
+    /* `case`, `default`, `else`, `catch` and `finally` are boundaries but
+       cannot take a yield in front of them -- it would land outside the block
+       they belong to. */
+    var attachable = !/^(case\b|default\b|else\b|catch\b|finally\b)/.test(trimmed);
+    if (boundary && worth && attachable) stmt.push(i + 1);
+
+    var startedInBlockComment = inBlock;
+    var code = "";             // this line's code, comments and strings kept
+    for (var c = 0; c < line.length; c++) {
+      var ch = line[c], next = line[c + 1];
+      if (inBlock) { if (ch === "*" && next === "/") { inBlock = false; c++; } continue; }
+      if (inStr) {
+        code += ch;
+        if (ch === "\\") { code += next == null ? "" : next; c++; }
+        else if (ch === inStr) inStr = null;
+        continue;
+      }
+      if (inTemplate) {
+        if (ch === "\\") c++;
+        else if (ch === "`") inTemplate = false;
+        continue;
+      }
+      if (ch === "/" && next === "/") break;                    // rest of line
+      if (ch === "/" && next === "*") { inBlock = true; c++; continue; }
+      if (ch === '"' || ch === "'") { inStr = ch; code += ch; continue; }
+      if (ch === "`") { inTemplate = true; continue; }
+      code += ch;
+      if (ch === "(" || ch === "[") exprDepth++;
+      else if (ch === ")" || ch === "]") exprDepth = Math.max(0, exprDepth - 1);
+      else if (ch === "{") {
+        var kind = bracePrecedes(code.slice(0, -1));
+        braces.push(kind);
+        /* A loop header's own brace: the body gets a yield right after it, so
+           even a one-line loop can be stepped and interrupted. `do` is
+           matched on its own line because its brace follows the keyword
+           directly. */
+        if (kind === "block" &&
+            /\b(for|while)\s*\([^)]*\)\s*$|^\s*do\s*$/.test(code.slice(0, -1))) {
+          loops.push(offset + c + 1);
+        }
+      } else if (ch === "}") braces.pop();
+    }
+
+    /* The previous line of code, for the next boundary test. A line that was
+       entirely inside a block comment contributes nothing -- treating its text
+       as code was why `var b = {` on the line after a comment was missed. */
+    var bare = code.trim();
+    if (bare && !startedInBlockComment) prev = bare;
+    else if (bare) prev = bare;
+    offset += line.length + 1;
+  }
+  return { lines: stmt, loops: loops };
+}
+
+/** Statement starts only, which is what the panel and the specs ask for. */
+function dbgStatementLines(src) {
+  return dbgScan(src).lines;
+}
+
+/**
+ * Recompile a script as a generator that yields before each statement.
+ *
+ * Returns `{fn, lines}` or `{error}`. A script the instrumentation cannot
+ * handle is reported rather than silently run uninstrumented: a debugger that
+ * quietly stops honouring breakpoints is worse than one that says it cannot.
+ */
+function dbgCompile(src) {
+  var text = String(src == null ? "" : src);
+  var scan = dbgScan(text);
+  var at = {};
+  scan.lines.forEach(function (n) { at[n] = true; });
+
+  /* The yield carries the line number and hands out an eval closure. Built as
+     a one-line prefix so every reported line number still matches the source
+     exactly -- a debugger that is off by one is useless. */
+  var mark = function (n) {
+    return "yield [" + n + ", function(__e){ return eval(__e); }];";
+  };
+
+  // Loop-body yields go in by character offset, so they are applied to the
+  // whole text first and the line split happens after.
+  var withLoops = text;
+  if (scan.loops.length) {
+    var parts = [], last = 0;
+    scan.loops.slice().sort(function (a, b) { return a - b; }).forEach(function (off) {
+      parts.push(withLoops.slice(last, off));
+      last = off;
+    });
+    parts.push(withLoops.slice(last));
+    // Each loop brace gets a yield reporting the line its body starts on.
+    var acc = "", consumed = 0;
+    for (var pi = 0; pi < parts.length; pi++) {
+      acc += parts[pi];
+      consumed += parts[pi].length;
+      if (pi < parts.length - 1) {
+        var lineNo = text.slice(0, consumed).split("\n").length;
+        acc += mark(lineNo);
+      }
+    }
+    withLoops = acc;
+  }
+
+  var lines = withLoops.split("\n");
+  /* The statement marks are keyed by ORIGINAL line number, and inserting loop
+     yields cannot change the line count (they carry no newline), so the two
+     index the same way. */
+  var body = [];
+  for (var i = 0; i < lines.length; i++) {
+    body.push(at[i + 1] ? mark(i + 1) + lines[i] : lines[i]);
+  }
+
+  var fn;
+  try {
+    fn = new GeneratorFunction(DBG_SCOPE.join(","), body.join("\n"));
+  } catch (e) {
+    /* Either the script itself does not compile, or a yield landed somewhere
+       the scanner got wrong. Try again with no instrumentation to tell those
+       two apart, because the message a user needs is different. */
+    try {
+      new GeneratorFunction(DBG_SCOPE.join(","), text);
+      return { error: "this script cannot be stepped through: " + e.message,
+               instrumentation: true };
+    } catch (e2) {
+      return { error: e2.message, syntax: true };
+    }
+  }
+  return { fn: fn, lines: scan.lines, loops: scan.loops.length };
+}
+
+/* ------------------------------------------------------------------ *
+ * Breakpoints
+ *
+ * Kept per SCRIPT rather than per line number alone: a frame script and a
+ * clip handler can both have a line 3, and a breakpoint that fires in the
+ * wrong one is worse than no breakpoint.
+ * ------------------------------------------------------------------ */
+var breakpoints = {};          // "scriptKey" -> {line: true}
+
+/** A stable key for whichever script the Actions panel is editing. */
+function scriptKey(target) {
+  target = target || actionsTarget();
+  if (target.obj) {
+    return "obj:" + (target.obj.id || target.obj.instanceName || "?");
+  }
+  var scene = doc.sceneIndex || 0;
+  var sym = editStack.length ? editStack[editStack.length - 1].name : "";
+  return "frame:" + scene + ":" + sym + ":" + curLayer + ":" +
+         (target.kf ? target.kf.index : curFrame);
+}
+
+function breakpointsFor(key) {
+  return breakpoints[key] || (breakpoints[key] = {});
+}
+
+function toggleBreakpoint(line, key) {
+  key = key || scriptKey();
+  var set = breakpointsFor(key);
+  if (set[line]) { delete set[line]; return false; }
+  set[line] = true;
+  return true;
+}
+
+function clearBreakpoints(key) {
+  if (key) delete breakpoints[key];
+  else breakpoints = {};
+}
+
+/** Every breakpoint, flattened, for the panel's list. */
+function allBreakpoints() {
+  var out = [];
+  Object.keys(breakpoints).forEach(function (k) {
+    Object.keys(breakpoints[k]).forEach(function (l) {
+      out.push({ key: k, line: parseInt(l, 10) });
+    });
+  });
+  return out.sort(function (a, b) {
+    return a.key === b.key ? a.line - b.line : (a.key < b.key ? -1 : 1);
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * A session
+ * ------------------------------------------------------------------ */
+var dbgSession = null;
+var dbgWatches = [];
+
+/**
+ * The scope a debugged frame script runs against.
+ *
+ * The timeline verbs really work: this is the editor's own playhead, so
+ * `gotoAndStop(5)` while stepping moves the stage. That is the point -- a
+ * debugger that runs the script against a fake timeline is testing the fake.
+ */
+function dbgScope(log) {
+  var say = log || function () {};
+  return {
+    stop: function () { stopPlay(); say("stop()"); },
+    play: function () { startPlay(); say("play()"); },
+    gotoAndPlay: function (f) {
+      curFrame = resolveFrameTarget(f); fullRefresh(); startPlay();
+      say("gotoAndPlay(" + JSON.stringify(f) + ")");
+    },
+    gotoAndStop: function (f) {
+      curFrame = resolveFrameTarget(f); stopPlay(); fullRefresh();
+      say("gotoAndStop(" + JSON.stringify(f) + ")");
+    },
+    stage: { width: doc.width, height: doc.height },
+    root: dbgRoot(),
+    Flashy: window.Flashy,
+    trace: function () {
+      outputLog(Array.prototype.slice.call(arguments).map(String).join(" "));
+    }
+  };
+}
+
+/** A frame label or number, as the timeline verbs accept it. */
+function resolveFrameTarget(f) {
+  if (typeof f === "number") return Math.max(1, Math.min(currentMaxFrame(), f));
+  var want = String(f);
+  var found = null;
+  currentLayers().forEach(function (l) {
+    (l.keyframes || []).forEach(function (k) {
+      if (k.label === want && (k.labelType || "name") !== "comment") found = k.index;
+    });
+  });
+  return found || curFrame;
+}
+
+/**
+ * A stand-in root the script can read and write.
+ *
+ * Named instances on the current frame are exposed, so `root.ball._x` reads
+ * the real object -- and writing it moves the real object, which is what makes
+ * stepping through a script worth doing at all.
+ */
+function dbgRoot() {
+  var root = { _currentframe: curFrame, _totalframes: currentMaxFrame() };
+  frameObjects(currentLayers(), curFrame).forEach(function (o) {
+    if (!o.instanceName) return;
+    root[o.instanceName] = o;
+  });
+  return root;
+}
+
+/**
+ * Start debugging a script.
+ *
+ * `runToBreak` false means stop on the very first statement, which is what
+ * "Step Into" from a standing start means.
+ */
+function dbgStart(src, opts) {
+  opts = opts || {};
+  var built = dbgCompile(src);
+  if (built.error) return { ok: false, why: built.error, syntax: !!built.syntax };
+  var key = opts.key || scriptKey();
+  var scope = dbgScope(opts.log);
+  var args = DBG_SCOPE.map(function (n) { return scope[n]; });
+  dbgSession = {
+    key: key,
+    src: String(src == null ? "" : src),
+    it: built.fn.apply(null, args),
+    stopLines: built.lines,
+    line: 0,
+    evaluate: null,
+    done: false,
+    error: null,
+    stepping: !opts.runToBreak,
+    steps: 0
+  };
+  var r = dbgResume(!opts.runToBreak);
+  updateDebuggerPanel();
+  return Object.assign({ ok: true, key: key }, r);
+}
+
+/**
+ * Run until a breakpoint, or one statement if stepping.
+ *
+ * The generator is pumped here rather than by the caller, because "continue"
+ * and "step" differ only in when this stops -- and having one loop means they
+ * cannot disagree about what a breakpoint is.
+ */
+function dbgResume(stepOne) {
+  var s = dbgSession;
+  if (!s || s.done) return { done: true };
+  var set = breakpointsFor(s.key);
+  // Bounded, so a runaway loop in a debugged script cannot hang the editor.
+  var budget = 200000;
+  for (;;) {
+    var n;
+    try { n = s.it.next(); }
+    catch (e) {
+      s.done = true;
+      s.error = e && e.message ? e.message : String(e);
+      return { done: true, error: s.error, line: s.line };
+    }
+    if (n.done) { s.done = true; return { done: true, line: s.line }; }
+    s.steps++;
+    var at = n.value;
+    s.line = at[0];
+    s.evaluate = at[1];
+    if (stepOne) return { done: false, line: s.line, stepped: true };
+    if (set[s.line]) return { done: false, line: s.line, breakpoint: true };
+    if (--budget <= 0) {
+      s.done = true;
+      s.error = "stopped after 200,000 statements: this script does not finish";
+      return { done: true, error: s.error, line: s.line };
+    }
+  }
+}
+
+function dbgStep() {
+  var r = dbgResume(true);
+  updateDebuggerPanel();
+  return r;
+}
+
+function dbgContinue() {
+  var r = dbgResume(false);
+  updateDebuggerPanel();
+  return r;
+}
+
+function dbgStop() {
+  if (dbgSession && dbgSession.it && dbgSession.it.return) {
+    try { dbgSession.it.return(); } catch (e) { /* already finished */ }
+  }
+  dbgSession = null;
+  updateDebuggerPanel();
+}
+
+/**
+ * Evaluate an expression in the paused script's own scope.
+ *
+ * This is the whole reason the generator hands out an eval closure: a local
+ * cannot be read from outside the function that declared it, and a debugger
+ * that can only show globals cannot answer the question anyone actually has.
+ */
+function dbgEval(expr) {
+  var s = dbgSession;
+  if (!s || !s.evaluate) return { ok: false, why: "nothing is paused" };
+  try {
+    return { ok: true, value: s.evaluate(String(expr)) };
+  } catch (e) {
+    return { ok: false, why: e && e.message ? e.message : String(e) };
+  }
+}
+
+/** A value as a short readable string. */
+function dbgShow(v) {
+  if (v === undefined) return "undefined";
+  if (v === null) return "null";
+  var t = typeof v;
+  if (t === "string") return JSON.stringify(v.length > 60 ? v.slice(0, 60) + "…" : v);
+  if (t === "number" || t === "boolean") return String(v);
+  if (t === "function") return "function " + (v.name || "");
+  if (Array.isArray(v)) return "[" + v.length + " item" + (v.length === 1 ? "" : "s") + "]";
+  if (t === "object") {
+    var keys = Object.keys(v);
+    return "{" + keys.slice(0, 4).join(", ") + (keys.length > 4 ? ", …" : "") + "}";
+  }
+  return String(v);
+}
+
+/**
+ * The variables in scope at the pause point.
+ *
+ * Found by asking: the names declared in the script are read out of its own
+ * source, and each is evaluated through the closure. There is no way to
+ * enumerate a function's locals in JavaScript, so the source is the only
+ * place the list can come from -- and a name that turns out not to exist is
+ * simply left out.
+ */
+function dbgVariables() {
+  var s = dbgSession;
+  if (!s || !s.evaluate) return [];
+  var names = {};
+  var re = /\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)/g, m;
+  while ((m = re.exec(s.src)) !== null) names[m[1]] = true;
+  // Function parameters and named functions are variables too.
+  var fre = /\bfunction\s+([A-Za-z_$][\w$]*)/g;
+  while ((m = fre.exec(s.src)) !== null) names[m[1]] = true;
+  var out = [];
+  Object.keys(names).sort().forEach(function (n) {
+    var r = dbgEval(n);
+    // Not yet reached its declaration: a let in temporal dead zone throws,
+    // and reporting that as the value would be noise.
+    if (!r.ok) return;
+    out.push({ name: n, value: dbgShow(r.value), raw: r.value });
+  });
+  return out;
+}
+
+function addWatch(expr) {
+  expr = String(expr || "").trim();
+  if (!expr) return false;
+  if (dbgWatches.indexOf(expr) < 0) dbgWatches.push(expr);
+  updateDebuggerPanel();
+  return true;
+}
+
+function removeWatch(expr) {
+  var at = dbgWatches.indexOf(expr);
+  if (at < 0) return false;
+  dbgWatches.splice(at, 1);
+  updateDebuggerPanel();
+  return true;
+}
+
+/** The watch list, evaluated where the script is paused. */
+function watchValues() {
+  return dbgWatches.map(function (expr) {
+    var r = dbgEval(expr);
+    return { expr: expr, ok: r.ok,
+             value: r.ok ? dbgShow(r.value) : r.why };
+  });
+}
+
+/** Start debugging whatever the Actions panel is showing. */
+function debugCurrentScript(opts) {
+  var target = actionsTarget();
+  var src = target.obj ? target.obj.clipScript
+          : (target.kf ? target.kf.script : "");
+  if (!String(src || "").trim()) {
+    return { ok: false, why: "there is no script on this frame to debug" };
+  }
+  if (target.obj || doc.scriptDialect === "as2") {
+    /* ActionScript is compiled by the AS2 runtime, not by `new Function`, so
+       stepping through it would mean stepping through a different compiler's
+       output. Said plainly rather than producing confident nonsense. */
+    return { ok: false, why: "this script is ActionScript, which the AS2 " +
+             "runtime compiles — the debugger steps JavaScript frame scripts" };
+  }
+  return dbgStart(src, Object.assign({ key: scriptKey(target) }, opts || {}));
+}
+
+function updateDebuggerPanel() {
+  var host = document.getElementById("debuggerPanel");
+  if (!host) return;
+  host.textContent = "";
+
+  var note = function (text, cls) {
+    var d = document.createElement("div");
+    d.className = cls || "props-note";
+    d.textContent = text;
+    host.appendChild(d);
+    return d;
+  };
+  var section = function (text) {
+    var d = document.createElement("div");
+    d.className = "props-section";
+    d.textContent = text;
+    host.appendChild(d);
+  };
+
+  var s = dbgSession;
+
+  // ── State and controls ──
+  section(s ? (s.done ? "Finished" : "Paused at line " + s.line) : "Not running");
+  var bar = document.createElement("div");
+  bar.className = "props-row";
+  bar.style.cssText = "gap:2px;flex-wrap:wrap";
+  var btn = function (label, title, fn, disabled) {
+    var b = document.createElement("button");
+    b.className = "props-btn-action";
+    b.textContent = label;
+    b.title = title;
+    b.disabled = !!disabled;
+    b.addEventListener("click", fn);
+    bar.appendChild(b);
+    return b;
+  };
+  btn("Debug", "Run this frame's script under the debugger, stopping on the "+
+      "first statement", function () {
+    var r = debugCurrentScript({});
+    if (!r.ok) showMessage("Debugger", "Cannot debug: " + r.why + ".");
+  }, !!(s && !s.done));
+  btn("Step", "Run one statement", function () { dbgStep(); }, !s || s.done);
+  btn("Continue", "Run to the next breakpoint", function () { dbgContinue(); },
+      !s || s.done);
+  btn("Stop", "Abandon the session", function () { dbgStop(); }, !s);
+  host.appendChild(bar);
+
+  if (s && s.error) {
+    note("Error at line " + s.line + ": " + s.error, "props-note error");
+  }
+  if (!s) {
+    note("Click a line number in the Actions panel to set a breakpoint, then " +
+         "Debug. Stepping is real: the script is recompiled as a generator, " +
+         "so it genuinely pauses between statements.");
+  }
+
+  // ── Variables ──
+  if (s && !s.done) {
+    section("Variables");
+    var vars = dbgVariables();
+    if (!vars.length) {
+      note("No variables declared in this script yet.");
+    } else {
+      var vlist = document.createElement("div");
+      vlist.className = "dbg-list";
+      vars.forEach(function (v) {
+        var row = document.createElement("div");
+        row.className = "dbg-row";
+        var n = document.createElement("span");
+        n.className = "dbg-name";
+        n.textContent = v.name;
+        var val = document.createElement("span");
+        val.className = "dbg-value";
+        val.textContent = v.value;
+        row.appendChild(n);
+        row.appendChild(val);
+        vlist.appendChild(row);
+      });
+      host.appendChild(vlist);
+    }
+  }
+
+  // ── Watches ──
+  section("Watches");
+  var wlist = document.createElement("div");
+  wlist.className = "dbg-list";
+  var ws = watchValues();
+  if (!ws.length) {
+    var hint = document.createElement("div");
+    hint.className = "props-note";
+    hint.textContent = "An expression here is evaluated wherever the script " +
+                       "is paused, in its own scope.";
+    wlist.appendChild(hint);
+  }
+  ws.forEach(function (w) {
+    var row = document.createElement("div");
+    row.className = "dbg-row" + (w.ok ? "" : " bad");
+    var n = document.createElement("span");
+    n.className = "dbg-name";
+    n.textContent = w.expr;
+    var val = document.createElement("span");
+    val.className = "dbg-value";
+    val.textContent = w.value;
+    var rm = document.createElement("button");
+    rm.className = "props-btn-action";
+    rm.textContent = "✕";
+    rm.title = "Remove this watch";
+    rm.addEventListener("click", function () { removeWatch(w.expr); });
+    row.appendChild(n);
+    row.appendChild(val);
+    row.appendChild(rm);
+    wlist.appendChild(row);
+  });
+  host.appendChild(wlist);
+
+  var wrow = document.createElement("div");
+  wrow.className = "props-row";
+  var wi = document.createElement("input");
+  wi.className = "props-input";
+  wi.placeholder = "expression to watch";
+  wi.addEventListener("change", function () {
+    if (addWatch(wi.value)) wi.value = "";
+  });
+  wrow.appendChild(wi);
+  host.appendChild(wrow);
+
+  // ── Breakpoints ──
+  section("Breakpoints");
+  var bps = allBreakpoints();
+  if (!bps.length) {
+    note("None. Click a line number in the Actions panel.");
+  } else {
+    var blist = document.createElement("div");
+    blist.className = "dbg-list";
+    bps.forEach(function (b) {
+      var row = document.createElement("div");
+      row.className = "dbg-row";
+      var n = document.createElement("span");
+      n.className = "dbg-name";
+      n.textContent = "line " + b.line;
+      var w = document.createElement("span");
+      w.className = "dbg-value";
+      w.textContent = b.key;
+      var rm = document.createElement("button");
+      rm.className = "props-btn-action";
+      rm.textContent = "✕";
+      rm.addEventListener("click", function () {
+        toggleBreakpoint(b.line, b.key);
+        refreshCodeEditor();
+        updateDebuggerPanel();
+      });
+      row.appendChild(n);
+      row.appendChild(w);
+      row.appendChild(rm);
+      blist.appendChild(row);
+    });
+    host.appendChild(blist);
+    var clr = document.createElement("div");
+    clr.className = "props-row";
+    var cb = document.createElement("button");
+    cb.className = "props-btn-action";
+    cb.textContent = "Clear all";
+    cb.addEventListener("click", function () {
+      clearBreakpoints();
+      refreshCodeEditor();
+      updateDebuggerPanel();
+    });
+    clr.appendChild(cb);
+    host.appendChild(clr);
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -22679,12 +23401,37 @@ function refreshCodeEditor(){
     hl.innerHTML=highlightScript(src)+"\n";
   }
   if(gut){
+    /* The gutter is where breakpoints live, so it is built as elements rather
+       than a string: a line number has to be clickable, and it has to be able
+       to show three different things at once -- a syntax error, a breakpoint,
+       and where the debugger is paused. */
     var lines=src.split("\n");
-    var rows=[];
+    var key=scriptKey(target);
+    var bset=breakpoints[key]||{};
+    var pausedAt=(dbgSession&&!dbgSession.done&&dbgSession.key===key)
+      ? dbgSession.line : 0;
+    gut.textContent="";
     for(var i=1;i<=lines.length;i++){
-      rows.push(res.line===i?('<span class="err">'+i+"</span>"):String(i));
+      var row=document.createElement("div");
+      row.className="gutter-line";
+      if(res.line===i)row.className+=" err";
+      if(bset[i])row.className+=" bp";
+      if(pausedAt===i)row.className+=" paused";
+      row.textContent=String(i);
+      row.title="Click to set a breakpoint on line "+i;
+      row.dataset.line=String(i);
+      gut.appendChild(row);
     }
-    gut.innerHTML=rows.join("\n");
+    if(!gut.__bpBound){
+      gut.__bpBound=true;
+      gut.addEventListener("click",function(e){
+        var line=parseInt(e.target&&e.target.dataset?e.target.dataset.line:0,10);
+        if(!line)return;
+        toggleBreakpoint(line);
+        refreshCodeEditor();
+        updateDebuggerPanel();
+      });
+    }
   }
   if(st){
     if(res.ok){
@@ -23101,6 +23848,7 @@ function init(){
     fullyErased:bitmapFullyErased
   };
   loadShortcutOverrides();
+  updateDebuggerPanel();
   initActionsPanel();
   initOutputPanel();
   initUnloadGuard();
@@ -23281,6 +24029,28 @@ function init(){
     comboItems: comboItems,
     addComponent: addComponent,
     /* Timeline Effects: the generators, and the frames they write. */
+    /* The debugger. A script is recompiled as a generator so it can really
+       pause, and the generator hands out an eval closure so its own locals
+       can be read -- which is the only way to inspect a local at all. */
+    dbgStatementLines: dbgStatementLines,
+    dbgCompile: dbgCompile,
+    dbgStart: dbgStart,
+    dbgStep: dbgStep,
+    dbgContinue: dbgContinue,
+    dbgStop: dbgStop,
+    dbgEval: dbgEval,
+    dbgVariables: dbgVariables,
+    dbgSession: function(){ return dbgSession; },
+    dbgShow: dbgShow,
+    scriptKey: scriptKey,
+    toggleBreakpoint: toggleBreakpoint,
+    clearBreakpoints: clearBreakpoints,
+    allBreakpoints: allBreakpoints,
+    addWatch: addWatch,
+    removeWatch: removeWatch,
+    watchValues: watchValues,
+    debugCurrentScript: debugCurrentScript,
+    updateDebuggerPanel: updateDebuggerPanel,
     TIMELINE_EFFECTS: TIMELINE_EFFECTS,
     timelineEffect: timelineEffect,
     applyTimelineEffect: applyTimelineEffect,

@@ -152,7 +152,7 @@ name — an entire class of Flash content is unreachable.
 | Actions panel | ✅ | Line numbers, syntax highlighting, a live syntax check through the same `new Function` the player compiles with, the broken line marked in the gutter, API chips (Flash's Script Assist), and Tab that indents instead of leaving the field. The textarea still holds the text, so the caret, selection, undo and IME behaviour stay the browser's own. |
 | `trace()` + **Output panel** | ✅ | `Flashy.Output` is the sink; the panel lists it, clears and copies. `trace()` is now in scope for a JavaScript frame script too — it was in scope for an imported movie's ActionScript and not for a script written here, which was backwards. Test Movie runs in its own window and forwards its lines back. |
 | Movie Explorer | ✅ | Every scene, layer, frame, object and library item, with Flash's five filters and a search. Click a row to go to it. Reaches parked scenes, not just the open one. |
-| Debugger (breakpoints, watch, variable inspector) | ⬜ | Missing. |
+| Debugger (breakpoints, watch, variable inspector) | ✅ | Breakpoints in the Actions gutter, real stepping, a watch list and a variable inspector. The script is recompiled as a GENERATOR with a `yield` before each statement, so it genuinely pauses; the generator hands out an `eval` closure so its own locals can be read and written. JavaScript frame scripts only — ActionScript is compiled by the AS2 runtime. |
 | Behaviors panel (scriptless interactivity) | ✅ | Eleven behaviours across six events, written as Flash's own `on(release) { … }` handlers — which flashy-as2.js already runs. They stack rather than replacing each other, and stay editable as code in the Actions panel. |
 | Components (Button, CheckBox, RadioButton, TextInput, Slider, ProgressBar, ComboBox) | ✅ | Built as ordinary library symbols with handlers, the way Flash’s own were — so a component is editable, exports through the existing paths and needs no new runtime. The ComboBox’s dropdown is its second frame, which is where Flash put one too. |
 | Code snippets library | ✅ | The API chips insert working calls at the caret, and a saved snippet library sits beside them: the selection (or the whole script) saved under a name in localStorage, inserted at the caret, shift-click to delete. |
@@ -756,7 +756,6 @@ than quietly dropped:
   MP3 framing, filter tags, an ActionScript assembler. The writer reports each
   as missing rather than silently dropping it.
 * **Device fonts and character embedding ranges** — needs font parsing.
-* **A debugger** — breakpoints, watches, a variable inspector.
 * **Runtime** shared libraries, **per-sound compression**, **spell check**,
   **multiple documents in one window**, and **Edit in New Window** on the web
   build.
@@ -766,3 +765,56 @@ Both of the small leftovers above are now done as well: the registration point
 has an on-stage crosshair you can drag, and the Actions panel keeps a snippet
 library beside its API chips — the selection (or the whole script) saved under
 a name, inserted at the caret.
+
+### Wave 9 — the debugger
+
+58. ✅ **Breakpoints, stepping, watches and a variable inspector.**
+
+    The usual reason this gets written off is that JavaScript cannot be
+    suspended mid-statement. But a **generator** can be: a script being
+    debugged is recompiled as a generator with a `yield` before each
+    statement, and the debugger drives it one `next()` at a time. Stepping is
+    therefore real, not a simulation of it — the script is genuinely halted
+    between statements and the editor is responsive while it is.
+
+    The variable inspector works the same way round. There is no way to
+    enumerate a function’s locals in JavaScript, so the generator hands out an
+    `eval` closure from inside its own body. That closure sees the script’s
+    own scope, which means a local can be read *and written* — change `a` at a
+    breakpoint and the next statement uses the new value. The names come from
+    the source; a name that does not resolve is left out rather than shown as
+    undefined.
+
+    The timeline verbs are the editor’s real ones, so `gotoAndStop(4)` while
+    stepping moves the stage. A debugger that runs the script against a fake
+    timeline is testing the fake.
+
+    **Deciding where a `yield` can go** is the whole of the difficulty, and it
+    took four corrections:
+
+    * A `{` that opens a BLOCK is not the same as one that opens an object
+      literal. Statements inside a block are fine; a yield inside a literal is
+      a syntax error. They are told apart by the token before the brace.
+    * A nested function or arrow body must get none. This is the dangerous
+      one: outside a generator `yield` is an ordinary identifier, so
+      `yield [1, f];` parses as *indexing a variable called `yield`*. The
+      script compiles and then misbehaves at run time — the one instrumentation
+      mistake a syntax check can never catch.
+    * `do`, `else`, `try` and `finally` are always followed by a block.
+      Reading them as values silently lost every breakpoint inside, which is
+      most of what anyone wants to break on.
+    * A line entirely inside a block comment is not the preceding code for the
+      next line’s boundary test.
+
+    And a loop needs a yield **inside its body**, inserted right after the
+    header’s brace: a one-line `while (true) { … }` has no body line to put
+    one on, and a loop you cannot stop inside is a loop you cannot debug. With
+    that, a runaway script is caught by a statement budget instead of hanging
+    the editor.
+
+    A script the instrumentation cannot handle is reported as such, and told
+    apart from a script that simply does not compile — two different problems
+    with two different fixes. ActionScript is declined plainly, because
+    stepping it would mean stepping a different compiler’s output.
+
+    Covered by `tests/debugger.spec.js` (25 specs).
