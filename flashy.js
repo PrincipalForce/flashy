@@ -209,8 +209,16 @@
         rule === 'evenodd' ? 'evenodd' : 'nonzero']);
       return this;
     }
-    beginGradientFill(type, colors, alphas, ratios, x0, y0, x1, y1) {
-      this._cmds.push([12, type, colors, alphas, ratios, x0, y0, x1, y1]);
+    /**
+     * A gradient fill.
+     *
+     * `opts` carries the two things canvas has no setting for: the overflow
+     * mode, and a radial gradient's focal offset. Optional, so every existing
+     * call means what it always did.
+     */
+    beginGradientFill(type, colors, alphas, ratios, x0, y0, x1, y1, opts) {
+      this._cmds.push([12, type, colors, alphas, ratios, x0, y0, x1, y1,
+                       opts || null]);
       return this;
     }
     endFill() { this._cmds.push([13]); return this; }
@@ -290,12 +298,19 @@
             commit();
             fillRule = 'nonzero';
             const type = c[1], colors = c[2], alphas = c[3], ratios = c[4];
-            const x0 = c[5], y0 = c[6], x1 = c[7], y1 = c[8];
-            let grad;
-            if (type === 'linear') grad = ctx.createLinearGradient(x0, y0, x1, y1);
-            else                   grad = ctx.createRadialGradient(x0, y0, 0, x0, y0, Math.hypot(x1 - x0, y1 - y0));
-            for (let i = 0; i < colors.length; i++) grad.addColorStop(ratios[i], toRGBA(colors[i], alphas[i]));
-            fill = grad;
+            const gopts = c[9] || {};
+            const stops = [];
+            for (let i = 0; i < colors.length; i++) {
+              stops.push({ ratio: ratios[i], color: colors[i], alpha: alphas[i] });
+            }
+            /* Through Flashy.Gradient, which is also what the authoring stage
+               calls: overflow needs the geometry extended as well as the
+               stops tiled, and having that in two places is how a reflected
+               gradient ends up published as a squashed one. */
+            fill = Gradient.build(ctx, {
+              kind: type, stops,
+              overflow: gopts.overflow, focal: gopts.focal
+            }, [c[5], c[6]], [c[7], c[8]]);
             break;
           }
           case 13: commit(); fill = null; break;
@@ -2059,6 +2074,124 @@
     }
   };
 
+  /* -------------------- Gradients --------------------
+   *
+   * Canvas has no overflow setting and no focal point on the API, which is
+   * why Flash's Extend / Reflect / Repeat and its off-centre radial highlight
+   * all needed building. Both are expressible, and neither is expressible by
+   * adding stops alone:
+   *
+   *   OVERFLOW needs the gradient's GEOMETRY extended as well as its stops
+   *            tiled. Tiling the stop list inside the original span only
+   *            repeats the ramp within that span and still pads outside it,
+   *            which looks like a gradient that has been squashed -- the one
+   *            mistake worth calling out, because it very nearly passes.
+   *   FOCAL    is the inner circle of a radial gradient moved off the outer
+   *            one, which canvas does support once you stop passing the same
+   *            centre twice.
+   *
+   * Here rather than in the editor because four things draw gradients -- the
+   * authoring stage, the raster exports, the SVG export and the exported
+   * player -- and the first, second and fourth all come through this.
+   * ------------------------------------------------------------------ */
+  const Gradient = {
+    /* How many times the ramp is laid down for a tiled overflow. Seven is
+       three either side of the original, which covers any shape anyone draws
+       without making the stop list silly. */
+    TILES: 7,
+    BASE: 3,                 // which tile holds the gradient's own span
+
+    /**
+     * The stop list for an overflow mode.
+     *
+     * `stops` is `[{ratio, color, alpha}]`. For a tiled mode the list is
+     * written once per tile across the EXTENDED span, mirrored on alternate
+     * tiles for Reflect -- and the tile holding the original span is the one
+     * left unmirrored, or the gradient would come out back to front.
+     */
+    stopsFor(stops, overflow, radial) {
+      if (overflow !== 'reflect' && overflow !== 'repeat') return stops;
+      const n = this.TILES;
+      const base = radial ? 0 : this.BASE;
+      const out = [];
+      for (let t = 0; t < n; t++) {
+        const flip = overflow === 'reflect' && (((t - base) % 2) + 2) % 2 === 1;
+        for (let i = 0; i < stops.length; i++) {
+          const s = flip ? stops[stops.length - 1 - i] : stops[i];
+          const local = flip ? 1 - s.ratio : s.ratio;
+          out.push({ ratio: (t + local) / n, color: s.color, alpha: s.alpha });
+        }
+      }
+      return out;
+    },
+
+    /**
+     * Build a canvas gradient.
+     *
+     * `p0` and `p1` are already in the space the caller is about to draw in:
+     * for a linear gradient the two ends, and for a radial the centre and a
+     * point on the edge.
+     */
+    build(ctx, spec, p0, p1) {
+      const stops = (spec.stops || []).slice()
+        .sort((a, b) => a.ratio - b.ratio);
+      const overflow = spec.overflow || 'pad';
+      const tiled = overflow === 'reflect' || overflow === 'repeat';
+      const radial = spec.kind === 'radial';
+      let grad;
+
+      if (radial) {
+        const r = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) || 1;
+        /* A tiled radial repeats OUTWARD from the centre, so the outer radius
+           grows rather than the line being extended both ways -- there is no
+           "before the centre" to extend into. */
+        const outer = tiled ? r * this.TILES : r;
+        const focal = Math.max(-0.95, Math.min(0.95, spec.focal || 0));
+        let fx = p0[0], fy = p0[1];
+        if (focal) {
+          const ux = (p1[0] - p0[0]) / r, uy = (p1[1] - p0[1]) / r;
+          fx += ux * focal * r;
+          fy += uy * focal * r;
+        }
+        grad = ctx.createRadialGradient(fx, fy, 0, p0[0], p0[1], outer);
+      } else {
+        let a0 = p0, a1 = p1;
+        if (a0[0] === a1[0] && a0[1] === a1[1]) a1 = [a0[0] + 1, a0[1]];
+        if (tiled) {
+          /* The span is extended to TILES tiles with the original sitting in
+             tile BASE, so the gradient covers the shape in both directions
+             instead of padding past its own ends. */
+          const dx = a1[0] - a0[0], dy = a1[1] - a0[1];
+          const start = [a0[0] - dx * this.BASE, a0[1] - dy * this.BASE];
+          const end = [a0[0] + dx * (this.TILES - this.BASE),
+                       a0[1] + dy * (this.TILES - this.BASE)];
+          a0 = start; a1 = end;
+        }
+        grad = ctx.createLinearGradient(a0[0], a0[1], a1[0], a1[1]);
+      }
+
+      this.stopsFor(stops, overflow, radial).forEach(s => {
+        grad.addColorStop(Math.max(0, Math.min(1, s.ratio)),
+                          toRGBA(s.color, s.alpha == null ? 1 : s.alpha));
+      });
+      return grad;
+    },
+
+    /** A flat `[ratio, colour, alpha, …]` list as stop objects. */
+    fromFlat(flat, alphaMul) {
+      const mul = alphaMul == null ? 1 : alphaMul;
+      const out = [];
+      for (let i = 0; i + 2 < (flat || []).length; i += 3) {
+        out.push({
+          ratio: Math.max(0, Math.min(1, flat[i])),
+          color: flat[i + 1] | 0,
+          alpha: (flat[i + 2] == null ? 1 : flat[i + 2]) * mul
+        });
+      }
+      return out;
+    }
+  };
+
   class TextField extends DisplayObject {
     constructor(text, opts) {
       super();
@@ -3673,7 +3806,7 @@
     version: '0.7.6',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
-    Shape, TextField, RichText, Fonts, Bitmap, MovieClip, Timeline, Tween, Stage,
+    Shape, TextField, RichText, Fonts, Gradient, Bitmap, MovieClip, Timeline, Tween, Stage,
     /* 9-slice: the cell maths plus the container that uses it, shared with the
        authoring stage and the SVG export so all three agree to the pixel. */
     Slice9, NineSlice,

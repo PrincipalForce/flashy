@@ -611,6 +611,7 @@ var menus=[
     {type:"sep"},
     {label:"Timeline Effects...",action:"timelineEffect"},
     {type:"sep"},
+    {label:"Gradient...",action:"gradientFill"},
     {label:"Embed Font...",action:"embedFont"},
     {label:"Check Spelling...",action:"spellCheck"},
     {type:"sep"},
@@ -3879,26 +3880,50 @@ function gradStopColor(c,a,alphaMul){
  * about to draw in. `map(fx, fy)` turns a box fraction into that space —
  * the centre-origin shapes and the path renderer sit in different ones.
  */
-function gradientFill(cx,o,map,alphaMul){
-  var g=o.fillGrad&&o.fillGrad.length>=4?o.fillGrad:[0,0,1,0];
-  var p0=map(g[0],g[1]),p1=map(g[2],g[3]);
-  var grad;
-  if(o.fillType==="radial"){
-    var r=Math.hypot(p1[0]-p0[0],p1[1]-p0[1])||1;
-    grad=cx.createRadialGradient(p0[0],p0[1],0,p0[0],p0[1],r);
-  }else{
-    if(p0[0]===p1[0]&&p0[1]===p1[1])p1=[p0[0]+1,p0[1]];
-    grad=cx.createLinearGradient(p0[0],p0[1],p1[0],p1[1]);
-  }
-  var st=o.fillStops;
-  for(var i=0;i+2<st.length;i+=3){
-    grad.addColorStop(Math.max(0,Math.min(1,st[i])),gradStopColor(st[i+1],st[i+2],alphaMul));
-  }
-  return grad;
+/**
+ * The stop list for an overflow mode, as the engine computes it.
+ *
+ * Kept as a thin pass-through rather than a second implementation: tiling the
+ * stops is only half of what an overflow mode needs -- the geometry has to be
+ * extended as well -- and two copies of that would drift.
+ */
+function overflowStops(flat,mode){
+  if(!window.Flashy||!Flashy.Gradient)return [];
+  var stops=Flashy.Gradient.fromFlat(flat,1);
+  return Flashy.Gradient.stopsFor(stops,mode,false)
+    .map(function(s){return {r:s.ratio,c:s.color,a:s.alpha};});
 }
+
+/**
+ * Build the canvas gradient for `o` in the coordinate space the caller is
+ * about to draw in. `map(fx, fy)` turns a box fraction into that space.
+ *
+ * `which` picks the fill's gradient or the stroke's, because a stroke can
+ * carry one of its own -- Flash allowed it, and the data model here only ever
+ * had the fill's.
+ */
+function gradientFill(cx,o,map,alphaMul,which){
+  var stroke=which==="stroke";
+  var g=(stroke?o.strokeGrad:o.fillGrad);
+  g=(g&&g.length>=4)?g:[0,0,1,0];
+  return Flashy.Gradient.build(cx,{
+    kind:stroke?(o.strokeFillType||"linear"):(o.fillType||"linear"),
+    stops:Flashy.Gradient.fromFlat(stroke?o.strokeStops:o.fillStops,alphaMul),
+    overflow:(stroke?o.strokeOverflow:o.fillOverflow)||"pad",
+    focal:(stroke?o.strokeFocal:o.fillFocal)||0
+  },map(g[0],g[1]),map(g[2],g[3]));
+}
+
 /** The fill style for a shape: a gradient if it has one, else its colour. */
 function fillStyleFor(cx,o,map,alphaMul){
   return isGradient(o)?gradientFill(cx,o,map,alphaMul):o.fillColor;
+}
+
+/** The same for a stroke, which can carry a gradient of its own. */
+function strokeStyleFor(cx,o,map,alphaMul){
+  return isStrokeGradient(o)
+    ? gradientFill(cx,o,map,alphaMul,"stroke")
+    : o.strokeColor;
 }
 
 /* ------------------------------------------------------------------ *
@@ -4158,26 +4183,30 @@ function paintObjRaw(cx,o,opts){
       cx.fill("evenodd");
     }
     if(strokeOn){
-      cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth;
+      // Translated to the box corner here, so the gradient map is too.
+      cx.strokeStyle=strokeStyleFor(cx,o,function(fx,fy){
+        return [fx*(o.width||0),fy*(o.height||0)];
+      },strokeA);
+      cx.lineWidth=o.strokeWidth;
       cx.globalAlpha=strokeA;applyStroke();cx.stroke();
     }
     cx.restore();
   }else if(o.type==="rect"){
     if(fillOn){cx.fillStyle=fillStyleFor(cx,o,boxMap,fillA);cx.globalAlpha=fillA;cx.fillRect(-hw,-hh,o.width,o.height);}
     if(strokeOn){
-      cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth;
+      cx.strokeStyle=strokeStyleFor(cx,o,boxMap,strokeA);cx.lineWidth=o.strokeWidth;
       cx.globalAlpha=strokeA;applyStroke();cx.strokeRect(-hw,-hh,o.width,o.height);
     }
   }else if(o.type==="oval"){
     cx.beginPath();cx.ellipse(0,0,Math.abs(hw),Math.abs(hh),0,0,Math.PI*2);
     if(fillOn){cx.fillStyle=fillStyleFor(cx,o,boxMap,fillA);cx.globalAlpha=fillA;cx.fill();}
     if(strokeOn){
-      cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth;
+      cx.strokeStyle=strokeStyleFor(cx,o,boxMap,strokeA);cx.lineWidth=o.strokeWidth;
       cx.globalAlpha=strokeA;applyStroke();cx.stroke();
     }
   }else if(o.type==="line"){
     cx.beginPath();cx.moveTo(-hw,-hh);cx.lineTo(hw,hh);
-    cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth||1;
+    cx.strokeStyle=strokeStyleFor(cx,o,boxMap,strokeA);cx.lineWidth=o.strokeWidth||1;
     cx.globalAlpha=strokeA;applyStroke();cx.stroke();
   }else if(o.type==="pencil"||o.type==="brush"){
     if(o.points&&o.points.length>1){
@@ -4190,7 +4219,7 @@ function paintObjRaw(cx,o,opts){
         cx.strokeStyle=o.fillColor;cx.lineWidth=(o.strokeWidth||1)*3;
         cx.lineCap="round";cx.lineJoin="round";cx.setLineDash([]);
       }else{
-        cx.strokeStyle=o.strokeColor;cx.lineWidth=o.strokeWidth||1;applyStroke();
+        cx.strokeStyle=strokeStyleFor(cx,o,boxMap,strokeA);cx.lineWidth=o.strokeWidth||1;applyStroke();
       }
       cx.globalAlpha=strokeA;cx.stroke();
     }
@@ -7311,27 +7340,65 @@ function updateProps(){
     if(o.type!=="symbol"&&o.type!=="bitmap"){
     // ── Fill ──
     sect("Fill");
-    /* Linear and Radial are here because an imported movie brings them; there
-       is no stop editor yet, so switching away from one is a one-way trip —
-       it keeps the first stop's colour as the flat fill. */
+    /* Switching to Linear or Radial seeds a two-stop gradient from the colour
+       the fill already had, and switching away flattens it to the MIDDLE of
+       the ramp -- a fade to transparent would otherwise flatten to something
+       invisible, and losing the artwork is worse than losing the gradient. */
     row("Type",o.fillType||"solid",function(v){
       pushUndo();
-      if(isGradient(o)&&v!=="linear"&&v!=="radial"){
-        o.fillColor="#"+("000000"+((o.fillStops[1]|0)&0xffffff).toString(16)).slice(-6);
-        o.fillStops=null;o.fillGrad=null;
-      }
-      o.fillType=v;render();updateProps();
+      var was=o.fillType||"solid";
+      if(isGradient(o)&&v!=="linear"&&v!=="radial")flattenGradient(o,"fill");
+      if((v==="linear"||v==="radial")&&!isGradient(o))makeGradient(o,v,"fill");
+      else o.fillType=v;
+      void was;
+      render();updateProps();
     },{type:"select",width:"80px",options:[["solid","Solid"],["none","None"],["linear","Linear"],["radial","Radial"]]});
     if((o.fillType||"solid")!=="none"){
-      colorRow("Color",o.fillColor,function(nc){pushUndo();o.fillColor=nc;render();});
-      sliderRow("Alpha",o.fillAlpha!=null?o.fillAlpha:1,0,1,0.01,function(v){pushUndo();o.fillAlpha=v;render();},{percent:true,unit:"%"});
+      if(isGradient(o)){
+        var gstops=gradientStops(o,"fill");
+        row("Stops",gstops.length+" stop"+(gstops.length===1?"":"s"),
+            function(){},{type:"readonly"});
+        row("Overflow",o.fillOverflow||"pad",function(v){
+          pushUndo();o.fillOverflow=v;render();
+        },{type:"select",width:"80px",options:GRADIENT_OVERFLOW});
+        if((o.fillType||"solid")==="radial"){
+          sliderRow("Focal",o.fillFocal||0,-1,1,0.01,function(v){
+            o.fillFocal=v;touchDoc();render();
+          },{percent:true,unit:"%"});
+        }
+        btnGroup([{label:"Edit gradient…",title:"Stops, overflow and focal point",
+                   onClick:function(){showGradientDialog("fill");}}]);
+        note("The gradient's angle and span are dragged with the Gradient "+
+             "Transform tool (F); the stops are edited here.");
+      }else{
+        colorRow("Color",o.fillColor,function(nc){pushUndo();o.fillColor=nc;render();});
+        sliderRow("Alpha",o.fillAlpha!=null?o.fillAlpha:1,0,1,0.01,function(v){pushUndo();o.fillAlpha=v;render();},{percent:true,unit:"%"});
+      }
     }
 
     // ── Stroke ──
     sect("Stroke");
     row("Style",o.strokeStyle||"solid",function(v){pushUndo();o.strokeStyle=v;render();updateProps();},{type:"select",width:"80px",options:[["solid","Solid"],["dashed","Dashed"],["dotted","Dotted"],["none","None"]]});
     if((o.strokeStyle||"solid")!=="none"){
+      /* A gradient along a line. Flash allowed it; the data model here only
+         ever had the fill's, so a stroke could only be one colour. */
+      row("Fill",o.strokeFillType||"solid",function(v){
+        pushUndo();
+        if(isStrokeGradient(o)&&v==="solid")flattenGradient(o,"stroke");
+        else if(v!=="solid"&&!isStrokeGradient(o))makeGradient(o,v,"stroke");
+        else o.strokeFillType=v;
+        render();updateProps();
+      },{type:"select",width:"80px",
+         options:[["solid","Solid"],["linear","Linear"],["radial","Radial"]]});
+      if(isStrokeGradient(o)){
+        row("Overflow",o.strokeOverflow||"pad",function(v){
+          pushUndo();o.strokeOverflow=v;render();
+        },{type:"select",width:"80px",options:GRADIENT_OVERFLOW});
+        btnGroup([{label:"Edit gradient…",title:"Stops, overflow and focal point",
+                   onClick:function(){showGradientDialog("stroke");}}]);
+      }else{
       colorRow("Color",o.strokeColor,function(nc){pushUndo();o.strokeColor=nc;render();});
+      }
       row("Width",o.strokeWidth,function(v){pushUndo();o.strokeWidth=Math.max(0,parseFloat(v)||0);render();},{width:"45px",unit:"px"});
       sliderRow("Alpha",o.strokeAlpha!=null?o.strokeAlpha:1,0,1,0.01,function(v){pushUndo();o.strokeAlpha=v;render();},{percent:true,unit:"%"});
       row("Cap",o.strokeCap||"round",function(v){pushUndo();o.strokeCap=v;render();},{type:"select",width:"70px",options:[["round","Round"],["square","Square"],["butt","Butt"]]});
@@ -8806,6 +8873,7 @@ function initOutputPanel(){
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
   timelineEffect:"Timeline Effect",
+  gradientFill:"Gradient",
   newTab:"New Tab",
   closeTab:"Close Document",
   openRecent:"Open Recent",
@@ -11829,6 +11897,9 @@ function doActionInner(a){
     break;
   case "timelineEffect":
     showTimelineEffectDialog();
+    break;
+  case "gradientFill":
+    showGradientDialog("fill");
     break;
   case "embedFont":
     showFontEmbedDialog();
@@ -19844,6 +19915,362 @@ function saveSymbolBack() {
 }
 
 /* ------------------------------------------------------------------ *
+ * The gradient editor
+ *
+ * `fillStops` has been in the save format and the painter since gradients
+ * arrived, and nothing could author it. The Properties panel said so in a
+ * comment -- "there is no stop editor yet, so switching away from one is a
+ * one-way trip" -- which made a gradient something a document could only
+ * acquire by being imported from a .swf.
+ *
+ * Three things were missing alongside it, and all three are visible:
+ *
+ *   OVERFLOW   what happens outside the gradient's own span. Flash called it
+ *              Extend / Reflect / Repeat; they are the only way to get a
+ *              stripe pattern or a soft-edged sphere out of two stops.
+ *   FOCAL      a radial gradient whose highlight is off-centre, which is what
+ *              makes a sphere look lit rather than flat.
+ *   STROKES    a gradient along a line. Flash allowed it and the data model
+ *              here only ever had one gradient, on the fill.
+ *
+ * All four live on the object and go through one builder, so the stage, the
+ * SVG export and the exported player cannot disagree about them.
+ * ------------------------------------------------------------------ */
+
+/** Flash's three, by their canvas names. */
+var GRADIENT_OVERFLOW = [
+  ["pad", "Extend"],
+  ["reflect", "Reflect"],
+  ["repeat", "Repeat"]
+];
+
+/**
+ * The stop list as objects, which is what an editor wants.
+ *
+ * Stored flat -- [ratio, colour, alpha, ...] -- because EditorObject.clone()
+ * copies arrays with a shallow slice, so anything nested would be shared
+ * between an object and its copy. That is worth keeping; it is just not what
+ * UI code wants to read.
+ */
+function gradientStops(o, which) {
+  var flat = (which === "stroke" ? o.strokeStops : o.fillStops) || null;
+  if (!flat || flat.length < 3) return [];
+  var out = [];
+  for (var i = 0; i + 2 < flat.length; i += 3) {
+    out.push({ ratio: flat[i], color: flat[i + 1] | 0, alpha: flat[i + 2] });
+  }
+  return out.sort(function (a, b) { return a.ratio - b.ratio; });
+}
+
+/** Write a list of stop objects back to the flat form. */
+function setGradientStops(o, stops, which) {
+  var flat = [];
+  stops.slice().sort(function (a, b) { return a.ratio - b.ratio; })
+    .forEach(function (s) {
+      flat.push(Math.max(0, Math.min(1, s.ratio)), s.color | 0,
+                s.alpha == null ? 1 : Math.max(0, Math.min(1, s.alpha)));
+    });
+  if (which === "stroke") o.strokeStops = flat;
+  else o.fillStops = flat;
+  return flat;
+}
+
+/** The colour and alpha a gradient has at a ratio, by interpolating it. */
+function gradientAt(stops, ratio) {
+  if (!stops.length) return { color: 0, alpha: 1 };
+  if (ratio <= stops[0].ratio) return { color: stops[0].color, alpha: stops[0].alpha };
+  var last = stops[stops.length - 1];
+  if (ratio >= last.ratio) return { color: last.color, alpha: last.alpha };
+  for (var i = 0; i < stops.length - 1; i++) {
+    var a = stops[i], b = stops[i + 1];
+    if (ratio < a.ratio || ratio > b.ratio) continue;
+    var span = b.ratio - a.ratio;
+    var t = span > 0 ? (ratio - a.ratio) / span : 0;
+    var ch = function (sh) {
+      var av = (a.color >> sh) & 0xff, bv = (b.color >> sh) & 0xff;
+      return Math.round(av + (bv - av) * t) & 0xff;
+    };
+    return { color: (ch(16) << 16) | (ch(8) << 8) | ch(0),
+             alpha: a.alpha + (b.alpha - a.alpha) * t };
+  }
+  return { color: last.color, alpha: last.alpha };
+}
+
+/**
+ * Add a stop at a ratio, taking the colour the gradient already has there.
+ *
+ * Which means adding one does not change the gradient -- it just gives you
+ * something to grab. The same rule the filter ramp's Add Stop follows, for
+ * the same reason.
+ */
+function addGradientStop(o, ratio, which) {
+  var stops = gradientStops(o, which);
+  if (stops.length >= 15) return { ok: false, why: "a gradient holds 15 stops" };
+  ratio = Math.max(0, Math.min(1, ratio));
+  var at = gradientAt(stops, ratio);
+  stops.push({ ratio: ratio, color: at.color, alpha: at.alpha });
+  setGradientStops(o, stops, which);
+  return { ok: true, count: stops.length };
+}
+
+function removeGradientStop(o, index, which) {
+  var stops = gradientStops(o, which);
+  if (stops.length <= 2) {
+    // One stop is a flat colour, and a flat gradient is not a gradient.
+    return { ok: false, why: "a gradient needs at least two stops" };
+  }
+  if (index < 0 || index >= stops.length) return { ok: false, why: "no such stop" };
+  stops.splice(index, 1);
+  setGradientStops(o, stops, which);
+  return { ok: true, count: stops.length };
+}
+
+/** Turn a solid fill into a gradient, seeded from the colour it had. */
+function makeGradient(o, kind, which) {
+  var base = which === "stroke" ? o.strokeColor : o.fillColor;
+  var n = parseInt(String(base || "#000000").replace("#", ""), 16) | 0;
+  /* From the existing colour to transparent black, which is the gradient
+     people reach for first and reads as a fade rather than as a mistake. */
+  setGradientStops(o, [
+    { ratio: 0, color: n, alpha: 1 },
+    { ratio: 1, color: n, alpha: 0 }
+  ], which);
+  if (which === "stroke") {
+    o.strokeFillType = kind;
+    if (!o.strokeGrad) o.strokeGrad = [0, 0.5, 1, 0.5];
+  } else {
+    o.fillType = kind;
+    if (!o.fillGrad) o.fillGrad = [0, 0.5, 1, 0.5];
+  }
+  return true;
+}
+
+/**
+ * Flatten a gradient back to one colour.
+ *
+ * The MIDDLE of the ramp rather than the first stop: a fade to transparent
+ * would otherwise flatten to something invisible, and losing the artwork is
+ * worse than losing the gradient.
+ */
+function flattenGradient(o, which) {
+  var stops = gradientStops(o, which);
+  if (!stops.length) return false;
+  var mid = gradientAt(stops, 0.5);
+  var hex = "#" + ("000000" + (mid.color & 0xffffff).toString(16)).slice(-6);
+  if (which === "stroke") {
+    o.strokeColor = hex.toUpperCase();
+    o.strokeStops = null; o.strokeGrad = null; o.strokeFillType = "solid";
+  } else {
+    o.fillColor = hex.toUpperCase();
+    o.fillStops = null; o.fillGrad = null; o.fillType = "solid";
+    o.fillAlpha = mid.alpha;
+  }
+  return true;
+}
+
+/** True when a stroke carries a gradient of its own. */
+function isStrokeGradient(o) {
+  var t = o && o.strokeFillType;
+  return (t === "linear" || t === "radial") &&
+         o.strokeStops && o.strokeStops.length >= 3;
+}
+
+function showGradientDialog(which) {
+  which = which === "stroke" ? "stroke" : "fill";
+  if (selection.length !== 1) {
+    showMessage("Gradient",
+      "Select one shape. A gradient belongs to a shape, and applying one to " +
+      "several at once would need them all to share a span.");
+    return;
+  }
+  var o = selection[0];
+  var kindOf = function () {
+    return which === "stroke" ? (o.strokeFillType || "solid") : (o.fillType || "solid");
+  };
+  var isGrad = function () {
+    return kindOf() === "linear" || kindOf() === "radial";
+  };
+  var strip = null, listEl = null;
+
+  var draw = function () {
+    var stops = gradientStops(o, which);
+    if (strip) {
+      var w = strip.width, h = strip.height;
+      var g = strip.getContext("2d");
+      // A checkerboard behind it, or a transparent stop looks like a white one.
+      for (var cx = 0; cx < w; cx += 7) {
+        for (var cy = 0; cy < h; cy += 7) {
+          g.fillStyle = ((cx / 7 + cy / 7) % 2) ? "#3a3a3a" : "#2a2a2a";
+          g.fillRect(cx, cy, 7, 7);
+        }
+      }
+      for (var x = 0; x < w; x++) {
+        var at = gradientAt(stops, x / (w - 1));
+        g.fillStyle = "rgba(" + ((at.color >> 16) & 255) + "," +
+                      ((at.color >> 8) & 255) + "," + (at.color & 255) + "," +
+                      at.alpha + ")";
+        g.fillRect(x, 0, 1, h);
+      }
+      // The stops themselves, as markers on the strip.
+      stops.forEach(function (s) {
+        var px = Math.round(s.ratio * (w - 1));
+        g.fillStyle = "#FFF";
+        g.fillRect(px - 1, 0, 3, h);
+        g.fillStyle = "#000";
+        g.fillRect(px, 1, 1, h - 2);
+      });
+    }
+    if (!listEl) return;
+    listEl.textContent = "";
+    if (!isGrad()) {
+      var note = document.createElement("div");
+      note.className = "fy-dialog-hint";
+      note.textContent = "This " + which + " is a solid colour. Pick Linear or " +
+        "Radial above and it becomes a two-stop gradient seeded from it.";
+      listEl.appendChild(note);
+      return;
+    }
+    stops.forEach(function (s, i) {
+      var row = document.createElement("div");
+      row.className = "props-row filter-stop";
+      var sw = document.createElement("span");
+      sw.className = "props-swatch";
+      var hex = "#" + ("000000" + (s.color & 0xffffff).toString(16)).slice(-6);
+      sw.style.backgroundColor = hex;
+      sw.title = "This stop's colour";
+      sw.addEventListener("click", function (e) {
+        e.stopPropagation();
+        showCP(hex, function (nc) {
+          pushUndo();
+          var all = gradientStops(o, which);
+          all[i].color = parseInt(String(nc).replace("#", ""), 16) | 0;
+          setGradientStops(o, all, which);
+          fullRefresh();
+          draw();
+        });
+      });
+      row.appendChild(sw);
+
+      var pos = document.createElement("input");
+      pos.className = "props-input";
+      pos.type = "text";
+      pos.style.width = "44px";
+      pos.value = Math.round(s.ratio * 100);
+      pos.title = "Position, 0 to 100 per cent";
+      pos.addEventListener("change", function () {
+        var v = parseFloat(pos.value);
+        if (isNaN(v)) return;
+        pushUndo();
+        var all = gradientStops(o, which);
+        all[i].ratio = Math.max(0, Math.min(1, v / 100));
+        setGradientStops(o, all, which);
+        fullRefresh();
+        draw();
+      });
+      row.appendChild(pos);
+
+      var al = document.createElement("input");
+      al.type = "range";
+      al.className = "props-slider";
+      al.min = 0; al.max = 1; al.step = 0.01;
+      al.value = s.alpha == null ? 1 : s.alpha;
+      al.title = "This stop's opacity";
+      al.addEventListener("input", function () {
+        var all = gradientStops(o, which);
+        all[i].alpha = parseFloat(al.value);
+        setGradientStops(o, all, which);
+        render();
+        draw();
+      });
+      al.addEventListener("change", function () { touchDoc(); });
+      row.appendChild(al);
+
+      var rm = document.createElement("button");
+      rm.className = "props-btn-action";
+      rm.textContent = "✕";
+      rm.disabled = stops.length <= 2;
+      rm.title = stops.length > 2 ? "Remove this stop"
+                                  : "A gradient needs at least two stops";
+      rm.addEventListener("click", function () {
+        pushUndo();
+        var r = removeGradientStop(o, i, which);
+        if (!r.ok) { doUndo(); return; }
+        fullRefresh();
+        draw();
+      });
+      row.appendChild(rm);
+      listEl.appendChild(row);
+    });
+  };
+
+  showDialog({
+    title: "Gradient — " + (which === "stroke" ? "Stroke" : "Fill"),
+    message: "Click the strip to add a stop where you click; it takes the " +
+             "colour the gradient already has there, so adding one does not " +
+             "change the gradient.",
+    fields: [
+      { name: "kind", label: "Type", type: "select", value: kindOf(),
+        options: [["solid", "Solid"], ["linear", "Linear"], ["radial", "Radial"]],
+        onChange: function (v) {
+          pushUndo();
+          if (v === "solid") flattenGradient(o, which);
+          else if (!isGrad()) makeGradient(o, v, which);
+          else if (which === "stroke") o.strokeFillType = v;
+          else o.fillType = v;
+          fullRefresh();
+          draw();
+        } },
+      { name: "overflow", label: "Overflow", type: "select",
+        value: (which === "stroke" ? o.strokeOverflow : o.fillOverflow) || "pad",
+        options: GRADIENT_OVERFLOW,
+        hint: "What happens outside the gradient's own span. Reflect and " +
+              "Repeat are the only way to get a stripe pattern out of two " +
+              "stops.",
+        onChange: function (v) {
+          pushUndo();
+          if (which === "stroke") o.strokeOverflow = v; else o.fillOverflow = v;
+          fullRefresh();
+        } },
+      { name: "focal", label: "Focal point", type: "number",
+        value: Math.round(((which === "stroke" ? o.strokeFocal : o.fillFocal) || 0) * 100),
+        min: -100, max: 100,
+        hint: "Radial only: moves the highlight off centre, which is what " +
+              "makes a sphere look lit rather than flat.",
+        onChange: function (v) {
+          pushUndo();
+          var f = Math.max(-1, Math.min(1, (parseFloat(v) || 0) / 100));
+          if (which === "stroke") o.strokeFocal = f; else o.fillFocal = f;
+          fullRefresh();
+        } }
+    ],
+    build: function (body) {
+      strip = document.createElement("canvas");
+      strip.className = "props-ramp grad-strip";
+      strip.width = 220; strip.height = 18;
+      strip.style.cssText = "width:220px;height:18px;display:block;margin:4px auto;" +
+                            "border:1px solid #1a1a1a;border-radius:2px;cursor:crosshair";
+      strip.title = "Click to add a stop here";
+      strip.addEventListener("click", function (e) {
+        if (!isGrad()) return;
+        var r = strip.getBoundingClientRect();
+        pushUndo();
+        var res = addGradientStop(o, (e.clientX - r.left) / r.width, which);
+        if (!res.ok) { doUndo(); showMessage("Gradient", res.why + "."); return; }
+        fullRefresh();
+        draw();
+      });
+      body.appendChild(strip);
+      listEl = document.createElement("div");
+      listEl.className = "grad-stops";
+      body.appendChild(listEl);
+      draw();
+    },
+    okLabel: "Close",
+    noCancel: true
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -22064,7 +22491,12 @@ function exportRuntime(data, canvas, options) {
       colors.push(o.fillStops[i + 1] | 0);
       alphas.push((o.fillStops[i + 2] == null ? 1 : o.fillStops[i + 2]) * mul);
     }
-    g.beginGradientFill(t, colors, alphas, ratios, p0[0], p0[1], p1[0], p1[1]);
+    /* The overflow mode and the focal point travel too. Without them a
+       reflected gradient on the stage published as a plain one, which is the
+       divergence class this project keeps rediscovering. */
+    g.beginGradientFill(t, colors, alphas, ratios, p0[0], p0[1], p1[0], p1[1],
+                        { overflow: o.fillOverflow || "pad",
+                          focal: o.fillFocal || 0 });
     return true;
   }
 
@@ -23614,13 +24046,29 @@ function _svgGradient(o) {
              '" stop-color="' + hexc + '" stop-opacity="' + a + '"/>';
   }
   var body;
+  /* SVG has the overflow mode natively, as `spreadMethod` -- which is the one
+     place of the four render paths where it does not have to be faked by
+     tiling the stops. The names even match Flash's: pad, reflect, repeat. */
+  var spread = o.fillOverflow && o.fillOverflow !== "pad"
+    ? ' spreadMethod="' + o.fillOverflow + '"' : "";
   if (t === "radial") {
     var r = Math.hypot(g[2] - g[0], g[3] - g[1]) || 0.5;
+    /* The focal point is `fx`/`fy`: SVG's own name for the same thing, and
+       the same meaning -- the inner circle of the gradient moves and the
+       outer one does not. */
+    var focal = Math.max(-0.95, Math.min(0.95, o.fillFocal || 0));
+    var fxy = "";
+    if (focal) {
+      var ux = (g[2] - g[0]) / (r || 1), uy = (g[3] - g[1]) / (r || 1);
+      fxy = ' fx="' + (g[0] + ux * focal * r) + '" fy="' +
+            (g[1] + uy * focal * r) + '"';
+    }
     body = '<radialGradient id="' + id + '" cx="' + g[0] + '" cy="' + g[1] +
-           '" r="' + r + '">' + stops + '</radialGradient>';
+           '" r="' + r + '"' + fxy + spread + '>' + stops + '</radialGradient>';
   } else {
     body = '<linearGradient id="' + id + '" x1="' + g[0] + '" y1="' + g[1] +
-           '" x2="' + g[2] + '" y2="' + g[3] + '">' + stops + '</linearGradient>';
+           '" x2="' + g[2] + '" y2="' + g[3] + '"' + spread + '>' +
+           stops + '</linearGradient>';
   }
   return { defs: '<defs>' + body + '</defs>', ref: 'url(#' + id + ')' };
 }
@@ -25746,6 +26194,19 @@ function init(){
     recodeAllSounds: recodeAllSounds,
     soundBytes: soundBytes,
     samplesToWAV: samplesToWAV,
+    /* The gradient editor: stops, overflow, focal point, and the stroke's
+       own gradient -- none of which could be authored before. */
+    GRADIENT_OVERFLOW: GRADIENT_OVERFLOW,
+    gradientStops: gradientStops,
+    setGradientStops: setGradientStops,
+    gradientAt: gradientAt,
+    addGradientStop: addGradientStop,
+    removeGradientStop: removeGradientStop,
+    makeGradient: makeGradient,
+    flattenGradient: flattenGradient,
+    isGradient: isGradient,
+    isStrokeGradient: isStrokeGradient,
+    overflowStops: overflowStops,
     docFonts: docFonts,
     fontsInUse: fontsInUse,
     embedCharsFor: embedCharsFor,

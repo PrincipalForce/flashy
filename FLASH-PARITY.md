@@ -1030,3 +1030,75 @@ a name, inserted at the caret.
     through `flashy-swf.js` — the project’s own parser, which is the only
     check worth having on a format where one misplaced bit makes everything
     after it unreadable.
+
+---
+
+## Second pass — what the first eleven tables never asked about
+
+The audit above reached "zero missing", and that was only true of its own
+enumeration. Those eleven tables were written from one reading of a Flash
+authoring environment, and a reading has blind spots. Going back to the tool
+and asking what ELSE is on its menus and in its hands turns up thirteen things
+the first pass never had a row for.
+
+| Area | What is missing | Status |
+|---|---|---|
+| **Gradient fills** | No stop editor at all — more than two stops could exist in the save format and could not be authored. No overflow mode, no radial focal point, no gradient on a stroke. | ✅ Wave 14 |
+| **Drawing model** | Flash had two: Object Drawing, and the MERGE model where a new shape cuts and unions the ones it lands on. Flashy is object-only. | ⬜ |
+| **Free Transform** | Scale, rotate and skew. No Distort (drag one corner freely) and no Envelope (Bézier warp). | ⬜ |
+| **Stroke styles** | Solid, dashed and dotted. No hairline, ragged, stipple or hatched, and no stroke-scaling mode. | ⬜ |
+| **Animated GIF** | "Export as Sprite Sheet" produces a PNG sheet. There is no animated GIF — the format the web still actually uses for a short loop. | ⬜ |
+| **Per-bitmap export settings** | Sounds got per-asset settings in Wave 11; bitmaps did not. | ⬜ |
+| **Document units** | Everything is pixels. No inches, centimetres, millimetres or points for the rulers, the grid or the Info panel. | ⬜ |
+| **Grid settings** | Show/hide and snap only — no spacing, colour or snap accuracy. | ⬜ |
+| **Motion Editor** | A custom easing curve per TWEEN exists; a curve per PROPERTY (CS4's Motion Editor) does not. | ⬜ |
+| **Deco / Spray brush** | Absent. | ⬜ |
+| **Bone tool / IK** | Character rigs with poses exist; an IK chain with constrained joints does not. | ⬜ |
+| **Cache as bitmap** | Absent. | ⬜ |
+| **Video** | Import, a video object, cue points. Absent — needs a demuxer. | ⬜ |
+| **ActionScript 3** | Absent — needs a compiler and an AVM2. | ⬜ |
+
+### Wave 14 — the gradient editor
+
+69. ✅ **Gradient stops, overflow, focal point, and gradients on strokes.**
+
+    `fillStops` had been in the save format and in the painter since gradients
+    arrived, and nothing could author it. The Properties panel said so in a
+    comment — *"there is no stop editor yet, so switching away from one is a
+    one-way trip"* — which made a gradient something a document could only
+    acquire by being imported from a `.swf`. That is the same shape as
+    `renderAsHtml`, `skewX`, `layerHeight` and `kf.label`: a field the format
+    carried and nothing honoured. It is the fifth.
+
+    Three things were missing beside it, and all three are visible:
+
+    * **Overflow** — Extend, Reflect, Repeat. The only way to get a stripe
+      pattern or a soft-edged sphere out of two stops.
+    * **Focal point** — a radial gradient whose highlight is off-centre, which
+      is what makes a sphere look lit rather than flat.
+    * **A gradient on a STROKE.** Flash allowed it; the data model here only
+      ever had one gradient, on the fill.
+
+    The spec caught a real bug in the first attempt, and it is worth writing
+    down because it very nearly passed: **tiling the stop list is only half of
+    an overflow mode.** Repeating the ramp inside the gradient’s own span
+    still pads outside it — so a reflected gradient came out looking like a
+    squashed one rather than a repeating one. The GEOMETRY has to extend too:
+    the span is laid out seven tiles wide with the original in the middle, and
+    a tiled radial grows its outer radius instead, because there is no "before
+    the centre" to extend into.
+
+    That is why the builder ended up in `Flashy.Gradient` rather than in the
+    painter. Four things draw gradients, three of them go through the engine,
+    and two copies of "extend the geometry and tile the stops" would drift
+    exactly the way the four renderers once did. The SVG export is the
+    exception and deliberately so: it has `spreadMethod` and `fx` natively, so
+    it says what it means instead of faking it.
+
+    Adding a stop takes the colour the gradient already has there, so it
+    changes nothing — it just gives you something to grab. Flattening takes
+    the MIDDLE of the ramp, not the first stop: a fade to transparent would
+    otherwise flatten to something invisible, and losing the artwork is worse
+    than losing the gradient.
+
+    Covered by `tests/gradients.spec.js` (16 specs).
