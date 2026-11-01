@@ -7,6 +7,7 @@
   "exports": {
     ".": "./flashy.js",
     "./swf": "./flashy-swf.js",
+    "./swf-write": "./flashy-swf-write.js",
     "./fla": "./flashy-fla.js",
     "./avm1": "./flashy-avm1.js",
     "./abc": "./flashy-abc.js",
@@ -45,6 +46,7 @@
   "files": [
     "flashy.js",
     "flashy-swf.js",
+    "flashy-swf-write.js",
     "flashy-fla.js",
     "flashy-avm1.js",
     "flashy-abc.js",
@@ -94,6 +96,7 @@
       "icon.svg",
       "flashy.js",
       "flashy-swf.js",
+      "flashy-swf-write.js",
       "flashy-fla.js",
       "flashy-avm1.js",
       "flashy-abc.js",

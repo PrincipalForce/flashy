@@ -500,6 +500,7 @@ var menus=[
     {label:"Export as SVG...",action:"exportSVG"},
     {label:"Export Embed Snippet...",action:"exportEmbed"},
     {label:"Export as JS Module...",action:"exportModule"},
+    {label:"Export as SWF...",action:"exportSWF"},
     {type:"sep"},
     {label:"Document Settings...",action:"docSettings"},
     {label:"Publish Settings...",action:"publishSettings"},
@@ -10593,6 +10594,9 @@ function doActionInner(a){
   case "exportModule":
     exportAsModule();
     break;
+  case "exportSWF":
+    exportAsSWF();
+    break;
   case "publishSettings":
     showPublishSettingsDialog();
     break;
@@ -16597,7 +16601,10 @@ function exportRuntime(data, canvas, options) {
 function docPublish(){
   if(!doc.publish)doc.publish={};
   var p=doc.publish;
-  if(!p.targets)p.targets={html:true,sprite:false,video:false,svg:false,module:false};
+  if(!p.targets){
+    p.targets={html:true,sprite:false,video:false,svg:false,module:false,swf:false};
+  }
+  if(p.targets.swf==null)p.targets.swf=false;
   if(p.title==null)p.title="Flashy Animation";
   if(p.loop==null)p.loop=true;
   if(p.showAll==null)p.showAll=true;        // hidden layers publish, as in Flash
@@ -16614,7 +16621,8 @@ var PUBLISH_TARGETS=[
   ["sprite","Sprite sheet","exportGIF"],
   ["video","Video (WebM/MP4)","exportMP4"],
   ["svg","SVG (current frame)","exportSVG"],
-  ["module","JS module","exportModule"]
+  ["module","JS module","exportModule"],
+  ["swf","SWF (Flash movie)","exportSWF"]
 ];
 
 function showPublishSettingsDialog(){
@@ -16629,6 +16637,7 @@ function showPublishSettingsDialog(){
       {name:"video",label:"Video (WebM/MP4)",type:"checkbox",value:!!p.targets.video},
       {name:"svg",label:"SVG (current frame)",type:"checkbox",value:!!p.targets.svg},
       {name:"module",label:"JS module",type:"checkbox",value:!!p.targets.module},
+      {name:"swf",label:"SWF (Flash movie)",type:"checkbox",value:!!p.targets.swf},
       {name:"title",label:"Page title",value:p.title},
       {name:"loop",label:"Loop playback",type:"checkbox",value:!!p.loop},
       {name:"scaleMode",label:"Scale",type:"select",value:p.scaleMode,
@@ -16650,7 +16659,7 @@ function showPublishSettingsDialog(){
       pushUndo();
       p.targets={
         html:!!v.html,sprite:!!v.sprite,video:!!v.video,
-        svg:!!v.svg,module:!!v.module
+        svg:!!v.svg,module:!!v.module,swf:!!v.swf
       };
       p.title=String(v.title||"Flashy Animation");
       p.loop=!!v.loop;
@@ -17509,6 +17518,77 @@ function _objToSVGRaw(o, depth) {
       return g+'</g></g>\n';
     default: return '';
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Export as SWF
+ *
+ * Flashy has read `.swf` and `.fla` since early on and could not write
+ * either, which made the import a one-way door: a movie could come in and
+ * never go back out.
+ *
+ * The writer covers shapes, symbols, frames, labels, the stage and the
+ * transforms. It cannot cover text, bitmaps, sounds, filters or scripts — each
+ * needs a subsystem of its own — so it REPORTS what it left out rather than
+ * handing over a file that quietly lost half the movie. The report is the
+ * feature: a silent omission in an export is the worst kind.
+ * ------------------------------------------------------------------ */
+function buildSWF(){
+  if(!window.FlashySWFWriter){
+    return {ok:false,reason:"module"};
+  }
+  // The whole movie, scenes laid end to end — the same document every other
+  // export path publishes.
+  var data=exportDocData();
+  var out=FlashySWFWriter.write(data,{});
+  return {ok:true,bytes:out.bytes,report:out.report,
+          missing:FlashySWFWriter.reportText(out.report)};
+}
+
+function exportAsSWF(){
+  var r=buildSWF();
+  if(!r.ok){
+    showMessage("Export as SWF",
+      "The SWF writer did not load. Reload the page and try again.");
+    return;
+  }
+  var rep=r.report;
+  var write=function(){
+    // A Blob rather than a data URI: a SWF is binary, and a megabyte of
+    // base64 in a URL is both slower and capped by the browser.
+    var blob=new Blob([r.bytes],{type:"application/x-shockwave-flash"});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement("a");
+    a.href=url;
+    a.download="animation.swf";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    outputLog("Wrote animation.swf — "+rep.shapes+" shape"+(rep.shapes===1?"":"s")+", "+
+              rep.sprites+" symbol"+(rep.sprites===1?"":"s")+", "+
+              rep.totalFrames+" frame"+(rep.totalFrames===1?"":"s")+", "+
+              Math.round(rep.bytes/1024)+" KB.");
+  };
+
+  if(r.missing){
+    /* Said BEFORE the download, not after: the point of the warning is to
+       stop somebody shipping a file they think is complete. */
+    showDialog({
+      title:"Export as SWF",
+      message:"The SWF will contain "+rep.shapes+" shape"+(rep.shapes===1?"":"s")+
+              ", "+rep.sprites+" symbol"+(rep.sprites===1?"":"s")+" and "+
+              rep.totalFrames+" frame"+(rep.totalFrames===1?"":"s")+".\n\n"+
+              "It will NOT contain: "+r.missing+".\n\n"+
+              "SWF stores those in formats this writer does not produce — "+
+              "glyph tables, JPEG and zlib streams, MP3 frames, filter tags "+
+              "and ActionScript bytecode. The HTML export carries all of them.",
+      okLabel:"Export anyway",
+      onOk:write
+    });
+    return;
+  }
+  write();
 }
 
 function exportEmbedSnippet() {
@@ -18994,6 +19074,8 @@ function init(){
     },
     publishAll: publishAll,
     sizeReport: sizeReport,
+    /** Write the document as a SWF, and say what was left out. */
+    exportSWF: function(){ return buildSWF(); },
     /* Swatches and components. */
     documentPalette: documentPalette,
     webSafePalette: webSafePalette,

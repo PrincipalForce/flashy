@@ -199,7 +199,7 @@ name — an entire class of Flash content is unreachable.
 | HTML template, dimensions, playback, scale | ◐ | Page title, background, loop, and four scale modes (match movie, fit, fill, percent) — all in CSS, so the canvas keeps its pixel size and the drawing stays sharp. A user-supplied HTML template and alignment remain. |
 | **Bandwidth Profiler / Size Report** | ✅ | Weight by kind and by asset, heaviest first, with a share bar per line; the busiest frame; and download times at 3G, 4G and broadband. Measured from the EXPORT document, so guides and scene structure are not counted — they are not published either. |
 | Protect from import, omit trace actions | ⬜ | Missing. |
-| SWF export | ⬜ | Flashy *reads* `.swf` and `.fla` but cannot write either. |
+| SWF export | ◐ | `flashy-swf-write.js` writes SWF 6: shapes (solid and gradient fills, real strokes), symbols as sprites, frames, labels, the stage, and transforms with alpha. Text, bitmaps, sounds, filters and scripts are REPORTED as missing rather than silently dropped. The project's own parser is the writer's test oracle. |
 
 ## 11. Document and workflow
 
@@ -315,5 +315,8 @@ Swatches**.
 29. ✅ **Publish Settings** — one dialog, persisted per document.
 30. ✅ **Bandwidth Profiler / Size Report**.
 31. ✅ **Movie Explorer**, **History panel**, **Color Swatches**.
-32. ⬜ **SWF export** — close the loop on the importer. The one headline item
-    still outstanding.
+32. ◐ **SWF export** — shapes, symbols, frames, labels, transforms and alpha,
+    with everything it cannot express reported rather than dropped. Text,
+    bitmaps, sound, filters and scripts remain: each needs a subsystem of its
+    own (glyph tables, JPEG/zlib, MP3 framing, filter tags, an ActionScript
+    assembler).
