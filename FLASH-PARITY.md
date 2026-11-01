@@ -73,12 +73,12 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Reverse Frames | ⬜ | Missing. |
 | Copy Motion / Paste Motion | ⬜ | Missing. |
 | Edit Multiple Frames | ⬜ | Missing. |
-| Layer folders | ⬜ | A rig with twenty parts is a flat twenty-row list. |
-| Guide layers | ⬜ | No way to keep a reference drawing out of the output. |
+| Layer folders | ✅ | The same flat-list-with-a-run idiom mask layers already use: a layer of type `folder`, and the layers beneath it at a greater `indent` are its contents. No tree to keep consistent, and reordering cannot orphan anything. Collapsing hides rows, never artwork. |
+| Guide layers | ✅ | Marked, shown on the stage and in onion skin, and stripped from every output — including out of the published file, not merely skipped by the player. |
 | Mask / Masked layers | ✅ | `maskGroups`, `applyMaskClip`. |
 | Motion guide layer (tween along a drawn path) | ⬜ | Missing. |
-| Layer height / tint / outline view, per layer | ⬜ | Missing. |
-| **Scenes** (Insert ▸ Scene, Scene panel, play in order) | ⬜ | The breadcrumb reads "Scene 1" but there is only ever one. |
+| Layer height / outline view, per layer | ✅ | Both were already stored, serialized and read by nothing — the inspector offered Short/Normal/Tall and an outline colour, and the layer list drew every row at a fixed 20px with no outline mode anywhere. The timeline no longer assumes `index * 20`. Per-layer tint is still missing. |
+| **Scenes** (Insert ▸ Scene, Scene panel, play in order) | ✅ | `doc.scenes`, with `doc.layers` a live alias of the current scene rather than a copy — the whole editor reaches `doc.layers` directly, and an alias cannot drift out of sync with a copy that does not exist. An export lays them end to end on one timeline with each name as a frame label, so `gotoAndPlay("Scene 2")` works. |
 | Timeline Effects | ⬜ | Missing (low value — Adobe deprecated them too). |
 
 ## 4. Symbols and Library

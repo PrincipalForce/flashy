@@ -504,7 +504,16 @@ var menus=[
     {label:"Frame",action:"insFrame",shortcut:"F5"},
     {type:"sep"},
     {label:"Layer",action:"addLayer"},
-    {label:"Delete Layer",action:"delLayer"}
+    {label:"Layer Folder",action:"addFolder"},
+    {type:"sep"},
+    {label:"Scene",action:"addSceneAction"},
+    {label:"Duplicate Scene",action:"duplicateScene"},
+    {label:"Rename Scene...",action:"renameScene"},
+    {label:"Delete Scene...",action:"deleteSceneAction"},
+    {label:"Delete Layer",action:"delLayer"},
+    {type:"sep"},
+    {label:"Collapse All Folders",action:"foldersCollapseAll"},
+    {label:"Expand All Folders",action:"foldersExpandAll"}
   ]},
   {label:"Modify",items:[
     {label:"Convert to Symbol...",action:"convertSym",shortcut:"F8"},
@@ -572,7 +581,10 @@ var menus=[
     {label:"Test Movie",action:"test",shortcut:"Ctrl+Enter"},
     {type:"sep"},
     {label:"Go to First Frame",action:"gotoFirst",shortcut:"Home"},
-    {label:"Go to Last Frame",action:"gotoLast",shortcut:"End"}
+    {label:"Go to Last Frame",action:"gotoLast",shortcut:"End"},
+    {type:"sep"},
+    {label:"Previous Scene",action:"prevScene",shortcut:"Ctrl+PgUp"},
+    {label:"Next Scene",action:"nextScene",shortcut:"Ctrl+PgDn"}
   ]},
   // Window — panel visibility and workspace arrangement. The shortcuts are
   // Flash's own (F9 Actions, Shift+F9 Color Mixer, Ctrl+L Library,
@@ -585,6 +597,7 @@ var menus=[
     {label:"Align",action:"winAlign",shortcut:"Ctrl+K"},
     {label:"Info",action:"winInfo",shortcut:"Ctrl+I"},
     {label:"Transform",action:"winTransform",shortcut:"Ctrl+T"},
+    {label:"Scene",action:"winScene",shortcut:"Shift+F2"},
     {label:"AI Assistant",action:"winAI"},
     {type:"sep"},
     {label:"Workspace: Animation",action:"wsAnimation"},
@@ -1073,9 +1086,22 @@ function render(){
       ctx.save();
       applyMaskClip(ctx,frameObjects([group.mask],curFrame));
     }
-    rigDrawPlan(frameObjects(group.layers,curFrame)).forEach(function(e){
-      paintPlanned(ctx,e,{chrome:true});
-    });
+    /* Layer by layer rather than all at once, because a layer in outline
+       view is painted differently. Bottom first, the order frameObjects uses
+       for a whole group, so splitting it up cannot change what is in front. */
+    for(var li=group.layers.length-1;li>=0;li--){
+      var lay=group.layers[li];
+      if(isFolderLayer(lay))continue;       // a folder holds no artwork
+      var objs=frameObjects([lay],curFrame);
+      if(!objs.length)continue;
+      if(lay.outlines){
+        drawLayerOutlines(ctx,objs,lay.outlineColor||"#4488CC");
+        continue;
+      }
+      rigDrawPlan(objs).forEach(function(e){
+        paintPlanned(ctx,e,{chrome:true});
+      });
+    }
     if(clipped)ctx.restore();
   }
   // Rig overlay sits above the artwork but inside the stage transform, so the
@@ -1157,6 +1183,26 @@ function drawOnionSkin(){
     }
     ctx.restore();
   });
+}
+
+/**
+ * A layer drawn as outlines, in the layer's own colour.
+ *
+ * This is what `outlineColor` was always for. Seeing a layer as outlines is
+ * how you work on what is underneath it without hiding it — and giving each
+ * layer its own colour is how you tell three of them apart.
+ */
+function drawLayerOutlines(cx,objs,colour){
+  cx.save();
+  cx.strokeStyle=colour;
+  cx.lineWidth=1/zoom;
+  cx.setLineDash([]);
+  for(var i=0;i<objs.length;i++){
+    cx.beginPath();
+    addObjectOutline(cx,objs[i]);
+    cx.stroke();
+  }
+  cx.restore();
 }
 
 /** Keep the timeline header's onion-skin controls in step with the state. */
@@ -4745,10 +4791,15 @@ function updateLayers(){
   lp.textContent="";
   var layers=currentLayers();
   var dragLayerIdx=-1;
-  layers.forEach(function(l,i){
+  // Over the ROWS, not the layer array: a collapsed folder's contents have no
+  // row, and each row carries its own height.
+  layerRowLayout(layers).rows.forEach(function(rowInfo){
+    var l=rowInfo.layer,i=rowInfo.index;
     var row=document.createElement("div");
-    row.className="layer-row"+(i===curLayer?" active":"");
-    row.style.height=TL_FH+"px";
+    row.className="layer-row"+(i===curLayer?" active":"")+(isFolderLayer(l)?" folder":"");
+    row.style.height=rowInfo.h+"px";
+    // Indentation is what makes a folder's contents read as its contents.
+    if(l.indent)row.style.paddingLeft=(4+(l.indent*12))+"px";
     row.draggable=true;
     row.dataset.layerIdx=i;
     // Drag to reorder
@@ -4777,9 +4828,33 @@ function updateLayers(){
       }
       dragLayerIdx=-1;
     });
+    if(isFolderLayer(l)){
+      /* The disclosure triangle. Collapsing a folder hides its rows from the
+         list and nothing else — the artwork stays on the stage, which is the
+         only reading that lets you tidy a twenty-part rig without changing
+         what it looks like. */
+      var tri=document.createElement("button");
+      tri.className="layer-btn layer-disclose";
+      tri.textContent=l.folderOpen===false?"▸":"▾";
+      tri.title=l.folderOpen===false?"Expand folder":"Collapse folder";
+      tri.addEventListener("click",function(e){
+        e.stopPropagation();
+        l.folderOpen=l.folderOpen===false;
+        fullRefresh();
+      });
+      row.appendChild(tri);
+    }
     var nameSpan=document.createElement("span");
     nameSpan.className="layer-name";
     nameSpan.textContent=l.name;
+    if(isFolderLayer(l))nameSpan.style.fontStyle="italic";
+    /* A guide layer's name says so: it is the only visible difference between
+       reference art and art that will be in the movie, and getting that wrong
+       means shipping your pencil test. */
+    if((l.layerType||"normal")==="guide"){
+      nameSpan.textContent=l.name+"  (guide)";
+      nameSpan.style.color="#8ab";
+    }
     nameSpan.addEventListener("dblclick",function(ev){
       ev.stopPropagation();
       askFor("Rename Layer","Name",l.name,function(nn){
@@ -4812,6 +4887,23 @@ function updateLayers(){
     lockBtn.title="Toggle lock";
     lockBtn.addEventListener("click",function(e){e.stopPropagation();l.locked=!l.locked;fullRefresh();});
     row.appendChild(lockBtn);
+    if(!isFolderLayer(l)){
+      /* View as outlines. `outlineColor` was in the inspector and in the save
+         format and was read by no renderer at all — there was no outline mode
+         to use it. Seeing a layer as outlines is how you work on what is
+         underneath it without hiding it. */
+      var outBtn=document.createElement("button");
+      outBtn.className="layer-btn"+(l.outlines?" on":"");
+      outBtn.textContent=l.outlines?"▣":"□";
+      outBtn.title="View this layer as outlines";
+      if(l.outlines)outBtn.style.color=l.outlineColor||"#4488CC";
+      outBtn.addEventListener("click",function(e){
+        e.stopPropagation();
+        l.outlines=!l.outlines;
+        fullRefresh();
+      });
+      row.appendChild(outBtn);
+    }
     row.addEventListener("click",function(){
       curLayer=i;
       var layer=currentLayers()[i];
@@ -4832,6 +4924,12 @@ function updateLayers(){
   var addTxt=document.createElement("span");addTxt.textContent="Layer";addBtn.appendChild(addTxt);
   addBtn.addEventListener("click",function(){doAction("addLayer");});
   btnBar.appendChild(addBtn);
+  var folderBtn=document.createElement("button");
+  folderBtn.style.cssText="width:22px;height:18px;background:linear-gradient(to bottom,#555,#444);border:1px solid #666;border-bottom-color:#333;color:#DDD;cursor:pointer;font-size:11px;border-radius:2px;display:flex;align-items:center;justify-content:center;";
+  folderBtn.title="New Layer Folder — puts the current layer into it";
+  folderBtn.textContent="▱";
+  folderBtn.addEventListener("click",function(){doAction("addFolder");});
+  btnBar.appendChild(folderBtn);
   var delBtn=document.createElement("button");
   delBtn.style.cssText="width:22px;height:18px;background:linear-gradient(to bottom,#555,#444);border:1px solid #666;border-bottom-color:#333;color:#DDD;cursor:pointer;font-size:12px;border-radius:2px;display:flex;align-items:center;justify-content:center;";
   delBtn.title="Delete Layer";delBtn.textContent="\u2212";
@@ -4878,6 +4976,335 @@ function updateLayers(){
  * soundtrack workable, because you can see the whole thing at once.
  * ------------------------------------------------------------------ */
 var TL_FH=20,TL_HDR=16;
+
+/* ------------------------------------------------------------------ *
+ * Layer rows: height, folders, and the y geometry both halves share
+ *
+ * `layerHeight` and `outlineColor` have been on every layer since the
+ * beginning, were serialized, and were read by nothing: the Property
+ * inspector offered Short/Normal/Tall and an outline colour, and the layer
+ * list drew every row at a fixed 20px with no outline mode anywhere. Both are
+ * real now, which means the timeline can no longer assume `index * TL_FH`.
+ *
+ * Folders are the same flat-list-with-a-run idiom mask layers already use: a
+ * layer of type "folder", and the layers beneath it with a greater `indent`
+ * are its contents. There is no tree to keep consistent, reordering cannot
+ * orphan anything, and a document written before folders existed loads with
+ * every indent at zero.
+ * ------------------------------------------------------------------ */
+var LAYER_HEIGHTS={short:13,normal:20,tall:34};
+
+function layerRowHeight(l){
+  return LAYER_HEIGHTS[l&&l.layerHeight]||LAYER_HEIGHTS.normal;
+}
+
+function isFolderLayer(l){return (l&&l.layerType||"normal")==="folder";}
+
+/** Layers inside a given folder: the run beneath it at a greater indent. */
+function folderChildren(layers,folderIdx){
+  var base=(layers[folderIdx]&&layers[folderIdx].indent)||0;
+  var out=[];
+  for(var i=folderIdx+1;i<layers.length;i++){
+    if((layers[i].indent||0)<=base)break;
+    out.push(i);
+  }
+  return out;
+}
+
+/**
+ * The rows the timeline shows, in order, with their y offsets.
+ *
+ * A collapsed folder's contents are hidden from the LIST but still render on
+ * the stage — collapsing a folder is an organisational act, not a visibility
+ * one, which is how Flash's folders behaved and is the only reading that lets
+ * you tidy a rig without changing what it looks like.
+ */
+function layerRowLayout(layersArg){
+  var layers=layersArg||currentLayers();
+  var rows=[],y=TL_HDR,hideAbove=-1;
+  for(var i=0;i<layers.length;i++){
+    var l=layers[i];
+    var ind=l.indent||0;
+    if(hideAbove>=0){
+      if(ind>hideAbove)continue;
+      hideAbove=-1;
+    }
+    var h=layerRowHeight(l);
+    rows.push({index:i,layer:l,y:y,h:h});
+    y+=h;
+    if(isFolderLayer(l)&&l.folderOpen===false)hideAbove=ind;
+  }
+  return {rows:rows,total:y,layers:layers};
+}
+
+/** Which layer index a timeline y coordinate falls on, or -1. */
+function layerAtY(y,layersArg){
+  var lay=layerRowLayout(layersArg);
+  for(var i=0;i<lay.rows.length;i++){
+    var r=lay.rows[i];
+    if(y>=r.y&&y<r.y+r.h)return r.index;
+  }
+  // Past the last row: clamp to it, so a drag that runs off the bottom
+  // selects to the end rather than snapping back to nothing.
+  if(lay.rows.length&&y>=lay.total)return lay.rows[lay.rows.length-1].index;
+  return -1;
+}
+
+/* ================================================================== *
+ * Scenes
+ *
+ * The breadcrumb has read "Scene 1" since the beginning and there was only
+ * ever one. A scene is a whole timeline of its own, and scenes play in order —
+ * which is how anyone storyboards something longer than a loop without
+ * stacking every shot on one timeline and juggling frame numbers.
+ *
+ * `doc.scenes` is the list of {name, layers, totalFrames}; `doc.layers` is a
+ * LIVE ALIAS of the current scene's layers, not a copy. Everything in the
+ * editor reaches `doc.layers` directly and has done from the start, so making
+ * the current scene the thing that array points at is the only change that
+ * does not need all of it rewritten — and it cannot drift out of sync with a
+ * copy, because there is no copy.
+ * ================================================================== */
+
+/** Normalise `doc.scenes`, creating one from `doc.layers` if there is none. */
+function docScenes(){
+  if(!Array.isArray(doc.scenes)||!doc.scenes.length){
+    doc.scenes=[{name:"Scene 1",layers:doc.layers,totalFrames:doc.totalFrames||60}];
+    doc.sceneIndex=0;
+  }
+  if(doc.sceneIndex==null||doc.sceneIndex<0||doc.sceneIndex>=doc.scenes.length){
+    doc.sceneIndex=0;
+  }
+  // The alias. If something has replaced doc.layers wholesale — File ▸ New,
+  // an import, the AI assistant — the scene record follows it rather than the
+  // editor quietly reverting to the old array.
+  var cur=doc.scenes[doc.sceneIndex];
+  if(cur.layers!==doc.layers){
+    if(doc.layers&&doc.layers.length)cur.layers=doc.layers;
+    else doc.layers=cur.layers;
+  }
+  return doc.scenes;
+}
+
+function currentScene(){
+  var scenes=docScenes();
+  return scenes[doc.sceneIndex];
+}
+
+/**
+ * Write the live editing state back onto the current scene's record.
+ *
+ * `doc.layers` is an alias so it needs no copying, but `doc.totalFrames`,
+ * `curFrame` and `curLayer` live on `doc` — and anything that reads the stored
+ * records (the panel, the export, the frame count) sees a stale number until
+ * they are parked. Forgetting this made a two-scene movie 68 frames long
+ * instead of 14, because the new scene's record still said 60.
+ */
+function parkCurrentScene(){
+  var scenes=docScenes();
+  var cur=scenes[doc.sceneIndex];
+  if(!cur)return;
+  cur.layers=doc.layers;
+  cur.totalFrames=doc.totalFrames;
+  cur._frame=curFrame;
+  cur._layer=curLayer;
+}
+
+/** How many frames a scene runs for. */
+function sceneLength(scene){
+  var m=1;
+  (scene.layers||[]).forEach(function(l){
+    var e=(typeof l.getFrameEnd==="function")?l.getFrameEnd()
+      :((l.keyframes||[]).reduce(function(a,k){return Math.max(a,k.index+k.duration-1);},1));
+    if(e>m)m=e;
+  });
+  return Math.max(m,scene.totalFrames||1);
+}
+
+/** Switch scenes, parking the current one's frame and layer so it comes back. */
+function gotoScene(idx){
+  var scenes=docScenes();
+  if(idx<0||idx>=scenes.length||idx===doc.sceneIndex)return false;
+  // Leaving a symbol first: the edit stack belongs to the scene you were in.
+  exitAllSymbols();
+  parkCurrentScene();
+  doc.sceneIndex=idx;
+  var next=scenes[idx];
+  doc.layers=next.layers;
+  doc.totalFrames=next.totalFrames||60;
+  curFrame=Math.max(1,next._frame||1);
+  curLayer=Math.max(0,Math.min(next._layer||0,doc.layers.length-1));
+  selection=[];selectedKF=null;tlSelRange=null;
+  touchDoc();
+  updateBreadcrumb();
+  fullRefresh();
+  return true;
+}
+
+function uniqueSceneName(base){
+  var names={};
+  docScenes().forEach(function(s){names[s.name]=true;});
+  base=String(base||"Scene").trim()||"Scene";
+  if(!names[base])return base;
+  for(var i=2;i<999;i++)if(!names[base+" "+i])return base+" "+i;
+  return base+" "+Date.now();
+}
+
+function addScene(opts){
+  opts=opts||{};
+  var scenes=docScenes();
+  // Park the current scene before touching the list, or its edits — and the
+  // frame you were on, which you expect to come back to — are lost.
+  parkCurrentScene();
+  var scene;
+  if(opts.duplicate){
+    var src=scenes[doc.sceneIndex];
+    scene={
+      name:uniqueSceneName(src.name+" copy"),
+      layers:src.layers.map(function(l){
+        var nl=new Layer(l.name);
+        nl.visible=l.visible;nl.locked=l.locked;
+        nl.layerType=l.layerType;nl.outlineColor=l.outlineColor;
+        nl.layerHeight=l.layerHeight;nl.indent=l.indent||0;
+        nl.folderOpen=l.folderOpen!==false;nl.outlines=!!l.outlines;
+        nl.keyframes=l.keyframes.map(function(k){return k.clone();});
+        return nl;
+      }),
+      totalFrames:src.totalFrames
+    };
+  }else{
+    // "Scene 2", not "Scene": the default name has to carry its number, or
+    // the breadcrumb reads "Scene" and the panel lists two things called
+    // almost the same.
+    scene={name:uniqueSceneName(opts.name||("Scene "+(scenes.length+1))),
+           layers:[new Layer("Layer 1")],totalFrames:60};
+  }
+  scenes.splice(doc.sceneIndex+1,0,scene);
+  // Switching to it is the point of making it.
+  doc.sceneIndex=doc.sceneIndex+1;
+  doc.layers=scene.layers;
+  doc.totalFrames=scene.totalFrames;
+  curFrame=1;curLayer=0;selection=[];selectedKF=null;tlSelRange=null;
+  touchDoc();
+  updateBreadcrumb();
+  fullRefresh();
+  return scene;
+}
+
+function deleteScene(idx){
+  var scenes=docScenes();
+  if(scenes.length<2)return false;
+  if(idx<0||idx>=scenes.length)return false;
+  scenes.splice(idx,1);
+  var next=Math.max(0,Math.min(idx,scenes.length-1));
+  doc.sceneIndex=-1;             // force gotoScene to do the work
+  var target=scenes[next];
+  doc.sceneIndex=next;
+  doc.layers=target.layers;
+  doc.totalFrames=target.totalFrames||60;
+  curFrame=1;curLayer=0;selection=[];selectedKF=null;tlSelRange=null;
+  touchDoc();
+  updateBreadcrumb();
+  fullRefresh();
+  return true;
+}
+
+function moveScene(idx,dir){
+  var scenes=docScenes();
+  var to=idx+dir;
+  if(idx<0||idx>=scenes.length||to<0||to>=scenes.length)return false;
+  var moved=scenes.splice(idx,1)[0];
+  scenes.splice(to,0,moved);
+  // The current scene follows wherever it went.
+  if(doc.sceneIndex===idx)doc.sceneIndex=to;
+  else if(doc.sceneIndex===to)doc.sceneIndex=idx;
+  touchDoc();
+  updateBreadcrumb();
+  fullRefresh();
+  return true;
+}
+
+/**
+ * Every scene concatenated into one timeline, for output.
+ *
+ * Scenes play in order, and a published movie is one timeline — which is
+ * exactly what Flash's SWF did with them. Each scene's layers become their own
+ * layers, offset to the scene's start, with blank keyframes either side so the
+ * artwork exists only during its own scene. Scene names ride along as frame
+ * labels, so `gotoAndPlay("Scene 2")` works in an export.
+ *
+ * A single-scene document returns its own layers untouched, so nothing about
+ * the common case changes.
+ */
+function flattenScenes(){
+  var scenes=docScenes();
+  if(scenes.length<2)return outputLayers(doc.layers);
+  // Park the current scene so its live edits are in the output.
+  parkCurrentScene();
+
+  var out=[],at=1;
+  var labelLayer=new Layer("Scene labels");
+  labelLayer.keyframes=[];
+  scenes.forEach(function(scene){
+    var len=sceneLength(scene);
+    var lk=new KeyFrame(at);
+    lk.duration=len;
+    lk.label=scene.name;
+    labelLayer.keyframes.push(lk);
+    outputLayers(scene.layers).forEach(function(l){
+      var nl=new Layer(scenes.length>1?(scene.name+" / "+l.name):l.name);
+      nl.visible=l.visible;nl.locked=false;
+      nl.layerType=l.layerType;
+      nl.keyframes=[];
+      // A blank span before the scene starts, so nothing shows early.
+      if(at>1){
+        var pre=new KeyFrame(1);
+        pre.duration=at-1;
+        nl.keyframes.push(pre);
+      }
+      l.keyframes.forEach(function(k){
+        var c=k.clone();
+        c.index=k.index+at-1;
+        nl.keyframes.push(c);
+      });
+      // …and one after it ends, so it does not linger into the next scene.
+      var tail=new KeyFrame(at+len);
+      tail.duration=1;
+      nl.keyframes.push(tail);
+      out.push(nl);
+    });
+    at+=len;
+  });
+  // Labels last so they are the top layer and cannot be caught in a mask run.
+  out.push(labelLayer);
+  return out;
+}
+
+/** Total frames once the scenes are laid end to end. */
+function moviesTotalFrames(){
+  var scenes=docScenes();
+  if(scenes.length<2)return Math.max(1,doc.totalFrames||1);
+  // The live scene's length is on `doc`, not on its record.
+  parkCurrentScene();
+  var n=0;
+  scenes.forEach(function(s){n+=sceneLength(s);});
+  return Math.max(1,n);
+}
+
+/**
+ * Layers that reach the OUTPUT.
+ *
+ * A guide layer is reference art — a traced photo, a motion path, a
+ * registration cross — and the whole point of marking one is that it does not
+ * appear in the movie. It was marked, saved, and exported anyway. A folder
+ * holds no artwork of its own either.
+ */
+function outputLayers(layers){
+  return (layers||[]).filter(function(l){
+    var t=(l&&l.layerType)||"normal";
+    return t!=="guide"&&t!=="folder";
+  });
+}
 // Sub-pixel steps matter: a five-minute soundtrack is 7,200 frames, and at a
 // 1px floor "Fit" could not actually fit it. Below 1px/frame the individual
 // frame cells stop being meaningful, but the waveform band still shows its
@@ -4928,10 +5355,11 @@ function renderTLFrames(){
   var spacer=document.getElementById("tl-spacer");
   if(!wrap||!spacer)return;
   var layers=currentLayers();
-  var fw=TL_FW_(),fh=TL_FH;
+  var fw=TL_FW_();
+  var rowLayout=layerRowLayout(layers);
   var maxF=currentMaxFrame()+10;
   var totalW=maxF*fw;
-  var totalH=TL_HDR+layers.length*fh;
+  var totalH=rowLayout.total;
 
   // The spacer carries the real extent so native scrollbars behave; the
   // canvas is only ever viewport-sized, which is what keeps a long movie
@@ -4976,11 +5404,22 @@ function renderTLFrames(){
   }
   tlCtx.strokeStyle="#444";tlCtx.lineWidth=1;
   tlCtx.beginPath();tlCtx.moveTo(sx,sy+TL_HDR);tlCtx.lineTo(right,sy+TL_HDR);tlCtx.stroke();
-  // frames per layer
-  layers.forEach(function(l,li){
-    var y=TL_HDR+li*fh;
+  // frames per layer, over the ROWS rather than the layer array: a collapsed
+  // folder's contents have no row, and rows are not all the same height.
+  rowLayout.rows.forEach(function(rowInfo){
+    var l=rowInfo.layer,li=rowInfo.index;
+    var y=rowInfo.y,fh=rowInfo.h;
     // Rows scrolled out of view cost nothing.
     if(y+fh<sy||y>bottom)return;
+    if(isFolderLayer(l)){
+      // A folder has no keyframes of its own; its row is a band, so the
+      // layers it holds read as belonging to it.
+      tlCtx.fillStyle=li===curLayer?"#3A3A46":"#323238";
+      tlCtx.fillRect(sx,y,vw,fh);
+      tlCtx.strokeStyle="#4A4A52";tlCtx.lineWidth=1;
+      tlCtx.beginPath();tlCtx.moveTo(sx,y+fh-0.5);tlCtx.lineTo(right,y+fh-0.5);tlCtx.stroke();
+      return;
+    }
     // background for entire layer row
     tlCtx.fillStyle=li===curLayer?"#333":"#2C2C2C";
     tlCtx.fillRect(sx,y,vw,fh);
@@ -5063,8 +5502,14 @@ function renderTLFrames(){
   if(selR){
     var rx=(selR.f0-1)*fw;
     var rw=(selR.f1-selR.f0+1)*fw;
-    var ry=TL_HDR+selR.l0*fh;
-    var rh=(selR.l1-selR.l0+1)*fh;
+    // Row geometry, not index * height: rows differ in height and a collapsed
+    // folder's children have none at all.
+    var ry=TL_HDR,rh=0;
+    for(var ri=0;ri<rowLayout.rows.length;ri++){
+      var rr=rowLayout.rows[ri];
+      if(rr.index===selR.l0)ry=rr.y;
+      if(rr.index>=selR.l0&&rr.index<=selR.l1)rh+=rr.h;
+    }
     tlCtx.fillStyle="rgba(68,136,204,0.2)";
     tlCtx.fillRect(rx,ry,rw,rh);
     tlCtx.strokeStyle="rgba(68,136,204,0.6)";tlCtx.lineWidth=1;
@@ -5267,8 +5712,8 @@ function initTLClicks(){
     var pos=tlPos(e);
     var mx=pos.x,my=pos.y;
     var f=Math.max(1,Math.floor(mx/TL_FW_())+1);
-    var li=Math.floor((my-TL_HDR)/TL_FH);
     var layers=currentLayers();
+    var li=layerAtY(my,layers);
     if(li>=0&&li<layers.length)curLayer=li;
     curFrame=f;
     // Shift-click extends the block from wherever it started, across layers as
@@ -5300,7 +5745,8 @@ function initTLClicks(){
       var sf=Math.max(1,Math.floor(sp.x/TL_FW_())+1);
       // Dragging up or down grows the block over those layers, so selecting a
       // span of an animation is one gesture rather than one per layer.
-      var sl=Math.max(0,Math.min(layers.length-1,Math.floor((sp.y-TL_HDR)/TL_FH)));
+      var sl=layerAtY(sp.y,layers);
+      if(sl<0)sl=Math.max(0,Math.min(layers.length-1,tlSelRange?tlSelRange.endLayerIdx:0));
       var changed=false;
       if(tlSelRange&&tlSelRange.endLayerIdx!==sl){tlSelRange.endLayerIdx=sl;changed=true;}
       if(sf!==curFrame){
@@ -5344,8 +5790,8 @@ function initTLClicks(){
     // Drop position chooses the frame and layer the sound lands on.
     var pos=tlPos(e);
     var f=Math.max(1,Math.floor(pos.x/TL_FW_())+1);
-    var li=Math.floor((pos.y-TL_HDR)/TL_FH);
     var layers=currentLayers();
+    var li=layerAtY(pos.y,layers);
     if(li>=0&&li<layers.length)curLayer=li;
     curFrame=f;
     if(isFlashFile(files[0]))importFlashFile(files[0]);
@@ -5357,8 +5803,8 @@ function initTLClicks(){
     e.preventDefault();
     var pos=tlPos(e);
     var f=Math.max(1,Math.floor(pos.x/TL_FW_())+1);
-    var li=Math.floor((pos.y-TL_HDR)/TL_FH);
     var layers=currentLayers();
+    var li=layerAtY(pos.y,layers);
     if(li>=0&&li<layers.length)curLayer=li;
     curFrame=f;
     var rangeInfo=tlRangeLabel();
@@ -5942,13 +6388,32 @@ function updateProps(){
          linked them by indentation; here the pair is a mask layer and the
          run of masked layers directly beneath it. */
       row("Type",curLayerObj.layerType||"normal",function(v){pushUndo();curLayerObj.layerType=v;fullRefresh();},
-        {type:"select",width:"80px",options:[["normal","Normal"],["guide","Guide"],["mask","Mask"],["masked","Masked"]]});
+        {type:"select",width:"80px",options:[["normal","Normal"],["guide","Guide"],
+          ["folder","Folder"],["mask","Mask"],["masked","Masked"]]});
+      if((curLayerObj.layerType||"normal")==="guide"){
+        note("A guide layer is reference art: it shows on the stage and in "+
+             "onion skin, and it is left out of every export.");
+      }
+      row("Outline view",!!curLayerObj.outlines,function(v){
+        pushUndo();curLayerObj.outlines=v;fullRefresh();
+      },{type:"checkbox"});
+      row("Indent",curLayerObj.indent||0,function(v){
+        pushUndo();
+        curLayerObj.indent=Math.max(0,Math.min(8,parseInt(v,10)||0));
+        fullRefresh();
+      },{type:"number",width:"45px"});
 
       // Outline color
-      colorRow("Outline",curLayerObj.outlineColor||"#4488CC",function(nc){pushUndo();curLayerObj.outlineColor=nc;});
+      colorRow("Outline",curLayerObj.outlineColor||"#4488CC",function(nc){
+        pushUndo();curLayerObj.outlineColor=nc;fullRefresh();
+      });
 
       // Layer height
-      row("Height",curLayerObj.layerHeight||"normal",function(v){pushUndo();curLayerObj.layerHeight=v;},{type:"select",width:"80px",options:[["short","Short"],["normal","Normal"],["tall","Tall"]]});
+      // fullRefresh, not nothing: the layer row and the timeline canvas both
+      // read layerHeight now, and neither repaints on its own.
+      row("Height",curLayerObj.layerHeight||"normal",function(v){
+        pushUndo();curLayerObj.layerHeight=v;fullRefresh();
+      },{type:"select",width:"80px",options:[["short","Short"],["normal","Normal"],["tall","Tall"]]});
 
       // Layer order buttons
       actionRow([
@@ -6500,6 +6965,103 @@ function updateTransformPanel(){
       selection.length+" objects.";
     host.appendChild(m);
   }
+}
+
+/**
+ * The Scene panel: the movie's scenes, in playing order.
+ *
+ * Reordering is the point as much as switching is — a storyboard gets
+ * rearranged, and the alternative is cutting and pasting whole timelines.
+ */
+function updateScenePanel(){
+  var host=document.getElementById("scenePanel");
+  if(!host)return;
+  host.textContent="";
+  var scenes=docScenes();
+
+  alignSectionLabel(host,"Scenes");
+  scenes.forEach(function(sc,i){
+    var row=document.createElement("div");
+    row.className="scene-row"+(i===doc.sceneIndex?" active":"");
+
+    var num=document.createElement("span");
+    num.className="scene-num";
+    num.textContent=(i+1)+".";
+    row.appendChild(num);
+
+    var name=document.createElement("span");
+    name.className="scene-name";
+    name.textContent=sc.name;
+    name.title="Click to open · double-click to rename";
+    name.addEventListener("click",function(){gotoScene(i);});
+    name.addEventListener("dblclick",function(e){
+      e.stopPropagation();
+      askFor("Rename Scene","Name",sc.name,function(nn){
+        if(!nn)return;
+        pushUndo();
+        sc.name=uniqueSceneName(nn)===nn?nn:uniqueSceneName(nn);
+        updateBreadcrumb();fullRefresh();
+      });
+    });
+    row.appendChild(name);
+
+    var len=document.createElement("span");
+    len.className="scene-len";
+    // The length is what tells you where you are in a storyboard.
+    if(i===doc.sceneIndex)parkCurrentScene();
+    len.textContent=sceneLength(sc)+"f";
+    row.appendChild(len);
+
+    [["▲",-1,"Move earlier"],["▼",1,"Move later"]].forEach(function(b){
+      var btn=document.createElement("button");
+      btn.className="scene-btn";
+      btn.textContent=b[0];btn.title=b[2];
+      btn.addEventListener("click",function(e){
+        e.stopPropagation();
+        pushUndo();
+        moveScene(i,b[1]);
+      });
+      row.appendChild(btn);
+    });
+    var del=document.createElement("button");
+    del.className="scene-btn";
+    del.textContent="✕";
+    del.title=scenes.length>1?"Delete this scene":"A movie needs at least one scene";
+    if(scenes.length<2)del.disabled=true;
+    del.addEventListener("click",function(e){
+      e.stopPropagation();
+      if(scenes.length<2)return;
+      showDialog({
+        title:"Delete Scene",
+        message:"Delete \""+sc.name+"\" and everything on its timeline?",
+        okLabel:"Delete",
+        onOk:function(){pushUndo();deleteScene(i);}
+      });
+    });
+    row.appendChild(del);
+    host.appendChild(row);
+  });
+
+  var acts=document.createElement("div");
+  acts.className="props-row";
+  acts.style.cssText="flex-wrap:wrap;gap:2px";
+  [["Add Scene","addSceneAction"],["Duplicate","duplicateScene"]].forEach(function(p){
+    var b=document.createElement("button");
+    b.className="props-btn-action";
+    b.textContent=p[0];
+    b.addEventListener("click",function(){doAction(p[1]);});
+    acts.appendChild(b);
+  });
+  host.appendChild(acts);
+
+  var n=document.createElement("div");
+  n.className="props-note";
+  n.textContent=scenes.length>1
+    ? "Scenes play in order. An export lays them end to end on one timeline, "+
+      "with each scene's name as a frame label — so gotoAndPlay(\""+scenes[0].name+"\") works."
+    : "A scene is a whole timeline of its own. Add one to storyboard a second shot "+
+      "without stacking it on this one.";
+  host.appendChild(n);
 }
 
 function updateColorUI(){
@@ -7225,11 +7787,23 @@ function updateBreadcrumb(){
   var bc=document.getElementById("breadcrumb");
   if(!bc)return;
   bc.textContent="";
+  var scenes=docScenes();
   var sceneLink=document.createElement("span");
-  sceneLink.textContent="Scene 1";
+  // The real scene's real name. This read "Scene 1" unconditionally, which was
+  // the one visible hint that scenes existed and the one place they did not.
+  sceneLink.textContent=currentScene().name;
   sceneLink.style.cursor="pointer";
+  sceneLink.title=scenes.length>1
+    ? "Scene "+(doc.sceneIndex+1)+" of "+scenes.length+" — Window ▸ Scene to switch"
+    : "Insert ▸ Scene adds another";
   sceneLink.addEventListener("click",function(){exitAllSymbols();});
   bc.appendChild(sceneLink);
+  if(scenes.length>1){
+    var count=document.createElement("span");
+    count.textContent=" ("+(doc.sceneIndex+1)+"/"+scenes.length+")";
+    count.style.color="#888";
+    bc.appendChild(count);
+  }
   editStack.forEach(function(ctx,i){
     var sep=document.createElement("span");
     sep.textContent=" \u203A ";
@@ -7530,8 +8104,81 @@ function doAction(a){
   case "addLayer":
     pushUndo();
     var _cl=currentLayers();
-    _cl.splice(curLayer,0,new Layer("Layer "+(_cl.length+1)));
+    var _nl=new Layer(uniqueLayerName("Layer "+(_cl.length+1)));
+    /* A new layer joins the folder you are in. Adding one while working inside
+       a folder and having it land outside is the kind of small wrongness that
+       makes folders not worth using. */
+    var _host=_cl[curLayer];
+    if(_host)_nl.indent=isFolderLayer(_host)?(_host.indent||0)+1:(_host.indent||0);
+    _cl.splice(curLayer,0,_nl);
     fullRefresh();
+    break;
+  case "addFolder":
+    pushUndo();
+    var _fl=currentLayers();
+    var _folder=new Layer(uniqueLayerName("Folder"));
+    _folder.layerType="folder";
+    _folder.folderOpen=true;
+    // A folder has no artwork, so it has no keyframes to speak of; one empty
+    // one keeps every "what is on this layer at this frame" path happy.
+    _folder.keyframes=[new KeyFrame(1)];
+    var _at=Math.max(0,Math.min(curLayer,_fl.length));
+    var _base=_fl[_at]?(_fl[_at].indent||0):0;
+    _folder.indent=_base;
+    _fl.splice(_at,0,_folder);
+    /* Fold the layer that was selected into the new folder. Creating an empty
+       folder and then dragging things into it is two more steps than anybody
+       does; folding the current layer in is what the gesture means. */
+    var _child=_fl[_at+1];
+    if(_child&&!isFolderLayer(_child))_child.indent=_base+1;
+    curLayer=_at;
+    fullRefresh();
+    break;
+  case "addSceneAction":
+    pushUndo();addScene({});
+    break;
+  case "duplicateScene":
+    pushUndo();addScene({duplicate:true});
+    break;
+  case "nextScene":
+  case "prevScene":
+    var _sn=doc.sceneIndex+(a==="nextScene"?1:-1);
+    if(!gotoScene(_sn)){
+      showMessage("Scene",a==="nextScene"
+        ?"This is the last scene." : "This is the first scene.");
+    }
+    break;
+  case "renameScene":
+    var _cs=currentScene();
+    askFor("Rename Scene","Name",_cs.name,function(nn){
+      if(!nn)return;
+      pushUndo();
+      _cs.name=nn;
+      updateBreadcrumb();fullRefresh();
+    });
+    break;
+  case "deleteSceneAction":
+    if(docScenes().length<2){
+      showMessage("Delete Scene","A movie needs at least one scene.");break;
+    }
+    var _dsName=currentScene().name;
+    var _dsIdx=doc.sceneIndex;
+    showDialog({
+      title:"Delete Scene",
+      message:"Delete \""+_dsName+"\" and everything on its timeline?",
+      onOk:function(){pushUndo();deleteScene(_dsIdx);}
+    });
+    break;
+  case "foldersCollapseAll":
+  case "foldersExpandAll":
+    var _open=a==="foldersExpandAll";
+    var _any=false;
+    currentLayers().forEach(function(l){
+      if(isFolderLayer(l)){l.folderOpen=_open;_any=true;}
+    });
+    if(_any)fullRefresh();
+    else showMessage("Layer Folders","There are no folders in this timeline yet. "+
+      "Insert ▸ Layer Folder puts the current layer into one.");
     break;
   case "delLayer":
     var _dl=currentLayers();
@@ -7808,6 +8455,7 @@ function doAction(a){
   case "winAlign":   if(workspace())workspace().toggle("align");break;
   case "winInfo":    if(workspace())workspace().toggle("info");break;
   case "winTransform":if(workspace())workspace().toggle("transform");break;
+  case "winScene":   if(workspace())workspace().toggle("scene");break;
   case "wsAnimation":if(workspace())workspace().preset("animation");break;
   case "wsDrawing":  if(workspace())workspace().preset("drawing");break;
   case "wsCoding":   if(workspace())workspace().preset("coding");break;
@@ -11238,6 +11886,9 @@ function initKeys(){
     if(ctrl&&(e.key==="k"||e.key==="K")){e.preventDefault();doAction("winAlign");return;}
     if(ctrl&&(e.key==="i"||e.key==="I")){e.preventDefault();doAction("winInfo");return;}
     if(ctrl&&(e.key==="t"||e.key==="T")){e.preventDefault();doAction("winTransform");return;}
+    if(e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winScene");return;}
+    if(ctrl&&e.key==="PageUp"){e.preventDefault();doAction("prevScene");return;}
+    if(ctrl&&e.key==="PageDown"){e.preventDefault();doAction("nextScene");return;}
     if(ctrl&&e.altKey&&e.shiftKey&&(e.key==="r"||e.key==="R")){e.preventDefault();doAction("rulers");return;}
     /* Arrange on the arrow keys, as in Flash. These are tested before the
        plain-arrow nudge further down, which has no modifier. */
@@ -11329,6 +11980,8 @@ function serializeLayers(layers){
     return{
       name:l.name,visible:l.visible,locked:l.locked,
       layerType:l.layerType,outlineColor:l.outlineColor,layerHeight:l.layerHeight,
+      // Folder nesting and the outline-view toggle.
+      indent:l.indent||0,folderOpen:l.folderOpen!==false,outlines:!!l.outlines,
       keyframes:l.keyframes.map(function(kf){
         return{
           index:kf.index,duration:kf.duration,
@@ -11430,8 +12083,47 @@ function serializeDoc(){
     characters:serializeCharacters(doc.characters),
     /* Guides are document furniture, not artwork: they are saved with the
        document (a layout you set up is worth keeping) but never exported. */
-    guides:{v:docGuides().v.slice(),h:docGuides().h.slice()}
+    guides:{v:docGuides().v.slice(),h:docGuides().h.slice()},
+    /* Scenes. `layers` above is the CURRENT scene, which is what every older
+       release wrote and what one reading this file expects to find; `scenes`
+       carries all of them. A single-scene document therefore round-trips
+       through an older build unchanged. */
+    scenes:docScenes().map(function(sc){
+      return {
+        name:sc.name,
+        layers:serializeLayers(sc.layers===doc.layers?doc.layers:sc.layers),
+        totalFrames:(sc.layers===doc.layers?doc.totalFrames:sc.totalFrames)||60
+      };
+    }),
+    sceneIndex:doc.sceneIndex||0
   };
+}
+
+/**
+ * The document as the EXPORTERS want it: scenes laid end to end.
+ *
+ * Saving must keep the scenes separate; publishing must not, because a movie
+ * is one timeline. Keeping these apart is what stops a save from flattening
+ * the document and a publish from showing only the first scene.
+ */
+function exportDocData(){
+  var d=serializeDoc();
+  var scenes=docScenes();
+  if(scenes.length>1){
+    d.layers=serializeLayers(flattenScenes());
+    d.totalFrames=moviesTotalFrames();
+  }else{
+    /* Even with one scene, guide layers and folders are stripped here rather
+       than only skipped by the player: reference art that travels inside a
+       published file is still shipped, still downloaded, and still readable by
+       anyone who opens it. */
+    d.layers=serializeLayers(outputLayers(doc.layers));
+  }
+  // Scenes are already baked into `layers`; shipping them again would have the
+  // player build every scene twice.
+  delete d.scenes;
+  delete d.sceneIndex;
+  return d;
 }
 function serializeCharacters(cs){
   var out={};
@@ -11490,6 +12182,9 @@ function reviveLayers(arr){
     if(ld.layerType)l.layerType=ld.layerType;
     if(ld.outlineColor)l.outlineColor=ld.outlineColor;
     if(ld.layerHeight)l.layerHeight=ld.layerHeight;
+    l.indent=Math.max(0,Math.min(8,parseInt(ld.indent,10)||0));
+    l.folderOpen=ld.folderOpen!==false;
+    l.outlines=!!ld.outlines;
     var kfs=(ld.keyframes||[]).map(reviveKeyframe);
     // A layer with no keyframes at all would make getKeyframeAt() return null
     // forever, so the layer would be permanently unusable.
@@ -11544,6 +12239,26 @@ function deserializeDoc(d){
     h:(d.guides&&Array.isArray(d.guides.h)?d.guides.h:[]).map(Number).filter(isFinite)
   };
   doc.layers=reviveLayers(d.layers);
+  /* Scenes. A document without them gets one made from its layers, so every
+     file written before scenes existed opens as a one-scene movie. */
+  if(Array.isArray(d.scenes)&&d.scenes.length){
+    doc.scenes=d.scenes.map(function(sc,i){
+      return {
+        name:String(sc&&sc.name||("Scene "+(i+1))),
+        layers:reviveLayers(sc&&sc.layers),
+        totalFrames:(sc&&sc.totalFrames)||60
+      };
+    });
+    doc.sceneIndex=Math.max(0,Math.min(parseInt(d.sceneIndex,10)||0,doc.scenes.length-1));
+    // `doc.layers` is a live alias of the current scene, never a copy.
+    var liveScene=doc.scenes[doc.sceneIndex];
+    if(!liveScene.layers.length)liveScene.layers=[new Layer("Layer 1")];
+    doc.layers=liveScene.layers;
+    doc.totalFrames=liveScene.totalFrames||doc.totalFrames;
+  }else{
+    doc.scenes=null;doc.sceneIndex=0;
+    docScenes();
+  }
   // Decoding is async; the timeline draws flat bars until the peaks land and
   // redraws itself when they do. Bitmaps are the same deal — a placed image
   // draws a labelled frame until its pixels arrive.
@@ -12322,8 +13037,19 @@ function exportRuntime(data, canvas, options) {
     return false;
   }
 
+  /* Guide layers and folders never reach the output. A guide layer is
+     reference art — a traced photo, a motion path, a registration cross — and
+     the whole point of marking one is that it does not appear in the movie;
+     it was marked, saved, and published anyway. A folder holds no artwork of
+     its own. Filtered once here so every consumer below (sounds, scripts,
+     labels, the display list) sees the same set. */
+  var outLayers = (data.layers || []).filter(function (l) {
+    var t = (l && l.layerType) || "normal";
+    return t !== "guide" && t !== "folder";
+  });
+
   var maxF = 1;
-  data.layers.forEach(function (l) {
+  outLayers.forEach(function (l) {
     l.keyframes.forEach(function (k) { var e = k.index + k.duration - 1; if (e > maxF) maxF = e; });
   });
   if (data.totalFrames > maxF) maxF = data.totalFrames;
@@ -12354,7 +13080,7 @@ function exportRuntime(data, canvas, options) {
    * ------------------------------------------------------------------- */
   var track = null;
   var soundItems = [];
-  data.layers.forEach(function (la, li) {
+  outLayers.forEach(function (la, li) {
     (la.keyframes || []).forEach(function (k) {
       if (!k.sound || !k.sound.asset) return;
       var asset = data.sounds && data.sounds[k.sound.asset];
@@ -12397,7 +13123,7 @@ function exportRuntime(data, canvas, options) {
    * MovieClip.
    * ------------------------------------------------------------------ */
   var frameScripts = {};
-  data.layers.forEach(function (la) {
+  outLayers.forEach(function (la) {
     (la.keyframes || []).forEach(function (k) {
       if (k.script && k.script.trim()) (frameScripts[k.index] = frameScripts[k.index] || []).push(k.script);
     });
@@ -12405,7 +13131,7 @@ function exportRuntime(data, canvas, options) {
   /* Frame labels, so `gotoAndPlay("menuLabel")` goes somewhere. An imported
      movie navigates by label almost exclusively — the frame numbers in its
      scripts are the exception. */
-  data.layers.forEach(function (la) {
+  outLayers.forEach(function (la) {
     (la.keyframes || []).forEach(function (k) {
       if (k.label) root.timeline.addLabel(k.label, k.index);
     });
@@ -12523,7 +13249,7 @@ function exportRuntime(data, canvas, options) {
     }
     return groups;
   }
-  var groups = layerGroups(data.layers);
+  var groups = layerGroups(outLayers);
 
   for (var f = 1; f <= maxF; f++) {
     (function (fr) {
@@ -12622,7 +13348,8 @@ function exportRuntime(data, canvas, options) {
 
 function genHTML(callback){
   getEngineSource(function(engineSrc){
-    var d=serializeDoc();
+    // The whole movie, scenes laid end to end — not just the one on screen.
+    var d=exportDocData();
     getAS2Source(docHasClipScripts(d),function(as2Src){
     if(as2Src)engineSrc=engineSrc+"\n"+as2Src;
     var sc="<"+"script>",sce="</"+"script>";
@@ -12688,14 +13415,23 @@ function renderFrameToCanvas(frameNum, w, h) {
   cx.fillStyle = doc.backgroundColor || "#FFFFFF";
   cx.fillRect(0, 0, w, h);
   withAllLayers(function () {
-    frameObjects(doc.layers, frameNum).forEach(function (o) {
+    // flattenScenes() returns the current scene's output layers untouched when
+    // there is only one, so nothing about the common case changes.
+    frameObjects(flattenScenes(), frameNum).forEach(function (o) {
       paintObj(cx, o, { chrome: false });
     });
   });
   return c;
 }
-/** Longest frame in the scene — what the raster/video exporters cover. */
+/**
+ * Longest frame in the MOVIE — what the raster/video exporters cover.
+ *
+ * With several scenes that is the sum of their lengths, because an export is
+ * one timeline; with one it is that scene's own length, exactly as before.
+ */
 function sceneMaxFrame() {
+  var scenes = docScenes();
+  if (scenes.length > 1) return moviesTotalFrames();
   var m = 1;
   doc.layers.forEach(function (l) { var e = l.getFrameEnd(); if (e > m) m = e; });
   return Math.max(m, doc.totalFrames || 1);
@@ -12830,7 +13566,7 @@ function exportAsSVG() {
      one — their fills and strokes are ignored there, only the silhouette
      counts — and the layers it masks are wrapped in a group that references
      it, which is the same picture the stage and the HTML export draw. */
-  var svgGroups = maskGroups(doc.layers);
+  var svgGroups = maskGroups(flattenScenes());
   // Hidden layers are in the output here too, as they are in every export.
   withAllLayers(function () {
     for (var gi = svgGroups.length - 1; gi >= 0; gi--) {
@@ -13229,7 +13965,7 @@ function exportAsModule() {
   s += "//        createAnimation(document.getElementById('canvas'), { loop: true });\n";
   s += "//\n";
   s += "// Requires flashy.js to be loaded first (it provides the global `Flashy`).\n\n";
-  s += "export const sceneData = " + JSON.stringify(serializeDoc(), null, 2) + ";\n\n";
+  s += "export const sceneData = " + JSON.stringify(exportDocData(), null, 2) + ";\n\n";
   s += "const createStage = " + exportRuntime.toString() + ";\n\n";
   s += "export function createAnimation(canvas, options) {\n";
   s += "  if (typeof Flashy === 'undefined') throw new Error('flashy.js must be loaded first');\n";
@@ -13854,7 +14590,8 @@ function testMovie(){
  */
 function startPreview(w){
   if(!w)return;
-  var data=serializeDoc();
+  // Test Movie plays the movie, which means every scene in order.
+  var data=exportDocData();
   var needsAS2=docHasClipScripts(data);
   var scripts=["flashy.js"];
   if(needsAS2)scripts.push("flashy-as2.js");
@@ -14091,6 +14828,7 @@ function fullRefresh(){
   updateAlignPanel();
   updateInfoPanel();
   updateTransformPanel();
+  updateScenePanel();
   updateOnionUI();
   // The Character panel rebuilds from the document rather than tracking it, so
   // one notification after every refresh is all it needs. Note this is
@@ -14330,6 +15068,25 @@ function init(){
       return {objects:snapObjects,guides:snapGuides,grid:snapGrid,rulers:showRulers};
     },
     snapBox: snapBox,
+    /* Scenes. The alias discipline matters here: doc.layers IS the current
+       scene's layer array, never a copy, so a spec that reaches doc.layers is
+       reaching the live scene. */
+    scenes: function(){ return docScenes(); },
+    sceneIndex: function(){ return doc.sceneIndex||0; },
+    gotoScene: gotoScene,
+    addScene: addScene,
+    deleteScene: deleteScene,
+    moveScene: moveScene,
+    sceneLength: sceneLength,
+    /** Every scene laid end to end, the way the exporters see the movie. */
+    flattenScenes: flattenScenes,
+    moviesTotalFrames: moviesTotalFrames,
+    exportDocData: exportDocData,
+    /** Timeline row geometry, now that rows differ in height. */
+    layerRows: function(){ return layerRowLayout().rows.map(function(r){
+      return {index:r.index,name:r.layer.name,y:r.y,h:r.h};
+    }); },
+    outputLayers: outputLayers,
     /* Wave-2 shape editing. The specs drive these directly as well as through
        the pointer, because several are pure geometry and testing the geometry
        separately from the gesture is the only way to pin down what the

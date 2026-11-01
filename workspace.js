@@ -57,7 +57,10 @@
        Window menu opens them. */
     { id: "align", title: "Align", home: "right", with: "props", closed: true },
     { id: "info", title: "Info", home: "right", with: "props", closed: true },
-    { id: "transform", title: "Transform", home: "right", with: "props", closed: true }
+    { id: "transform", title: "Transform", home: "right", with: "props", closed: true },
+    /* Scene lists the movie's scenes and switches between them. It joins the
+       Library's group — both answer "what is this document made of". */
+    { id: "scene", title: "Scene", home: "right", with: "library", closed: true }
   ];
 
   var ZONES = ["right", "bottom"];
