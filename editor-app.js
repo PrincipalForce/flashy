@@ -27,8 +27,8 @@ if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clon
    `easeBezier` is a custom easing curve; `rotateDir`/`rotateTimes` make a
    tween spin instead of taking the short way round; `tweenScale` is Flash's
    Scale checkbox. All default to the behaviour documents already have. */
-function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;}
-KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;return c;};
+function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;this.orientToPath=false;this.shapeHints=null;}
+KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;return c;};
 function cloneSound(s){return {asset:s.asset,sync:s.sync||"stream",volume:s.volume!=null?s.volume:1,loop:!!s.loop,offset:s.offset||0};}
 function Layer(n){this.name=n;this.visible=true;this.locked=false;this.keyframes=[new KeyFrame(1)];}
 Layer.prototype.getKeyframeAt=function(f){for(var i=this.keyframes.length-1;i>=0;i--){var k=this.keyframes[i];if(f>=k.index&&f<k.index+k.duration)return k;}return null;};
@@ -558,6 +558,8 @@ var menus=[
     {label:"Straighten",action:"shapeStraighten"},
     {label:"Optimize...",action:"shapeOptimize"},
     {label:"Convert Lines to Fills",action:"linesToFills"},
+    {label:"Add Shape Hint",action:"addShapeHint",shortcut:"Ctrl+Shift+H"},
+    {label:"Remove All Shape Hints",action:"removeShapeHints"},
     {label:"Expand Fill...",action:"expandFill"},
     {label:"Soften Fill Edges...",action:"softenEdges"},
     {type:"sep"},
@@ -1107,7 +1109,10 @@ function render(){
     for(var li=group.layers.length-1;li>=0;li--){
       var lay=group.layers[li];
       if(isFolderLayer(lay))continue;       // a folder holds no artwork
-      var objs=frameObjects([lay],curFrame);
+      // The whole layer list stays in scope so a guided layer can find the
+      // motion guide above it; drawing one layer at a time is an outline-view
+      // and onion-skin requirement, not a change of context.
+      var objs=frameObjects([lay],curFrame,{allLayers:currentLayers()});
       if(!objs.length)continue;
       if(lay.outlines){
         drawLayerOutlines(ctx,objs,lay.outlineColor||"#4488CC");
@@ -1127,7 +1132,16 @@ function render(){
   if(curTool==="subselect")drawSubselectOverlay(ctx);
   if(curTool==="gradient")drawGradientOverlay(ctx);
   if(curTool==="pen")drawPenOverlay(ctx);
+  drawShapeHints(ctx);
   if(lassoPts&&lassoPts.length>=4)drawLassoOverlay(ctx);
+  /* Motion guides, stage guides and the snap feedback all draw in STAGE
+     coordinates, so they belong inside the stage transform with the other
+     overlays. They used to run after it was popped, which put them in screen
+     space — at any normal pan they landed off the left of the stage and were
+     clipped away entirely, which is why a motion guide layer looked empty. */
+  drawMotionGuides();
+  if(showGuides)drawGuides();
+  drawSnapHints();
   ctx.restore();
   // grid
   if(showGrid){
@@ -1142,10 +1156,6 @@ function render(){
       ctx.beginPath();ctx.moveTo(panX,py);ctx.lineTo(panX+sw,py);ctx.stroke();
     }
   }
-  // Guides and their alignment feedback live above the artwork but below the
-  // selection chrome: they are stage furniture, not part of the drawing.
-  if(showGuides)drawGuides();
-  drawSnapHints();
   ctx.restore();
   if(showRulers)drawRulers();
   // selection handles
@@ -1256,6 +1266,44 @@ function updateOnionUI(){
   if(bef&&String(onionBefore)!==bef.value)bef.value=onionBefore;
   var aft=document.getElementById("tlOnionAfter");
   if(aft&&String(onionAfter)!==aft.value)aft.value=onionAfter;
+}
+
+/**
+ * Motion guide paths, drawn as authoring chrome.
+ *
+ * frameObjects() refuses to draw a motion guide layer — it is a path to
+ * follow, not a line to draw, and it must never reach an export. Without
+ * something here the layer would look empty and the feature invisible, so the
+ * path is drawn as a dashed overlay, which is how Flash showed it too.
+ */
+function drawMotionGuides(){
+  if(!window.Flashy||!Flashy.MotionGuide)return;
+  var layers=currentLayers();
+  layers.forEach(function(l){
+    if((l.layerType||"normal")!=="motionguide"||!layerShows(l))return;
+    var kf=typeof l.getKeyframeAt==="function"?l.getKeyframeAt(1):null;
+    if(!kf)return;
+    kf.objects.forEach(function(o){
+      var pts=Flashy.MotionGuide.polyline(o);
+      if(!pts||pts.length<4)return;
+      ctx.save();
+      ctx.strokeStyle="rgba(120,220,160,0.9)";
+      ctx.lineWidth=1.5/zoom;
+      ctx.setLineDash([6/zoom,4/zoom]);
+      ctx.beginPath();
+      ctx.moveTo(pts[0],pts[1]);
+      for(var i=2;i<pts.length;i+=2)ctx.lineTo(pts[i],pts[i+1]);
+      ctx.stroke();
+      // The ends, so which way it runs is obvious.
+      ctx.setLineDash([]);
+      ctx.fillStyle="rgba(120,220,160,0.95)";
+      ctx.beginPath();ctx.arc(pts[0],pts[1],3/zoom,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();
+      ctx.arc(pts[pts.length-2],pts[pts.length-1],3/zoom,0,Math.PI*2);
+      ctx.stroke();
+      ctx.restore();
+    });
+  });
 }
 
 /** Guides: `doc.guides` is {v:[x,…], h:[y,…]} in stage coordinates. */
@@ -4212,20 +4260,41 @@ function lerpColorEffect(a,b,t){
  * document through this one function, so they cannot disagree about what a
  * frame contains.
  */
-function frameObjects(layers,frame){
+function frameObjects(layers,frame,opts){
   var out=[];
+  /* A guided layer's tween takes its position from the motion guide above it,
+     so the whole layer list has to be in scope — `layers` here may be just one
+     layer (the outline and onion-skin passes ask per-layer). `opts.allLayers`
+     carries the full context when it is not the same array. */
+  var context=(opts&&opts.allLayers)||layers;
   for(var i=(layers||[]).length-1;i>=0;i--){
     var l=layers[i];
     if(!layerShows(l))continue;
+    /* A folder holds nothing and a motion guide is a path to follow, not a
+       line to draw. Neither ever contributes artwork, on the stage or in an
+       export — the stage draws the guide separately, as chrome. */
+    var lt=(l.layerType||"normal");
+    if(lt==="folder"||lt==="motionguide")continue;
     var kf=typeof l.getKeyframeAt==="function"?l.getKeyframeAt(frame):null;
     if(!kf)continue;
     if(kf.tweenType&&kf.tweenType!=="none"&&kf.duration>1){
       var nk=l.keyframes[l.keyframes.indexOf(kf)+1];
       if(nk){
         var t=(frame-kf.index)/kf.duration;
+        var guide=motionGuideFor(context,l);
+        var eased=easeAmount(t,kf.easing,kf.easeBezier);
         for(var oi=0;oi<kf.objects.length;oi++){
           var b=nk.objects[oi];
-          out.push(withTiming(b?interpObj(kf.objects[oi],b,t,kf.easing,kf):kf.objects[oi],kf,frame));
+          var view;
+          if(b&&kf.tweenType==="shape"){
+            // A real outline morph, not an interpolated bounding box.
+            view=shapeTweenObject(kf.objects[oi],b,eased,kf,oi)
+              ||interpObj(kf.objects[oi],b,t,kf.easing,kf);
+          }else{
+            view=b?interpObj(kf.objects[oi],b,t,kf.easing,kf):kf.objects[oi];
+          }
+          if(b&&guide)view=applyMotionGuide(view,guide,eased,kf);
+          out.push(withTiming(view,kf,frame));
         }
         continue;
       }
@@ -4233,6 +4302,209 @@ function frameObjects(layers,frame){
     for(var oj=0;oj<kf.objects.length;oj++)out.push(withTiming(kf.objects[oj],kf,frame));
   }
   return out;
+}
+
+/** Blend two #RRGGBB colours, as a hex string. */
+function blendHex(a,b,t){
+  var n=function(v){
+    return typeof v==="string"?parseInt(String(v).replace("#",""),16):(v|0);
+  };
+  var an=n(a==null?"#000000":a),bn=n(b==null?"#000000":b);
+  var mix=function(sh){
+    var av=(an>>sh)&0xff,bv=(bn>>sh)&0xff;
+    return Math.max(0,Math.min(255,Math.round(av+(bv-av)*t)));
+  };
+  return "#"+[mix(16),mix(8),mix(0)].map(function(v){
+    return ("0"+v.toString(16)).slice(-2);
+  }).join("").toUpperCase();
+}
+
+/**
+ * One frame of a REAL shape tween.
+ *
+ * A shape tween is supposed to morph one outline into another. What it did
+ * was interpolate the two objects' boxes and transforms, exactly like a motion
+ * tween with a different colour in the timeline — a rectangle tweened to an
+ * oval stayed a rectangle the whole way and then snapped.
+ *
+ * Returns a path object in stage space, or null when there is nothing to morph
+ * (a symbol, a bitmap) — in which case the caller falls back to the old
+ * behaviour, which is still better than drawing nothing.
+ */
+function shapeTweenObject(a,b,eased,kf,objIndex){
+  if(!window.Flashy||!Flashy.Morph)return null;
+  // Hints belong to the first pair of objects on the keyframe: a shape tween
+  // with several objects on it is already ambiguous, and hinting all of them
+  // from one list would be worse than hinting none.
+  var hints=(objIndex===0&&kf.shapeHints&&kf.shapeHints.length)?kf.shapeHints:null;
+  var m=Flashy.Morph.between(a,b,eased,hints);
+  if(!m)return null;
+  var o=a.clone();
+  o.type="path";
+  o.path=m.path;
+  o.pathW=m.pathW;o.pathH=m.pathH;
+  o.x=m.x;o.y=m.y;o.width=m.width;o.height=m.height;
+  // The morph is already in stage space, so the object's own transform has
+  // been baked in and must not be applied a second time.
+  o.rotation=0;o.scaleX=1;o.scaleY=1;o.skewX=0;o.skewY=0;
+  o.points=null;
+  // Colour crosses over with the shape, which is the other half of a shape
+  // tween and the part people notice immediately.
+  o.fillColor=blendHex(a.fillColor,b.fillColor,eased);
+  o.strokeColor=blendHex(a.strokeColor,b.strokeColor,eased);
+  var num=function(k,d){
+    var av=a[k]!=null?a[k]:d,bv=b[k]!=null?b[k]:d;
+    return av+(bv-av)*eased;
+  };
+  o.fillAlpha=num("fillAlpha",1);
+  o.strokeAlpha=num("strokeAlpha",1);
+  o.strokeWidth=num("strokeWidth",0);
+  o.alpha=num("alpha",1);
+  // A morph is a filled outline; a stroke-only source would otherwise vanish.
+  if((a.fillType||"solid")==="none"&&(b.fillType||"solid")==="none"){
+    o.fillType="none";
+  }else{
+    o.fillType="solid";
+  }
+  return o;
+}
+
+/* ------------------------------------------------------------------ *
+ * Shape hints
+ *
+ * A hint is a pair of points: one on the start shape, one on the end shape,
+ * saying "this bit becomes that bit". Without them the morph has to guess the
+ * correspondence, and the wrong guess makes a shape turn inside out on its way
+ * across — which is the entire reason Flash had them.
+ *
+ * Stored on the keyframe the tween starts from, in stage coordinates, lettered
+ * a, b, c… on screen exactly as Flash lettered them.
+ * ------------------------------------------------------------------ */
+var hintDrag=null;      // {kf, index, end} while a hint marker is dragged
+
+/** The keyframe a shape hint would attach to, with its destination. */
+function shapeHintTarget(){
+  var l=CL();
+  if(!l)return null;
+  var kf=l.getKeyframeAt(curFrame);
+  if(!kf||kf.tweenType!=="shape")return null;
+  var nk=l.keyframes[l.keyframes.indexOf(kf)+1];
+  if(!nk||!kf.objects.length||!nk.objects.length)return null;
+  return {layer:l,kf:kf,next:nk};
+}
+
+/**
+ * Add a hint at the centre of each shape.
+ *
+ * At the centre rather than under the pointer because a new hint has to be
+ * findable: Flash dropped them in a stack in the middle and you dragged them
+ * where they belonged, and anything else means hunting for a 5px circle.
+ */
+function addShapeHint(){
+  var t=shapeHintTarget();
+  if(!t)return {ok:false,reason:"notshape"};
+  pushUndo();
+  if(!t.kf.shapeHints)t.kf.shapeHints=[];
+  var a=t.kf.objects[0],b=t.next.objects[0];
+  // Spread successive hints a little so they do not land exactly on top of
+  // each other and become one undraggable pile.
+  var n=t.kf.shapeHints.length;
+  var off=n*9;
+  t.kf.shapeHints.push([
+    (a.x||0)+(a.width||0)/2+off,(a.y||0)+(a.height||0)/2,
+    (b.x||0)+(b.width||0)/2+off,(b.y||0)+(b.height||0)/2
+  ]);
+  return {ok:true,count:t.kf.shapeHints.length};
+}
+
+function removeShapeHints(){
+  var t=shapeHintTarget();
+  if(!t||!t.kf.shapeHints||!t.kf.shapeHints.length)return {ok:false};
+  pushUndo();
+  t.kf.shapeHints=null;
+  return {ok:true};
+}
+
+/** The hint marker nearest a stage point, or null. */
+function hintHitTest(x,y){
+  var t=shapeHintTarget();
+  if(!t||!t.kf.shapeHints)return null;
+  var tol=9/zoom;
+  for(var i=t.kf.shapeHints.length-1;i>=0;i--){
+    var h=t.kf.shapeHints[i];
+    if(Math.hypot(h[0]-x,h[1]-y)<=tol)return {kf:t.kf,index:i,end:0};
+    if(Math.hypot(h[2]-x,h[3]-y)<=tol)return {kf:t.kf,index:i,end:1};
+  }
+  return null;
+}
+
+/** Hint markers, lettered a, b, c… as Flash lettered them. */
+function drawShapeHints(cx){
+  var t=shapeHintTarget();
+  if(!t||!t.kf.shapeHints||!t.kf.shapeHints.length)return;
+  var r=6/zoom;
+  cx.save();
+  cx.lineWidth=1/zoom;
+  cx.font=(9/zoom)+"px Tahoma,Arial,sans-serif";
+  cx.textAlign="center";
+  cx.textBaseline="middle";
+  t.kf.shapeHints.forEach(function(h,i){
+    var letter=String.fromCharCode(97+(i%26));
+    // A faint tie between the pair, so which start goes with which end is
+    // readable when there are six of them.
+    cx.strokeStyle="rgba(255,220,80,0.35)";
+    cx.setLineDash([3/zoom,3/zoom]);
+    cx.beginPath();cx.moveTo(h[0],h[1]);cx.lineTo(h[2],h[3]);cx.stroke();
+    cx.setLineDash([]);
+    [[h[0],h[1],"#FFD24A","#5A4200"],[h[2],h[3],"#8CE08C","#0A3A0A"]].forEach(function(m){
+      cx.beginPath();cx.arc(m[0],m[1],r,0,Math.PI*2);
+      cx.fillStyle=m[2];cx.fill();
+      cx.strokeStyle="rgba(0,0,0,0.7)";cx.stroke();
+      cx.fillStyle=m[3];
+      cx.fillText(letter,m[0],m[1]+0.5/zoom);
+    });
+  });
+  cx.restore();
+}
+
+/** The motion-guide polyline governing `layer`, in stage space, or null. */
+function motionGuideFor(layers,layer){
+  if(!window.Flashy||!Flashy.MotionGuide)return null;
+  var idx=(layers||[]).indexOf(layer);
+  if(idx<0)return null;
+  var gl=Flashy.MotionGuide.guideFor(layers,idx);
+  if(!gl)return null;
+  // The first object on the guide layer's own keyframe that flattens into a
+  // line. A guide layer is one stroke; anything else on it is a note to self.
+  var kf=typeof gl.getKeyframeAt==="function"?gl.getKeyframeAt(1):null;
+  // The guide holds for the whole layer, so frame 1 is the right place to look
+  // — a guide that moved frame by frame would not be a guide.
+  var objs=kf?kf.objects:[];
+  for(var i=0;i<objs.length;i++){
+    var pts=Flashy.MotionGuide.polyline(objs[i]);
+    if(pts&&pts.length>=4)return {points:pts,arc:Flashy.MotionGuide.arc(pts)};
+  }
+  return null;
+}
+
+/**
+ * Put a tweened object on its motion guide.
+ *
+ * The object's CENTRE rides the path, which is what registration means for a
+ * symbol dragged onto a guide. `orientToPath` turns it to face along the path
+ * as well — the difference between a leaf blowing past and a leaf tumbling.
+ */
+function applyMotionGuide(view,guide,eased,kf){
+  if(!window.Flashy||!Flashy.MotionGuide)return view;
+  var p=Flashy.MotionGuide.sampleAt(guide.points,eased,guide.arc);
+  if(!p)return view;
+  // `view` is already a fresh object: this is only reached on a tweened
+  // frame, and interpObj returns a clone. Mutating it cannot touch the
+  // document.
+  view.x=p.x-(view.width||0)/2;
+  view.y=p.y-(view.height||0)/2;
+  if(kf.orientToPath)view.rotation=p.angle;
+  return view;
 }
 
 /**
@@ -4573,6 +4845,17 @@ function onMouseDown(e){
       }
     }
   }
+  /* A shape hint marker takes the press before any tool does. They are only
+     on screen while a shape tween's keyframe is current, and when they are,
+     moving one is almost certainly what the click meant. */
+  var hh=hintHitTest(p.x,p.y);
+  if(hh){
+    dragging=true;
+    hintDrag=hh;
+    movePreSnap=snap();
+    render();
+    return;
+  }
   dragging=true;dragStart={x:p.x,y:p.y};dragCur={x:p.x,y:p.y};
   if(curTool==="pose"){
     poseMouseDown(e,p);
@@ -4705,6 +4988,13 @@ function onMouseMove(e){
     render();
     return;
   }
+  if(hintDrag){
+    var h=hintDrag.kf.shapeHints[hintDrag.index];
+    h[hintDrag.end*2]=p.x;
+    h[hintDrag.end*2+1]=p.y;
+    render();
+    return;
+  }
   dragCur={x:p.x,y:p.y};
   if(curTool==="pose"){
     poseMouseMove(e,p);
@@ -4782,6 +5072,12 @@ function onMouseUp(e){
     }
     guideDrag=null;dragging=false;
     render();
+    return;
+  }
+  if(hintDrag){
+    hintDrag=null;dragging=false;
+    if(movePreSnap){pushUndoSnap(movePreSnap);movePreSnap=null;}
+    fullRefresh();
     return;
   }
   if(curTool==="pose"){
@@ -5499,6 +5795,11 @@ function moviesTotalFrames(){
 function outputLayers(layers){
   return (layers||[]).filter(function(l){
     var t=(l&&l.layerType)||"normal";
+    /* A motion guide is KEPT here even though it never draws: a guided layer
+       finds its guide by position in this list, so filtering it out before
+       the interpolator runs would leave every guided tween travelling in a
+       straight line in the export while curving on the stage. frameObjects()
+       is what refuses to draw it. */
     return t!=="guide"&&t!=="folder";
   });
 }
@@ -6565,6 +6866,16 @@ function updateProps(){
         row("Scale",skf.tweenScale!==false,function(v){
           pushUndo();skf.tweenScale=v;fullRefresh();
         },{type:"checkbox"});
+        /* Orient to Path only means anything on a guided layer, so it is only
+           offered there — an always-visible checkbox that does nothing most of
+           the time is worse than no checkbox. */
+        var guidedLayer=currentLayers()[selectedKF.layerIdx];
+        if(guidedLayer&&(guidedLayer.layerType||"normal")==="guided"){
+          row("Orient to path",!!skf.orientToPath,function(v){
+            pushUndo();skf.orientToPath=v;fullRefresh();
+          },{type:"checkbox"});
+          note("The difference between a leaf blowing past and a leaf tumbling.");
+        }
       }
 
       // Keyframe action buttons
@@ -6661,7 +6972,18 @@ function updateProps(){
          run of masked layers directly beneath it. */
       row("Type",curLayerObj.layerType||"normal",function(v){pushUndo();curLayerObj.layerType=v;fullRefresh();},
         {type:"select",width:"80px",options:[["normal","Normal"],["guide","Guide"],
-          ["folder","Folder"],["mask","Mask"],["masked","Masked"]]});
+          ["folder","Folder"],["mask","Mask"],["masked","Masked"],
+          ["motionguide","Motion Guide"],["guided","Guided"]]});
+      if((curLayerObj.layerType||"normal")==="motionguide"){
+        note("Draw one stroke on this layer. The Guided layers directly beneath "+
+             "it will follow it instead of moving in a straight line.");
+      }else if((curLayerObj.layerType||"normal")==="guided"){
+        var gl=motionGuideFor(currentLayers(),curLayerObj);
+        note(gl?"Following the motion guide above. Turn on Orient to Path on the "+
+                "keyframe to make it face along the path."
+               :"No motion guide above this layer yet — set the layer above it to "+
+                "Motion Guide and draw a stroke on it.");
+      }
       if((curLayerObj.layerType||"normal")==="guide"){
         note("A guide layer is reference art: it shows on the stage and in "+
              "onion skin, and it is left out of every export.");
@@ -8688,6 +9010,20 @@ function doAction(a){
   case "distributeToLayers":
     if(distributeToLayers())fullRefresh();
     else showMessage("Distribute to Layers","Select two or more objects first.");
+    break;
+  case "addShapeHint":
+    var ah=addShapeHint();
+    if(ah.ok)fullRefresh();
+    else showMessage("Add Shape Hint",
+      "Put the playhead on a shape tween first.\n\nA hint says which bit of "+
+      "the start shape becomes which bit of the end shape — without one the "+
+      "morph has to guess, and the wrong guess turns the shape inside out.");
+    break;
+  case "removeShapeHints":
+    // `.ok`, not the object: removeShapeHints() returns a result record, and
+    // every object is truthy — so the "no hints" case never reported itself.
+    if(removeShapeHints().ok)fullRefresh();
+    else showMessage("Shape Hints","This shape tween has no hints on it.");
     break;
   case "reverseFrames":
     var rv=reverseFrames({});
@@ -12286,6 +12622,7 @@ function initKeys(){
     if(ctrl&&(e.key==="b"||e.key==="B")){e.preventDefault();doAction("breakApart");return;}
     if(ctrl&&e.shiftKey&&(e.key==="z"||e.key==="Z")){e.preventDefault();doAction("transformReset");return;}
     if(ctrl&&e.shiftKey&&(e.key==="d"||e.key==="D")){e.preventDefault();doAction("distributeToLayers");return;}
+    if(ctrl&&e.shiftKey&&(e.key==="h"||e.key==="H")){e.preventDefault();doAction("addShapeHint");return;}
     if(ctrl&&e.altKey&&(e.key==="s"||e.key==="S")){e.preventDefault();doAction("scaleRotate");return;}
     if(ctrl&&(e.key==="k"||e.key==="K")){e.preventDefault();doAction("winAlign");return;}
     if(ctrl&&(e.key==="i"||e.key==="I")){e.preventDefault();doAction("winInfo");return;}
@@ -12399,7 +12736,10 @@ function serializeLayers(layers){
           // for the defaults.
           easeBezier:kf.easeBezier?kf.easeBezier.slice():null,
           rotateDir:kf.rotateDir||"none",rotateTimes:kf.rotateTimes||1,
-          tweenScale:kf.tweenScale!==false,
+          tweenScale:kf.tweenScale!==false,orientToPath:!!kf.orientToPath,
+          // Shape hints: [ax,ay,bx,by] in stage space, a point on the start
+          // shape and the point it becomes on the end shape.
+          shapeHints:kf.shapeHints?kf.shapeHints.map(function(h){return h.slice();}):null,
           objects:kf.objects.map(plainObj)
         };
       })
@@ -12589,6 +12929,11 @@ function reviveKeyframe(kd){
   kf.rotateDir=(kd.rotateDir==="cw"||kd.rotateDir==="ccw")?kd.rotateDir:"none";
   kf.rotateTimes=Math.max(1,parseInt(kd.rotateTimes,10)||1);
   kf.tweenScale=kd.tweenScale!==false;
+  kf.orientToPath=!!kd.orientToPath;
+  kf.shapeHints=Array.isArray(kd.shapeHints)
+    ? kd.shapeHints.filter(function(h){return Array.isArray(h)&&h.length>=4;})
+        .map(function(h){return h.slice(0,4).map(Number);})
+    : null;
   kf.objects=(kd.objects||[]).map(reviveObject);
   return kf;
 }
@@ -13463,8 +13808,29 @@ function exportRuntime(data, canvas, options) {
      labels, the display list) sees the same set. */
   var outLayers = (data.layers || []).filter(function (l) {
     var t = (l && l.layerType) || "normal";
-    return t !== "guide" && t !== "folder";
+    return t !== "guide" && t !== "folder" && t !== "motionguide";
   });
+  /* The motion guides themselves, kept aside: a guided layer's tween reads
+     its path, so the paths have to survive the filter above even though they
+     are never drawn. Indexed by the guided layer, resolved once. */
+  var guideFor = {};
+  (function () {
+    if (!Flashy.MotionGuide) return;
+    var all = data.layers || [];
+    for (var i = 0; i < all.length; i++) {
+      var gl = Flashy.MotionGuide.guideFor(all, i);
+      if (!gl) continue;
+      var kf = (gl.keyframes || [])[0];
+      var objs = kf ? (kf.objects || []) : [];
+      for (var j = 0; j < objs.length; j++) {
+        var pts = Flashy.MotionGuide.polyline(objs[j]);
+        if (pts && pts.length >= 4) {
+          guideFor[all[i].name] = { points: pts, arc: Flashy.MotionGuide.arc(pts) };
+          break;
+        }
+      }
+    }
+  })();
 
   var maxF = 1;
   outLayers.forEach(function (l) {
@@ -13720,6 +14086,53 @@ function exportRuntime(data, canvas, options) {
       var a = kf.objects[oi];
       var o = a;
       var b = nk ? nk.objects[oi] : null;
+      /* A shape tween is a real outline morph, not an interpolated box. The
+         editor and the player both go through Flashy.Morph, so a morph in the
+         movie is the morph that was on the authoring stage. */
+      if (b && kf.tweenType === "shape" && Flashy.Morph) {
+        var mh = (oi === 0 && kf.shapeHints && kf.shapeHints.length) ? kf.shapeHints : null;
+        var mm = Flashy.Morph.between(a, b, t, mh);
+        if (mm) {
+          var mo = {};
+          for (var mp in a) mo[mp] = a[mp];
+          mo.type = "path";
+          mo.path = mm.path; mo.pathW = mm.pathW; mo.pathH = mm.pathH;
+          mo.x = mm.x; mo.y = mm.y; mo.width = mm.width; mo.height = mm.height;
+          // Already in stage space: applying the object's transform again
+          // would move the morph away from where it was drawn.
+          mo.rotation = 0; mo.scaleX = 1; mo.scaleY = 1; mo.skewX = 0; mo.skewY = 0;
+          mo.points = null;
+          var mix = function (ca, cb) {
+            var hx = function (v) {
+              return typeof v === "string"
+                ? parseInt(String(v).replace("#", ""), 16) : (v | 0);
+            };
+            var an = hx(ca == null ? "#000000" : ca), bn = hx(cb == null ? "#000000" : cb);
+            var ch = function (sh) {
+              var av = (an >> sh) & 0xff, bv = (bn >> sh) & 0xff;
+              return Math.max(0, Math.min(255, Math.round(av + (bv - av) * t)));
+            };
+            return "#" + [ch(16), ch(8), ch(0)].map(function (v) {
+              return ("0" + v.toString(16)).slice(-2);
+            }).join("");
+          };
+          mo.fillColor = mix(a.fillColor, b.fillColor);
+          mo.strokeColor = mix(a.strokeColor, b.strokeColor);
+          var mn = function (k, d) {
+            var av = a[k] != null ? a[k] : d, bv = b[k] != null ? b[k] : d;
+            return av + (bv - av) * t;
+          };
+          mo.fillAlpha = mn("fillAlpha", 1);
+          mo.strokeAlpha = mn("strokeAlpha", 1);
+          mo.strokeWidth = mn("strokeWidth", 0);
+          mo.alpha = mn("alpha", 1);
+          mo.fillType = ((a.fillType || "solid") === "none" &&
+                         (b.fillType || "solid") === "none") ? "none" : "solid";
+          mo.__tween = true;
+          out.push(mo);
+          continue;
+        }
+      }
       if (b) {
         o = {};
         for (var prop in a) o[prop] = a[prop];
@@ -13769,6 +14182,18 @@ function exportRuntime(data, canvas, options) {
         }
         var aa = a.alpha != null ? a.alpha : 1, ba = b.alpha != null ? b.alpha : 1;
         o.alpha = aa + (ba - aa) * t;
+        /* A motion guide: the object's CENTRE rides the path instead of the
+           straight line between its keyframes, and `orientToPath` turns it to
+           face along the path as well. */
+        var g = guideFor[la.name];
+        if (g && Flashy.MotionGuide) {
+          var gp = Flashy.MotionGuide.sampleAt(g.points, t, g.arc);
+          if (gp) {
+            o.x = gp.x - (o.width || 0) / 2;
+            o.y = gp.y - (o.height || 0) / 2;
+            if (kf.orientToPath) o.rotation = gp.angle;
+          }
+        }
         o.__tween = true;              // the timeline is driving this one
       }
       out.push(o);
@@ -15563,6 +15988,15 @@ function init(){
     /** The stage hit test, which Edit Multiple Frames widens. */
     hitTest: hitTest,
     editMultipleKeyframes: editMultipleKeyframes,
+    /** The motion-guide polyline governing a layer, in stage space, or null. */
+    addShapeHint: addShapeHint,
+    removeShapeHints: removeShapeHints,
+    shapeHintTarget: shapeHintTarget,
+    motionGuideFor: function(layerIdx){
+      var layers=currentLayers();
+      return motionGuideFor(layers,layers[layerIdx]);
+    },
+    frameObjects: function(layers,frame,opts){ return frameObjects(layers,frame,opts); },
     /* Scenes. The alias discipline matters here: doc.layers IS the current
        scene's layer array, never a copy, so a spec that reaches doc.layers is
        reaching the live scene. */

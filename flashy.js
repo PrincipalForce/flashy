@@ -758,6 +758,458 @@
     }
   };
 
+  /* -------------------- Motion guides --------------------
+   *
+   * A motion guide layer holds a drawn path, and the layers beneath it follow
+   * it: a tween's position comes from the path rather than from a straight
+   * line between its keyframes. It is how anything arcs — a thrown ball, a
+   * paper aeroplane, a camera push — and the alternative is a keyframe every
+   * few frames with the curve eyeballed by hand.
+   *
+   * The sampler is here rather than in the editor because the exported player
+   * has its own copy of the keyframe interpolator and would otherwise need a
+   * second copy of this. `polyline()` takes a plain object with the fields
+   * every artwork object carries, so both sides hand it the same thing.
+   * ------------------------------------------------------------------ */
+  const MotionGuide = {
+    /** Flatten a drawn object into a stage-space polyline, or null. */
+    polyline(o) {
+      if (!o) return null;
+      const hw = Math.abs(o.width || 0) / 2, hh = Math.abs(o.height || 0) / 2;
+      // The painter's convention: translate to the centre, rotate, scale.
+      const rot = (o.rotation || 0) * Math.PI / 180;
+      const cs = Math.cos(rot), sn = Math.sin(rot);
+      const sx = o.scaleX == null ? 1 : o.scaleX, sy = o.scaleY == null ? 1 : o.scaleY;
+      const cx = (o.x || 0) + hw, cy = (o.y || 0) + hh;
+      const map = (lx, ly) => {
+        const px = lx * sx, py = ly * sy;
+        return [cx + px * cs - py * sn, cy + px * sn + py * cs];
+      };
+      const out = [];
+      if ((o.type === "pencil" || o.type === "brush" || o.type === "path-points") &&
+          o.points && o.points.length >= 4) {
+        for (let i = 0; i < o.points.length; i += 2) {
+          const p = map(o.points[i] - hw, o.points[i + 1] - hh);
+          out.push(p[0], p[1]);
+        }
+        return out;
+      }
+      if (o.type === "line") {
+        // A straight guide is still a guide, and it is the one people draw
+        // first to check the feature does anything.
+        const a = map(-hw, -hh), b = map(hw, hh);
+        return [a[0], a[1], b[0], b[1]];
+      }
+      if (o.type === "path" && o.path && o.path.length) {
+        /* The four-opcode command stream, replayed inline: 0 moveTo, 1 lineTo,
+           2 quadTo, 3 closePath. Quadratics are flattened at a fixed step —
+           a guide only needs to be smooth enough to sample along. */
+        const psx = o.pathW ? (Math.abs(o.width) / o.pathW) : 1;
+        const psy = o.pathH ? (Math.abs(o.height) / o.pathH) : 1;
+        const X = v => v * psx - hw, Y = v => v * psy - hh;
+        let k = 0, lx = 0, ly = 0, started = false;
+        const push = (x, y) => { const p = map(x, y); out.push(p[0], p[1]); };
+        while (k < o.path.length) {
+          const cmd = o.path[k];
+          if (cmd === 0 || cmd === 1) {
+            lx = X(o.path[k + 1]); ly = Y(o.path[k + 2]);
+            // A second moveTo starts a new subpath; a guide is one stroke, so
+            // the first subpath is the guide and the rest are ignored.
+            if (cmd === 0 && started) break;
+            push(lx, ly); started = true; k += 3;
+          } else if (cmd === 2) {
+            const qx = X(o.path[k + 1]), qy = Y(o.path[k + 2]);
+            const ex = X(o.path[k + 3]), ey = Y(o.path[k + 4]);
+            for (let s = 1; s <= 8; s++) {
+              const u = s / 8, iu = 1 - u;
+              push(iu * iu * lx + 2 * iu * u * qx + u * u * ex,
+                   iu * iu * ly + 2 * iu * u * qy + u * u * ey);
+            }
+            lx = ex; ly = ey; k += 5;
+          } else {
+            k += 1;
+          }
+        }
+        return out.length >= 4 ? out : null;
+      }
+      return null;
+    },
+
+    /** Cumulative arc lengths along a polyline, and its total. */
+    arc(pts) {
+      const lens = [0];
+      let total = 0;
+      for (let i = 2; i < pts.length; i += 2) {
+        total += Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]);
+        lens.push(total);
+      }
+      return { lens, total };
+    },
+
+    /**
+     * The point `t` of the way along a polyline, by ARC LENGTH, with the
+     * tangent angle there.
+     *
+     * By length rather than by vertex index, because a traced or hand-drawn
+     * path has its points bunched up round the curves — indexing would make an
+     * object crawl through the bends and bolt down the straights.
+     */
+    sampleAt(pts, t, cached) {
+      if (!pts || pts.length < 4) return null;
+      const a = cached || this.arc(pts);
+      if (!a.total) return { x: pts[0], y: pts[1], angle: 0 };
+      const want = Math.max(0, Math.min(1, t)) * a.total;
+      let i = 1;
+      while (i < a.lens.length - 1 && a.lens[i] < want) i++;
+      const l0 = a.lens[i - 1], l1 = a.lens[i];
+      const seg = l1 - l0 || 1;
+      const u = (want - l0) / seg;
+      const x0 = pts[(i - 1) * 2], y0 = pts[(i - 1) * 2 + 1];
+      const x1 = pts[i * 2], y1 = pts[i * 2 + 1];
+      return {
+        x: x0 + (x1 - x0) * u,
+        y: y0 + (y1 - y0) * u,
+        angle: Math.atan2(y1 - y0, x1 - x0) * 180 / Math.PI
+      };
+    },
+
+    /**
+     * Which motion-guide layer governs the layer at `index`, or null.
+     *
+     * The same flat-list-with-a-run idiom mask layers use: a layer of type
+     * "motionguide", and the "guided" layers directly beneath it follow it.
+     */
+    guideFor(layers, index) {
+      if (!layers || !layers[index]) return null;
+      if ((layers[index].layerType || "normal") !== "guided") return null;
+      for (let i = index - 1; i >= 0; i--) {
+        const t = layers[i].layerType || "normal";
+        if (t === "motionguide") return layers[i];
+        if (t !== "guided") return null;
+      }
+      return null;
+    }
+  };
+
+  /* -------------------- Shape tweening --------------------
+   *
+   * A shape tween is supposed to MORPH one outline into another — a circle
+   * into a star, a mouth into a different mouth. What it actually did was
+   * interpolate the two objects' boxes and transforms, exactly like a motion
+   * tween with a different colour in the timeline: a rectangle tweened to an
+   * oval stayed a rectangle the whole way and then snapped.
+   *
+   * This walks both outlines at an even arc-length step, pairs them up, and
+   * interpolates point by point. Shape hints steer the pairing, which is the
+   * entire reason Flash had them: without one, "which bit of the circle
+   * becomes which bit of the star" is a guess, and the wrong guess makes the
+   * shape turn inside out on its way across.
+   *
+   * It lives here, not in the editor, because the exported player tweens its
+   * own keyframes and would otherwise need a second copy — the same reason
+   * Filters and Slice9 are here.
+   * ------------------------------------------------------------------ */
+  const Morph = {
+    /** Signed area of a flat loop; the sign is its winding direction. */
+    area2(loop) {
+      let a = 0;
+      for (let i = 0, n = loop.length; i < n; i += 2) {
+        const j = (i + 2) % n;
+        a += loop[i] * loop[j + 1] - loop[j] * loop[i + 1];
+      }
+      return a;
+    },
+
+    reverse(loop) {
+      const out = [];
+      for (let i = loop.length - 2; i >= 0; i -= 2) out.push(loop[i], loop[i + 1]);
+      return out;
+    },
+
+    /**
+     * An object's outline(s) as flat loops in stage space.
+     *
+     * Deliberately independent of the editor's geometry module, which is an
+     * authoring-time file and is not shipped with an export.
+     */
+    loops(o) {
+      if (!o) return [];
+      const w = Math.abs(o.width || 0), h = Math.abs(o.height || 0);
+      const hw = w / 2, hh = h / 2;
+      const rot = (o.rotation || 0) * Math.PI / 180;
+      const cs = Math.cos(rot), sn = Math.sin(rot);
+      const sx = o.scaleX == null ? 1 : o.scaleX, sy = o.scaleY == null ? 1 : o.scaleY;
+      const cx = (o.x || 0) + hw, cy = (o.y || 0) + hh;
+      const map = (lx, ly) => {
+        const px = lx * sx, py = ly * sy;
+        return [cx + px * cs - py * sn, cy + px * sn + py * cs];
+      };
+      const emit = local => {
+        const out = [];
+        for (let i = 0; i < local.length; i += 2) {
+          const p = map(local[i], local[i + 1]);
+          out.push(p[0], p[1]);
+        }
+        return out;
+      };
+
+      /* Only things that ARE an outline. A symbol, group, bitmap or text
+         block has contents rather than a shape, and morphing its bounding box
+         would throw those contents away — Flash made you Break Apart first for
+         exactly this reason. The caller falls back to interpolating the
+         transform, which is at least still the object. */
+      if (o.type === "rect") {
+        return [emit([-hw, -hh, hw, -hh, hw, hh, -hw, hh])];
+      }
+      if (o.type === "oval") {
+        const local = [];
+        const steps = Math.max(16, Math.min(96, Math.round((w + h) / 4)));
+        for (let i = 0; i < steps; i++) {
+          const a = (i / steps) * Math.PI * 2;
+          local.push(Math.cos(a) * hw, Math.sin(a) * hh);
+        }
+        return [emit(local)];
+      }
+      if ((o.type === "pencil" || o.type === "brush") && o.points && o.points.length >= 6) {
+        const local = [];
+        for (let i = 0; i < o.points.length; i += 2) {
+          local.push(o.points[i] - hw, o.points[i + 1] - hh);
+        }
+        return [emit(local)];
+      }
+      if (o.type === "line") {
+        return [emit([-hw, -hh, hw, hh])];
+      }
+      if (o.type === "path" && o.path && o.path.length) {
+        const psx = o.pathW ? (w / o.pathW) : 1, psy = o.pathH ? (h / o.pathH) : 1;
+        const X = v => v * psx - hw, Y = v => v * psy - hh;
+        const out = [];
+        let cur = null, lx = 0, ly = 0;
+        let k = 0;
+        const close = () => {
+          if (cur && cur.length >= 6) out.push(emit(cur));
+          cur = null;
+        };
+        while (k < o.path.length) {
+          const cmd = o.path[k];
+          if (cmd === 0) {
+            close();
+            lx = X(o.path[k + 1]); ly = Y(o.path[k + 2]);
+            cur = [lx, ly]; k += 3;
+          } else if (cmd === 1) {
+            lx = X(o.path[k + 1]); ly = Y(o.path[k + 2]);
+            if (cur) cur.push(lx, ly);
+            k += 3;
+          } else if (cmd === 2) {
+            const qx = X(o.path[k + 1]), qy = Y(o.path[k + 2]);
+            const ex = X(o.path[k + 3]), ey = Y(o.path[k + 4]);
+            for (let s = 1; s <= 6; s++) {
+              const u = s / 6, iu = 1 - u;
+              if (cur) {
+                cur.push(iu * iu * lx + 2 * iu * u * qx + u * u * ex,
+                         iu * iu * ly + 2 * iu * u * qy + u * u * ey);
+              }
+            }
+            lx = ex; ly = ey; k += 5;
+          } else {
+            k += 1;
+          }
+        }
+        close();
+        return out;
+      }
+      return [];
+    },
+
+    /** `n` points evenly spaced by arc length round a closed loop. */
+    resample(loop, n) {
+      const m = loop.length / 2;
+      if (m < 2) return loop.slice();
+      const lens = [0];
+      let total = 0;
+      for (let i = 0; i < m; i++) {
+        const j = (i + 1) % m;
+        total += Math.hypot(loop[j * 2] - loop[i * 2], loop[j * 2 + 1] - loop[i * 2 + 1]);
+        lens.push(total);
+      }
+      if (!total) return loop.slice();
+      const out = [];
+      let seg = 0;
+      for (let k = 0; k < n; k++) {
+        const want = (k / n) * total;
+        while (seg < m - 1 && lens[seg + 1] < want) seg++;
+        const l0 = lens[seg], l1 = lens[seg + 1];
+        const u = (l1 - l0) ? (want - l0) / (l1 - l0) : 0;
+        const i = seg, j = (seg + 1) % m;
+        out.push(loop[i * 2] + (loop[j * 2] - loop[i * 2]) * u,
+                 loop[i * 2 + 1] + (loop[j * 2 + 1] - loop[i * 2 + 1]) * u);
+      }
+      return out;
+    },
+
+    /** Where a point sits round a loop, as 0..1 of its arc length. */
+    paramOf(loop, x, y) {
+      const m = loop.length / 2;
+      let best = 0, bestD = Infinity, bestLen = 0, total = 0;
+      const lens = [0];
+      for (let i = 0; i < m; i++) {
+        const j = (i + 1) % m;
+        total += Math.hypot(loop[j * 2] - loop[i * 2], loop[j * 2 + 1] - loop[i * 2 + 1]);
+        lens.push(total);
+      }
+      for (let i = 0; i < m; i++) {
+        const j = (i + 1) % m;
+        const ax = loop[i * 2], ay = loop[i * 2 + 1];
+        const bx = loop[j * 2], by = loop[j * 2 + 1];
+        const vx = bx - ax, vy = by - ay;
+        const len2 = vx * vx + vy * vy;
+        let u = len2 ? ((x - ax) * vx + (y - ay) * vy) / len2 : 0;
+        u = Math.max(0, Math.min(1, u));
+        const qx = ax + vx * u, qy = ay + vy * u;
+        const d = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+        if (d < bestD) {
+          bestD = d; best = i;
+          bestLen = lens[i] + Math.sqrt(len2) * u;
+        }
+      }
+      void best;
+      return total ? bestLen / total : 0;
+    },
+
+    /**
+     * A parameter map from loop A's outline to loop B's, built from hints.
+     *
+     * No hints: identity, with B rotated so its nearest-to-A's-start point
+     * lines up — which is the best guess available and is usually right for
+     * two shapes drawn in the same orientation.
+     *
+     * One hint: a constant offset, so the marked point of A becomes the marked
+     * point of B.
+     *
+     * Several: piecewise linear between them, wrapping round. This is what
+     * makes a hand morph into another hand instead of turning inside out.
+     */
+    paramMap(pairs) {
+      if (!pairs || !pairs.length) return u => u;
+      if (pairs.length === 1) {
+        const d = pairs[0][1] - pairs[0][0];
+        return u => ((u + d) % 1 + 1) % 1;
+      }
+      const sorted = pairs.slice().sort((p, q) => p[0] - q[0]);
+      return u => {
+        u = ((u % 1) + 1) % 1;
+        for (let i = 0; i < sorted.length; i++) {
+          const a = sorted[i];
+          const b = sorted[(i + 1) % sorted.length];
+          let a0 = a[0], a1 = b[0];
+          let b0 = a[1], b1 = b[1];
+          // The last span wraps past 1 back to the first.
+          if (a1 <= a0) a1 += 1;
+          if (b1 <= b0) b1 += 1;
+          let uu = u;
+          if (uu < a0) uu += 1;
+          if (uu >= a0 && uu <= a1) {
+            const f = (a1 - a0) ? (uu - a0) / (a1 - a0) : 0;
+            return ((b0 + (b1 - b0) * f) % 1 + 1) % 1;
+          }
+        }
+        return u;
+      };
+    },
+
+    /** How many samples to morph with: enough for the bigger shape. */
+    sampleCount(a, b) {
+      const n = Math.max(a.length, b.length) / 2;
+      return Math.max(24, Math.min(240, Math.round(n)));
+    },
+
+    /**
+     * Morph `a` into `b` at `t`, as a path command stream in stage space.
+     *
+     * Returns `{path, x, y, width, height, pathW, pathH}` or null when either
+     * object has no outline to morph.
+     */
+    between(a, b, t, hints) {
+      const la = this.loops(a), lb = this.loops(b);
+      if (!la.length || !lb.length) return null;
+      // Biggest first, so the body of a shape pairs with the body of the other
+      // rather than with one of its holes.
+      const byArea = arr => arr.slice().sort((p, q) =>
+        Math.abs(this.area2(q)) - Math.abs(this.area2(p)));
+      const sa = byArea(la), sb = byArea(lb);
+      const pairs = Math.min(sa.length, sb.length);
+      const path = [];
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+      for (let p = 0; p < pairs; p++) {
+        let A = sa[p], B = sb[p];
+        // Opposite windings make the two walk round each other backwards, so
+        // every point pairs with the far side of the shape.
+        if ((this.area2(A) < 0) !== (this.area2(B) < 0)) B = this.reverse(B);
+        const n = this.sampleCount(A, B);
+        const ra = this.resample(A, n);
+        let rb = this.resample(B, n);
+
+        let map;
+        if (p === 0 && hints && hints.length) {
+          const hp = [];
+          for (let i = 0; i < hints.length; i++) {
+            const hint = hints[i];
+            hp.push([this.paramOf(A, hint[0], hint[1]), this.paramOf(B, hint[2], hint[3])]);
+          }
+          map = this.paramMap(hp);
+        } else {
+          // Rotate B so its start is nearest A's, the best guess with nothing
+          // to go on.
+          let bestK = 0, bestD = Infinity;
+          for (let k = 0; k < n; k++) {
+            const d = Math.hypot(rb[k * 2] - ra[0], rb[k * 2 + 1] - ra[1]);
+            if (d < bestD) { bestD = d; bestK = k; }
+          }
+          const rot = [];
+          for (let k = 0; k < n; k++) {
+            const j = (bestK + k) % n;
+            rot.push(rb[j * 2], rb[j * 2 + 1]);
+          }
+          rb = rot;
+          map = u => u;
+        }
+
+        const at = (loop, u) => {
+          const m = loop.length / 2;
+          const f = (((u % 1) + 1) % 1) * m;
+          const i = Math.floor(f) % m, j = (i + 1) % m;
+          const g = f - Math.floor(f);
+          return [loop[i * 2] + (loop[j * 2] - loop[i * 2]) * g,
+                  loop[i * 2 + 1] + (loop[j * 2 + 1] - loop[i * 2 + 1]) * g];
+        };
+
+        for (let k = 0; k < n; k++) {
+          const u = k / n;
+          const pa = at(ra, u);
+          const pb = at(rb, map(u));
+          const x = pa[0] + (pb[0] - pa[0]) * t;
+          const y = pa[1] + (pb[1] - pa[1]) * t;
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+          path.push(k === 0 ? 0 : 1, x, y);
+        }
+        path.push(3);
+      }
+      if (!isFinite(minX)) return null;
+      // Shifted to a 0,0 origin, which is what a path object's stream expects.
+      for (let i = 0; i < path.length;) {
+        const cmd = path[i];
+        if (cmd === 3) { i += 1; continue; }
+        path[i + 1] -= minX;
+        path[i + 2] -= minY;
+        i += 3;
+      }
+      const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+      return { path, x: minX, y: minY, width: w, height: h, pathW: w, pathH: h };
+    }
+  };
+
   // -------------------- DisplayObject --------------------
   class DisplayObject {
     constructor() {
@@ -1803,6 +2255,12 @@
     /* 9-slice: the cell maths plus the container that uses it, shared with the
        authoring stage and the SVG export so all three agree to the pixel. */
     Slice9, NineSlice,
+    /* Motion guides: the polyline sampler, shared with the editor and with the
+       exported player's own interpolator. */
+    MotionGuide,
+    /* Shape tweening: a real outline morph, shared with the editor and the
+       exported player. */
+    Morph,
     Sound, SoundTrack, Bitmaps,
     /* Shared with the editor's own stage painter and with the SVG exporter, so
        a glow on the authoring stage is the same glow in every export. */

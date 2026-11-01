@@ -50,7 +50,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Shape ▸ Smooth / Straighten / Optimize | ✅ | `shapeCleanup`, over both artwork representations. Smooth re-emits a path with curve fitting rather than adding corners; Straighten and Optimize run the tracer's own Douglas–Peucker, now exported so there is one implementation. |
 | Shape ▸ Convert Lines to Fills | ✅ | The stroke becomes the area it swept, so it scales without changing width and the bucket and eraser can reach it. |
 | Shape ▸ Expand Fill / Soften Fill Edges | ✅ | `offsetRegion` grows or shrinks a region by banding its outline; Soften does it in fading steps, and the halo stays a vector. |
-| Shape ▸ Add / Remove Shape Hint | ⬜ | Shape tweens exist but are uncontrollable — no hints means no reliable morph. |
+| Shape ▸ Add / Remove Shape Hint | ✅ | Lettered markers, draggable on the stage, driving the morph's parameter map: one hint offsets the correspondence, several reparameterise it piecewise. |
 | Combine Objects ▸ Union / Intersect / Punch / Crop | ✅ | `combineSelection`. Punch and Crop use the topmost shape as the tool and discard it; the shapes below keep their own styles. |
 | Align ▸ (left/centre/right, top/middle/bottom, distribute, match size, space evenly, to stage) | ✅ | The Align panel, with To Stage. Distribute spreads centres, Space evenly spreads gaps — both, because they differ whenever the objects do. |
 | Distribute to Layers | ✅ | `distributeToLayers`, naming each layer after what it holds. |
@@ -64,10 +64,10 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | --- | --- | --- |
 | Keyframes, blank keyframes, frames, spans | ✅ | — |
 | Motion tween | ✅ | — |
-| Shape tween | ◐ | Interpolates, but no shape hints (above). |
+| Shape tween | ✅ | A real outline morph (`Flashy.Morph`). It used to interpolate the two objects' boxes and transforms — a rectangle tweened to an oval stayed a rectangle the whole way and then snapped. |
 | Easing (named presets + custom curve) | ✅ | Fourteen presets plus a draggable cubic-Bézier curve. One resolver (`Flashy.Easing.resolve`) shared with the exported player, so a custom curve cannot ease one way while authoring and another way in the movie. |
 | Tween ▸ Rotate CW/CCW × n | ✅ | `rotateTimes` is how many times it goes round, counting a partial turn as part of the first — so 0°→350° clockwise once is 350°, and 0°→0° twice is 720°. |
-| Tween ▸ Scale | ✅ | Off means the object keeps its own size through the tween and only moves. Orient to Path, Snap and Sync are still missing. |
+| Tween ▸ Orient to Path, Scale | ✅ | Orient to Path turns the object to face along its motion guide. Snap and Sync are still missing. |
 | **Onion skinning** (+ outlines, marker modes) | ✅ | `drawOnionSkin`, with frame counts either side, ghost and outline modes, and controls in the timeline header. Edit Multiple Frames is still missing. |
 | Frame labels (+ name / comment / anchor) | ✅ | It was stored, serialized and read by the exporter, and there was no way to set one — so `gotoAndPlay("menu")` was unreachable from the authoring side. Labels now draw on the timeline as flags, and a COMMENT is deliberately not exported: making `gotoAndPlay("fix this bit")` work would be wrong. |
 | Reverse Frames | ✅ | Reverses the spans, not merely the list, and shifts each tween back one — a tween belongs to the pair of keyframes it spans and is stored on the earlier one, so reversing without the shift leaves the last keyframe tweening into nothing. |
@@ -76,7 +76,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Layer folders | ✅ | The same flat-list-with-a-run idiom mask layers already use: a layer of type `folder`, and the layers beneath it at a greater `indent` are its contents. No tree to keep consistent, and reordering cannot orphan anything. Collapsing hides rows, never artwork. |
 | Guide layers | ✅ | Marked, shown on the stage and in onion skin, and stripped from every output — including out of the published file, not merely skipped by the player. |
 | Mask / Masked layers | ✅ | `maskGroups`, `applyMaskClip`. |
-| Motion guide layer (tween along a drawn path) | ⬜ | Missing. |
+| Motion guide layer (tween along a drawn path) | ✅ | `Flashy.MotionGuide` samples the path by ARC LENGTH, not by vertex index — indexing makes an object crawl through the bends and bolt down the straights. The guide layer is drawn as dashed chrome and never exported, but stays in the output layer list so the player can still read the path. |
 | Layer height / outline view, per layer | ✅ | Both were already stored, serialized and read by nothing — the inspector offered Short/Normal/Tall and an outline colour, and the layer list drew every row at a fixed 20px with no outline mode anywhere. The timeline no longer assumes `index * 20`. Per-layer tint is still missing. |
 | **Scenes** (Insert ▸ Scene, Scene panel, play in order) | ✅ | `doc.scenes`, with `doc.layers` a live alias of the current scene rather than a copy — the whole editor reaches `doc.layers` directly, and an alias cannot drift out of sync with a copy that does not exist. An export lays them end to end on one timeline with each name as a frame label, so `gotoAndPlay("Scene 2")` works. |
 | Timeline Effects | ⬜ | Missing (low value — Adobe deprecated them too). |
@@ -280,13 +280,22 @@ slice, so two copies of an object would have shared their filter specs.
 Covered by `tests/filters.spec.js` (17 specs) and `tests/nine-slice.spec.js`
 (12 specs).
 
-### Wave 4 — timeline depth
-17. **Layer folders**, **guide layers**, layer tint/outline view, layer height.
-18. **Scenes** + Scene panel.
-19. **Motion guide layers** and **orient to path**.
-20. **Custom easing editor**, tween rotate CW/CCW × n, sync/snap/scale.
-21. **Shape hints**.
-22. **Reverse Frames**, **Edit Multiple Frames**, **Copy/Paste Motion**, frame label types.
+### ✅ Wave 4 — timeline depth (shipped)
+17. ✅ **Layer folders**, **guide layers**, outline view, layer height. (Per-layer tint remains.)
+18. ✅ **Scenes** + Scene panel.
+19. ✅ **Motion guide layers** and **orient to path**.
+20. ✅ **Custom easing editor**, tween rotate CW/CCW × n, scale. (Snap and sync remain.)
+21. ✅ **Shape hints** — and the shape tween they steer, which did not morph at all before.
+22. ✅ **Reverse Frames**, **Edit Multiple Frames**, **Copy/Paste Motion**, frame label types.
+
+Four things in this wave were features that existed in the UI and the save
+format and did nothing: `layerHeight`, `outlineColor`, a layer marked `guide`
+(which was published anyway), and `kf.label` (which no UI could set, so
+`gotoAndPlay("menu")` was unreachable from the authoring side). A fifth, the
+shape tween, did something — just not the thing it is named after.
+
+Covered by `tests/layers-scenes.spec.js` (16), `tests/tween-frames.spec.js`
+(15) and `tests/morph-guide.spec.js` (13).
 
 ### Wave 5 — text and interactivity
 23. **Dynamic and input text**, instance/variable names, selectable, HTML, border, line type, letter spacing, anti-alias mode, break apart text.
