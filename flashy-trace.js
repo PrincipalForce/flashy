@@ -702,7 +702,30 @@
     pathBounds: pathBounds,
     pathToContext: pathToContext,
     pathToSVG: pathToSVG,
-    pathNodeCount: pathNodeCount
+    pathNodeCount: pathNodeCount,
+    /* Outline simplification and curve emission, exported because the editor's
+       Shape ▸ Straighten / Optimize / Smooth commands do exactly what the
+       tracer's own cleanup stage does. Two implementations of Douglas–Peucker
+       would drift apart, and the one in here is the tested one.
+
+       All three take and return FLAT coordinate arrays [x,y,x,y,…], the same
+       shape FlashyGeom uses for a loop, so a region can go straight through
+       them without conversion. */
+    douglasPeucker: douglasPeucker,
+    simplifyLoop: simplifyLoop,
+    collapseCollinear: collapseCollinear,
+    /** One closed loop appended to a command stream, corners kept, rest curved. */
+    emitLoop: emitLoop,
+    /** Loops → a fresh command stream, with curve fitting. */
+    loopsToCurvyPath: function (loops, cornerDeg, curvy) {
+      var out = [];
+      for (var i = 0; i < loops.length; i++) {
+        emitLoop(out, loops[i],
+                 cornerDeg == null ? 60 : cornerDeg,
+                 curvy == null ? 1 : curvy);
+      }
+      return out;
+    }
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = FlashyTrace;

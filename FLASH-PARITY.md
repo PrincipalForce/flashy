@@ -17,21 +17,21 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Flash tool | Key | Flashy | Gap |
 | --- | --- | --- | --- |
 | Selection | V | ✅ | — |
-| Subselection (anchor/Bézier editing) | A | ⬜ | **No way to edit a drawn path after the fact.** Every pencil/brush/traced stroke is final: you can move and scale it, never reshape it. The largest single drawing gap. |
+| Subselection (anchor/Bézier editing) | A | ✅ | `objectNodes` / `setObjectNode`. Square anchors for a stroke's points and a path's on-curve endpoints, round handles for quadratic controls; a node is written back through the inverse of the painter's own matrix, so it lands under the pointer at any zoom, rotation, skew or scale. |
 | Free Transform | Q | ✅ | — |
-| Gradient / Fill Transform | F | ⬜ | Gradients exist (`fillType`, `fillStops`) but their angle, centre, scale and focal point cannot be dragged. A radial gradient is stuck dead-centre. |
-| Lasso (+ polygon mode, magic wand) | L | ⬜ | Only rubber-band marquee selection. Cannot select around overlapping artwork. |
-| Pen / Add / Delete / Convert anchor | P | ⬜ | No Bézier drawing at all — Flash's primary precision tool. |
+| Gradient / Fill Transform | F | ✅ | Drags the two points `fillGrad` already stored in bounding-box fractions — which the canvas painter, the SVG exporter and the runtime all read. Focal point is still missing. |
+| Lasso (+ polygon mode, magic wand) | L | ✅ | Freeform, corner-to-corner polygon, and a magic wand that selects everything sharing the clicked shape's fill. |
+| Pen / Add / Delete / Convert anchor | P | ◐ | Click for a corner, drag for a curve, click the first point to close, double-click or Enter to finish open, Escape to abandon. The command stream carries quadratics, so one drag sets one control point. Add/Delete/Convert anchor are still missing. |
 | Text | T | ◐ | Static only — see §6. |
 | Line | N | ✅ | — |
 | Rectangle (+ primitive, corner radius) | R | ◐ | No corner radius, no primitive re-editing. |
 | Oval (+ primitive, start/end angle, inner radius) | O | ◐ | No arc, pie or donut. |
-| PolyStar (polygon / star, sides, point size) | — | ⬜ | Missing entirely. |
-| Pencil (Straighten / Smooth / Ink modes) | Y | ◐ | No drawing modes. |
-| Brush (size, shape, Paint Normal/Fills/Behind/Selection/Inside) | B | ◐ | Fixed round brush, no paint modes. |
+| PolyStar (polygon / star, sides, point size) | — | ✅ | Emitted as a `path` object, so it inherits gradients, resizing, the eraser's geometry and all four export paths rather than needing a fifth primitive branch in each. |
+| Pencil (Straighten / Smooth / Ink modes) | Y | ✅ | Applied on release, as in Flash. |
+| Brush (size, shape, Paint Normal/Fills/Behind/Selection/Inside) | B | ◐ | Size is now its own control, on the bracket keys. Brush shape and the five paint modes are still missing. |
 | Eraser (+ modes, Faucet) | E | ◐ | Size and round/square shape only; no erase modes, no Faucet. |
 | Paint Bucket (+ gap size, Lock Fill) | K | ◐ | No gap closing, no lock fill. |
-| Ink Bottle (apply stroke style to a shape) | S | ⬜ | Cannot restyle an existing stroke by clicking it. |
+| Ink Bottle (apply stroke style to a shape) | S | ✅ | The paint bucket's other half. |
 | Eyedropper | I | ✅ | — |
 | Hand | H | ✅ | — |
 | Zoom | Z | ✅ | — |
@@ -47,11 +47,11 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Transform ▸ Rotate 90° CW / CCW | ✅ | — |
 | Transform ▸ Scale and Rotate… (numeric) | ✅ | Ctrl+Alt+S, plus the Transform panel. |
 | Transform ▸ Remove Transform | ✅ | Ctrl+Shift+Z. |
-| Shape ▸ Smooth / Straighten / Optimize | ⬜ | A traced bitmap or a shaky pencil stroke cannot be cleaned up. `flashy-trace.js` already produces path command streams, so the data is there. |
-| Shape ▸ Convert Lines to Fills | ⬜ | Missing. |
-| Shape ▸ Expand Fill / Soften Fill Edges | ⬜ | Missing. |
+| Shape ▸ Smooth / Straighten / Optimize | ✅ | `shapeCleanup`, over both artwork representations. Smooth re-emits a path with curve fitting rather than adding corners; Straighten and Optimize run the tracer's own Douglas–Peucker, now exported so there is one implementation. |
+| Shape ▸ Convert Lines to Fills | ✅ | The stroke becomes the area it swept, so it scales without changing width and the bucket and eraser can reach it. |
+| Shape ▸ Expand Fill / Soften Fill Edges | ✅ | `offsetRegion` grows or shrinks a region by banding its outline; Soften does it in fading steps, and the halo stays a vector. |
 | Shape ▸ Add / Remove Shape Hint | ⬜ | Shape tweens exist but are uncontrollable — no hints means no reliable morph. |
-| Combine Objects ▸ Union / Intersect / Punch / Crop | ⬜ | `flashy-geom.js` already implements polygon boolean subtraction for the eraser. The capability exists; it is not exposed. |
+| Combine Objects ▸ Union / Intersect / Punch / Crop | ✅ | `combineSelection`. Punch and Crop use the topmost shape as the tool and discard it; the shapes below keep their own styles. |
 | Align ▸ (left/centre/right, top/middle/bottom, distribute, match size, space evenly, to stage) | ✅ | The Align panel, with To Stage. Distribute spreads centres, Space evenly spreads gaps — both, because they differ whenever the objects do. |
 | Distribute to Layers | ✅ | `distributeToLayers`, naming each layer after what it holds. |
 | Snap ▸ to Objects / to Pixels / to Guides | ✅ | `snapBox` snaps the selection's bounding box to other objects' edges and centres, the stage, and the guides, with an alignment line drawn for whatever it matched. Alt suspends it. |
@@ -233,13 +233,25 @@ interpolator and the eraser's matrix all learned to read them.
 
 Covered by `tests/object-editing.spec.js` (21 specs).
 
-### Wave 2 — drawing that can be corrected
-8. **Subselection tool** — anchor editing on paths and polylines.
-9. **Pen tool** — Bézier drawing, add/delete/convert anchors.
-10. **PolyStar**, **Lasso** (+ polygon, magic wand), **Ink Bottle**, **Gradient Transform**.
-11. **Shape ▸ Smooth / Straighten / Optimize / Convert Lines to Fills / Expand Fill / Soften Edges**.
-12. **Combine Objects** — Union, Intersect, Punch, Crop (on `flashy-geom.js`).
-13. Rectangle corner radius; oval start/end angle and inner radius; pencil and brush modes.
+### ✅ Wave 2 — drawing that can be corrected (shipped)
+8. ✅ **Subselection tool** — anchor editing on paths and polylines.
+9. ◐ **Pen tool** — Bézier drawing. Add/Delete/Convert anchor still to do.
+10. ✅ **PolyStar**, **Lasso** (+ polygon, magic wand), **Ink Bottle**, **Gradient Transform**.
+11. ✅ **Shape ▸ Smooth / Straighten / Optimize / Convert Lines to Fills / Expand Fill / Soften Edges**.
+12. ✅ **Combine Objects** — Union, Intersect, Punch, Crop (on `flashy-geom.js`).
+13. ◐ Pencil modes and brush size shipped; rectangle corner radius and oval
+    start/end angle and inner radius still to do.
+
+The tool-options strip under the toolbox is now declarative, one spec per tool.
+It had the eraser's two controls hard-coded into `buildToolbox`, which is why
+no tool added since had anywhere to put its own.
+
+Tool keys are Flash's: A Subselection, P Pen, L Lasso, S Ink Bottle,
+F Gradient Transform. The Pose tool held A and has moved to **W** — Pose is a
+Flashy invention, Subselection is a tool every Flash author's hands already
+know, and when the two collide the migrating hands win.
+
+Covered by `tests/shape-tools.spec.js` (30 specs).
 
 ### Wave 3 — the Flash look
 14. **Filters** — drop shadow, blur, glow, bevel, gradient glow/bevel, adjust colour; per-filter enable; honoured in every export path.

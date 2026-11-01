@@ -532,6 +532,18 @@ var menus=[
     {label:"Create Shape Tween",action:"shapeTween"},
     {label:"Remove Tween",action:"removeTween"},
     {type:"sep"},
+    {label:"Smooth",action:"shapeSmooth"},
+    {label:"Straighten",action:"shapeStraighten"},
+    {label:"Optimize...",action:"shapeOptimize"},
+    {label:"Convert Lines to Fills",action:"linesToFills"},
+    {label:"Expand Fill...",action:"expandFill"},
+    {label:"Soften Fill Edges...",action:"softenEdges"},
+    {type:"sep"},
+    {label:"Combine: Union",action:"combineUnion"},
+    {label:"Combine: Intersect",action:"combineIntersect"},
+    {label:"Combine: Punch",action:"combinePunch"},
+    {label:"Combine: Crop",action:"combineCrop"},
+    {type:"sep"},
     {label:"Trace Bitmap...",action:"traceBitmap"},
     {label:"Swap Bitmap...",action:"swapBitmap"},
     {type:"sep"},
@@ -740,16 +752,28 @@ function buildToolbar(){
 var curTool="select";
 var TOOLS=[
   {id:"select",label:"Selection Tool (V)",key:"v",svg:'<path d="M3,1 L3,12 L6,9 L9,13 L11,12 L8,8 L12,7 Z" fill="currentColor"/>'},
-  {id:"pose",label:"Pose Tool (A) \u2014 drag a limb to swing it",key:"a",svg:'<circle cx="4" cy="3" r="2" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><line x1="4" y1="3" x2="8" y2="8" stroke="currentColor" stroke-width="1.4"/><line x1="8" y1="8" x2="12" y2="12" stroke="currentColor" stroke-width="1.4"/>'},
+  /* Subselection on A, which is where Flash put it. The Pose tool held that
+     key and has moved to W: Pose is a Flashy invention, Subselection is a tool
+     every Flash author's hands already know, and when the two collide the
+     migrating hands win. */
+  {id:"subselect",label:"Subselection Tool (A) \u2014 drag a point to reshape a drawing",key:"a",svg:'<path d="M3,1 L3,11 L5.5,8.5 L8,12.5 L10,11.5 L7.5,7.5 L11,6.5 Z" fill="none" stroke="currentColor" stroke-width="1"/><rect x="10" y="1" width="3" height="3" fill="currentColor"/>'},
+  {id:"pose",label:"Pose Tool (W) \u2014 drag a limb to swing it",key:"w",svg:'<circle cx="4" cy="3" r="2" fill="currentColor"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><line x1="4" y1="3" x2="8" y2="8" stroke="currentColor" stroke-width="1.4"/><line x1="8" y1="8" x2="12" y2="12" stroke="currentColor" stroke-width="1.4"/>'},
+  {id:"lasso",label:"Lasso Tool (L) \u2014 select around overlapping artwork",key:"l",svg:'<path d="M7,2 Q12,2 12,5 Q12,8 7,8 Q2,8 2,5 Q2,2 7,2 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M4.5,7.6 Q4,11 6,13" fill="none" stroke="currentColor" stroke-width="1.1"/>'},
   {id:"transform",label:"Free Transform (Q)",key:"q",svg:'<rect x="2" y="2" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="2" cy="2" r="1.5" fill="currentColor"/><circle cx="12" cy="2" r="1.5" fill="currentColor"/><circle cx="2" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/>'},
+  {id:"gradient",label:"Gradient Transform (F) \u2014 drag a gradient's centre, angle and spread",key:"f",svg:'<rect x="2" y="3" width="10" height="8" fill="url(#fyGradIcon)" stroke="currentColor" stroke-width="1"/><defs><linearGradient id="fyGradIcon"><stop offset="0" stop-color="currentColor" stop-opacity="0.15"/><stop offset="1" stop-color="currentColor" stop-opacity="0.9"/></linearGradient></defs>'},
   {id:"text",label:"Text Tool (T)",key:"t",svg:'<text x="3" y="12" font-size="12" font-weight="bold" fill="currentColor">T</text>'},
+  {id:"pen",label:"Pen Tool (P) \u2014 click for corners, drag for curves",key:"p",svg:'<path d="M7,1 L10,4 L5,12 L3,13 L4,11 Z" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="7" cy="1" r="1.2" fill="currentColor"/>'},
   {id:"line",label:"Line Tool (N)",key:"n",svg:'<line x1="2" y1="12" x2="12" y2="2" stroke="currentColor" stroke-width="1.5"/>'},
   {id:"rect",label:"Rectangle Tool (R)",key:"r",svg:'<rect x="2" y="3" width="10" height="8" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
   {id:"oval",label:"Oval Tool (O)",key:"o",svg:'<ellipse cx="7" cy="7" rx="5" ry="4" fill="none" stroke="currentColor" stroke-width="1.5"/>'},
+  /* No key: Flash stacked PolyStar under the Rectangle tool, so it never had
+     one of its own, and P belongs to the Pen. */
+  {id:"polystar",label:"PolyStar Tool \u2014 polygons and stars",svg:'<path d="M7,1 L8.8,5.2 L13,5.6 L9.8,8.5 L10.7,12.8 L7,10.6 L3.3,12.8 L4.2,8.5 L1,5.6 L5.2,5.2 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"pencil",label:"Pencil Tool (Y)",key:"y",svg:'<path d="M2,12 L4,10 L10,4 L12,2 L11,3 L5,9 L3,11 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"brush",label:"Brush Tool (B)",key:"b",svg:'<path d="M9,1 Q12,4 8,8 Q6,10 3,13 Q2,12 4,9 Q5,7 6,6 L9,1 Z" fill="currentColor"/>'},
   {id:"eraser",label:"Eraser Tool (E) — erases vector shapes and bitmaps alike",key:"e",svg:'<path d="M5.5,11.5 L1.5,7.5 L7.5,1.5 L11.5,5.5 Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><line x1="3.5" y1="9.5" x2="9.5" y2="3.5" stroke="currentColor" stroke-width="1"/><line x1="1" y1="12.5" x2="13" y2="12.5" stroke="currentColor" stroke-width="1.2"/>'},
   {id:"bucket",label:"Paint Bucket (K)",key:"k",svg:'<path d="M3,5 L7,1 L11,5 L7,9 Z" fill="currentColor" opacity="0.4"/><path d="M2,9 L2,13 L12,13 L12,9 L10,7 L7,10 L4,7 Z" fill="currentColor"/>'},
+  {id:"inkbottle",label:"Ink Bottle (S) — click a shape to restyle its stroke",key:"s",svg:'<path d="M5,1 L9,1 L9,4 L11,7 L11,13 L3,13 L3,7 L5,4 Z" fill="none" stroke="currentColor" stroke-width="1"/><rect x="4" y="9" width="6" height="3.5" fill="currentColor"/>'},
   {id:"eyedrop",label:"Eyedropper (I)",key:"i",svg:'<path d="M10,1 L12,3 L11,4 L5,10 L3,11 L2,9 L8,3 L9,2 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"hand",label:"Hand Tool (H)",key:"h",svg:'<path d="M7,13 Q3,13 3,9 L3,6 Q3,5 4,5 Q5,5 5,6 L5,7 L5,4 Q5,3 6,3 Q7,3 7,4 L7,7 L7,3 Q7,2 8,2 Q9,2 9,3 L9,7 L9,5 Q9,4 10,4 Q11,4 11,5 L11,10 Q11,13 7,13 Z" fill="none" stroke="currentColor" stroke-width="0.8"/>'},
   {id:"zoom",label:"Zoom Tool (Z)",key:"z",svg:'<circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="1.2"/><line x1="9" y1="9" x2="13" y2="13" stroke="currentColor" stroke-width="1.5"/>'}
@@ -769,50 +793,154 @@ function buildToolbox(){
     tb.appendChild(btn);
   });
 
-  /* Tool options, under the tools — where Flash put them. Only the eraser has
-     any for now, and they only appear when it is the active tool. */
+  /* Tool options, under the tools — where Flash put them. Rebuilt whenever the
+     active tool changes rather than built once and hidden: the eraser was the
+     only tool with options when this strip arrived, and hard-coding its two
+     controls here meant every tool added since had nowhere to put its own. */
   var opts=document.createElement("div");
   opts.id="tool-options";
   opts.className="tool-options";
-  var sizeLabel=document.createElement("div");
-  sizeLabel.className="tool-opt-label";
-  sizeLabel.id="eraserSizeLabel";
-  opts.appendChild(sizeLabel);
-  var slider=document.createElement("input");
-  slider.type="range";slider.className="tool-opt-range";slider.id="eraserSizeRange";
-  slider.min=ERASER_MIN;slider.max=120;slider.step=1;
-  slider.title="Eraser size — [ and ] change it too";
-  slider.addEventListener("input",function(){setEraserSize(parseInt(slider.value,10));});
-  opts.appendChild(slider);
-  var shapes=document.createElement("div");
-  shapes.className="tool-opt-shapes";
-  [["round","●","Round"],["square","■","Square"]].forEach(function(s){
-    var b=document.createElement("button");
-    b.type="button";b.className="tool-opt-btn";b.dataset.shape=s[0];
-    b.textContent=s[1];b.title=s[2]+" eraser";
-    b.addEventListener("click",function(){setEraserShape(s[0]);});
-    shapes.appendChild(b);
-  });
-  opts.appendChild(shapes);
   tb.appendChild(opts);
-  updateEraserUI();
+  updateToolOptions();
 }
 
-/** Keep the tool-options strip in step with the eraser's state. */
-function updateEraserUI(){
-  var box=document.getElementById("tool-options");
-  if(box)box.style.display=curTool==="eraser"?"":"none";
-  var lab=document.getElementById("eraserSizeLabel");
-  if(lab)lab.textContent=eraserSize+" px";
-  var rng=document.getElementById("eraserSizeRange");
-  // The slider tops out well below ERASER_MAX; the brackets go all the way, so
-  // the thumb is allowed to sit at the end rather than snapping the value back.
-  if(rng&&String(eraserSize)!==rng.value)rng.value=Math.min(eraserSize,parseInt(rng.max,10));
-  var btns=document.querySelectorAll(".tool-opt-btn");
-  for(var i=0;i<btns.length;i++){
-    btns[i].className="tool-opt-btn"+(btns[i].dataset.shape===eraserShape?" active":"");
+/* ------------------------------------------------------------------ *
+ * Tool options
+ *
+ * One declarative spec per tool, rendered into the strip under the toolbox.
+ * Every option is live — changing it changes the next stroke, never the
+ * current one — which is why nothing here takes an undo snapshot.
+ * ------------------------------------------------------------------ */
+
+/** Per-tool settings, each one a plain object the tool reads at use time. */
+var polyStar={shape:"polygon",sides:5,point:0.5};
+var brushSize=12;
+var pencilMode="smooth";          // smooth | straighten | ink
+var lassoMode="freeform";         // freeform | polygon | wand
+
+function toolOptionSpec(tool){
+  if(tool==="eraser"){
+    return [
+      {type:"label",id:"eraserSizeLabel",text:function(){return eraserSize+" px";}},
+      {type:"range",id:"eraserSizeRange",min:ERASER_MIN,max:120,step:1,
+       title:"Eraser size — [ and ] change it too",
+       get:function(){return Math.min(eraserSize,120);},
+       set:function(v){setEraserSize(v);}},
+      {type:"choice",title:"Eraser shape",
+       options:[["round","●","Round"],["square","■","Square"]],
+       get:function(){return eraserShape;},set:setEraserShape}
+    ];
   }
+  if(tool==="brush"){
+    return [
+      {type:"label",text:function(){return brushSize+" px";}},
+      {type:"range",min:1,max:120,step:1,title:"Brush size — [ and ] change it too",
+       get:function(){return brushSize;},
+       set:function(v){brushSize=Math.max(1,Math.min(200,v));updateToolOptions();}}
+    ];
+  }
+  if(tool==="pencil"){
+    return [
+      {type:"label",text:function(){return "Mode";}},
+      {type:"choice",title:"What happens to a stroke when you let go",
+       options:[["smooth","∿","Smooth — round the stroke out"],
+                ["straighten","∧","Straighten — reduce it to straight runs"],
+                ["ink","✐","Ink — leave it exactly as drawn"]],
+       get:function(){return pencilMode;},
+       set:function(v){pencilMode=v;updateToolOptions();}}
+    ];
+  }
+  if(tool==="polystar"){
+    return [
+      {type:"choice",title:"Polygon or star",
+       options:[["polygon","⬠","Polygon"],["star","★","Star"]],
+       get:function(){return polyStar.shape;},
+       set:function(v){polyStar.shape=v;updateToolOptions();}},
+      {type:"label",text:function(){return polyStar.sides+" sides";}},
+      {type:"range",min:3,max:32,step:1,title:"Number of sides or points",
+       get:function(){return polyStar.sides;},
+       set:function(v){polyStar.sides=v;updateToolOptions();}},
+      {type:"label",text:function(){
+        return polyStar.shape==="star"?"Point "+polyStar.point.toFixed(2):"";
+      }},
+      {type:"range",min:0.05,max:0.95,step:0.05,title:"Star point size",
+       hidden:function(){return polyStar.shape!=="star";},
+       get:function(){return polyStar.point;},
+       set:function(v){polyStar.point=v;updateToolOptions();}}
+    ];
+  }
+  if(tool==="lasso"){
+    return [
+      {type:"choice",title:"Lasso mode",
+       options:[["freeform","✎","Freeform — draw around what you want"],
+                ["polygon","△","Polygon — click corner to corner, double-click to close"],
+                ["wand","✨","Magic wand — click to select everything the same colour"]],
+       get:function(){return lassoMode;},
+       set:function(v){lassoMode=v;updateToolOptions();}}
+    ];
+  }
+  if(tool==="inkbottle"){
+    return [
+      {type:"label",text:function(){return strokeWidth+" px"; }},
+      {type:"range",min:0,max:40,step:0.5,title:"Stroke width the ink bottle applies",
+       get:function(){return strokeWidth;},
+       set:function(v){strokeWidth=v;updateColorUI();updateToolOptions();}}
+    ];
+  }
+  return null;
 }
+
+function updateToolOptions(){
+  var box=document.getElementById("tool-options");
+  if(!box)return;
+  var spec=toolOptionSpec(curTool);
+  box.textContent="";
+  if(!spec){box.style.display="none";return;}
+  box.style.display="";
+  spec.forEach(function(it){
+    if(it.hidden&&it.hidden())return;
+    if(it.type==="label"){
+      var text=it.text();
+      if(!text)return;
+      var d=document.createElement("div");
+      d.className="tool-opt-label";
+      if(it.id)d.id=it.id;
+      d.textContent=text;
+      box.appendChild(d);
+      return;
+    }
+    if(it.type==="range"){
+      var r=document.createElement("input");
+      r.type="range";r.className="tool-opt-range";
+      if(it.id)r.id=it.id;
+      r.min=it.min;r.max=it.max;r.step=it.step;
+      r.value=it.get();
+      if(it.title)r.title=it.title;
+      r.addEventListener("input",function(){it.set(parseFloat(r.value));});
+      box.appendChild(r);
+      return;
+    }
+    if(it.type==="choice"){
+      var g=document.createElement("div");
+      g.className="tool-opt-shapes";
+      var cur=it.get();
+      it.options.forEach(function(op){
+        var b=document.createElement("button");
+        b.type="button";
+        b.className="tool-opt-btn"+(op[0]===cur?" active":"");
+        b.dataset.shape=op[0];
+        b.textContent=op[1];
+        b.title=op[2];
+        b.addEventListener("click",function(){it.set(op[0]);});
+        g.appendChild(b);
+      });
+      box.appendChild(g);
+    }
+  });
+}
+
+/** Kept for the eraser's bracket keys and setEraserShape, which call it. */
+function updateEraserUI(){updateToolOptions();}
 // Custom SVG cursors for each tool
 var toolCursors={};
 function buildCursor(svg,hotX,hotY){
@@ -858,9 +986,17 @@ function setTool(id){
   if(cv){
     cv.style.cursor=toolCursors[id]||"default";
   }
-  updateEraserUI();
+  updateToolOptions();
   // Leaving the eraser must take its ghost with it.
   if(id!=="eraser"&&eraserHover){eraserHover=null;}
+  /* Leaving the Pen mid-path commits what has been drawn so far rather than
+     throwing it away, and leaving Subselection drops its anchor handles. Both
+     are states that only make sense while their tool is active, and leaving
+     them behind would leave the stage drawing handles for a tool nobody is
+     using. */
+  if(id!=="pen")penCommit();
+  if(id!=="subselect")subPoint=null;
+  if(id!=="lasso")lassoPts=null;
   render();
 }
 
@@ -945,6 +1081,12 @@ function render(){
   // Rig overlay sits above the artwork but inside the stage transform, so the
   // handles track the drawing at any zoom.
   if(curTool==="pose"||(selection.length===1&&isRigPart(selection[0])))drawRigOverlay(ctx);
+  // Tool overlays live inside the stage transform so their handles track the
+  // artwork at any zoom — the same reason the rig overlay is drawn here.
+  if(curTool==="subselect")drawSubselectOverlay(ctx);
+  if(curTool==="gradient")drawGradientOverlay(ctx);
+  if(curTool==="pen")drawPenOverlay(ctx);
+  if(lassoPts&&lassoPts.length>=4)drawLassoOverlay(ctx);
   ctx.restore();
   // grid
   if(showGrid){
@@ -3717,6 +3859,26 @@ function drawPrev(){
       ctx.strokeRect(p1.x,p1.y,p2.x-p1.x,p2.y-p1.y);
     }
     ctx.setLineDash([]);
+  }else if(p.type==="polystar"){
+    // The real geometry, previewed: a star is impossible to place by eye from
+    // a bounding box alone, because the sides and point size change its shape
+    // completely.
+    var sx0=Math.min(p.x1,p.x2),sy0=Math.min(p.y1,p.y2);
+    var sw0=Math.abs(p.x2-p.x1),sh0=Math.abs(p.y2-p.y1);
+    if(sw0>1&&sh0>1){
+      var loop=polyStarLoop(sx0+sw0/2,sy0+sh0/2,sw0/2,sh0/2,
+                            polyStar.sides,polyStar.shape,polyStar.point);
+      ctx.beginPath();
+      var l0=s2c(loop[0],loop[1]);
+      ctx.moveTo(l0.x,l0.y);
+      for(var li2=2;li2<loop.length;li2+=2){
+        var lp=s2c(loop[li2],loop[li2+1]);
+        ctx.lineTo(lp.x,lp.y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle="#0066FF";ctx.lineWidth=1;ctx.setLineDash([3,3]);
+      ctx.stroke();ctx.setLineDash([]);
+    }
   }else if(p.type==="pencil"||p.type==="brush"){
     if(p.points&&p.points.length>1){
       ctx.beginPath();
@@ -3727,7 +3889,7 @@ function drawPrev(){
         ctx.lineTo(cp.x,cp.y);
       }
       ctx.strokeStyle=p.type==="brush"?fillColor:strokeColor;
-      ctx.lineWidth=(p.type==="brush"?strokeWidth*3:strokeWidth)*zoom;
+      ctx.lineWidth=(p.type==="brush"?brushSize:strokeWidth)*zoom;
       ctx.lineCap="round";ctx.lineJoin="round";ctx.stroke();
     }
   }else if(p.type==="eraser"){
@@ -3907,8 +4069,23 @@ function hitTest(x,y){
 }
 var moveStartX=0,moveStartY=0,moveObjStarts=[],movePreSnap=null;
 function onDblClick(e){
+  var dp=getStagePos(e);
+  // Polygon lasso: a double-click closes the outline and selects.
+  if(curTool==="lasso"&&lassoMode==="polygon"&&lassoPts&&lassoPts.length>=6){
+    lassoSelect(lassoPts);
+    lassoPts=null;lassoPending=false;
+    updateProps();render();
+    return;
+  }
+  // Pen: a double-click finishes an OPEN path, which is how you draw a curve
+  // that is a line rather than a shape. Clicking the first point closes it.
+  if(curTool==="pen"&&penPts&&penPts.length>=2){
+    penCommit(false);
+    fullRefresh();
+    return;
+  }
   if(curTool!=="select")return;
-  var p=getStagePos(e);
+  var p=dp;
   var hit=hitTest(p.x,p.y);
   if(hit&&hit.type==="symbol"&&hit.symbolName&&doc.library[hit.symbolName]){
     enterSymbol(hit.symbolName);
@@ -3965,7 +4142,75 @@ function onMouseDown(e){
       dragPreview={type:"select",x1:p.x,y1:p.y,x2:p.x,y2:p.y};
     }
     updateProps();render();
-  }else if(curTool==="rect"||curTool==="oval"||curTool==="line"){
+  }else if(curTool==="subselect"){
+    /* Grab the nearest anchor. Missing every anchor selects whatever is under
+       the pointer instead, so the tool can also be used to pick the drawing
+       you are about to reshape. */
+    var sn=nodeHitTest(p.x,p.y);
+    if(sn){
+      subPoint=sn;
+      subPreSnap=snap();
+    }else{
+      subPoint=null;
+      var sh=hitTest(p.x,p.y);
+      selection=sh?[sh]:[];
+      updateProps();
+    }
+    render();
+  }else if(curTool==="gradient"){
+    var gh=gradientHandleHit(p.x,p.y);
+    if(gh){
+      gradDrag=gh;
+      movePreSnap=snap();
+    }else{
+      var go=hitTest(p.x,p.y);
+      selection=go?[go]:[];
+      if(go&&!isGradient(go)){
+        // The commonest confusion with this tool by a distance: it does
+        // nothing at all on a solid fill, and there is no way to tell from
+        // the stage why.
+        showMessage("Gradient Transform",
+          "This shape has a solid fill, so there is no gradient to transform.\n\n"+
+          "Set its fill to Linear or Radial in the Color Mixer first.");
+      }
+      updateProps();
+    }
+    render();
+    if(!gradDrag)dragging=false;
+  }else if(curTool==="pen"){
+    if(penClosesAt(p.x,p.y)){
+      penCommit(true);
+      fullRefresh();
+      dragging=false;
+    }else{
+      penStart(p.x,p.y);
+      render();
+    }
+  }else if(curTool==="lasso"){
+    if(lassoMode==="wand"){
+      magicWandSelect(p.x,p.y);
+      updateProps();render();
+      dragging=false;
+    }else if(lassoMode==="polygon"){
+      // Click to place a corner; the drag handlers do nothing in this mode.
+      if(!lassoPts)lassoPts=[];
+      lassoPts.push(p.x,p.y);
+      lassoPending=true;
+      render();
+      dragging=false;
+    }else{
+      lassoPts=[p.x,p.y];
+      lassoPending=false;
+    }
+  }else if(curTool==="inkbottle"){
+    var ih=hitTest(p.x,p.y);
+    if(ih&&!isRigPart(ih)&&ih.type!=="symbol"&&ih.type!=="bitmap"){
+      inkBottleApply(ih);
+      selection=[ih];
+      fullRefresh();
+    }
+    dragging=false;
+  }else if(curTool==="rect"||curTool==="oval"||curTool==="line"||curTool==="polystar"){
     dragPreview={type:curTool,x1:p.x,y1:p.y,x2:p.x,y2:p.y};
   }else if(curTool==="pencil"||curTool==="brush"){
     dragPreview={type:curTool,points:[p.x,p.y]};
@@ -4044,7 +4289,23 @@ function onMouseMove(e){
         selection[i].y=moveObjStarts[i].y+dy;
       }
     }
-  }else if(curTool==="rect"||curTool==="oval"||curTool==="line"||curTool==="text"){
+  }else if(curTool==="subselect"){
+    if(subPoint){
+      setObjectNode(subPoint.obj,subPoint.node,p.x,p.y);
+      // The node moved in the object's own space, so its box no longer
+      // describes it. Re-deriving on every pointer move keeps the selection
+      // rectangle, the hit test and the eraser honest while dragging.
+      if(subPoint.obj.type==="path")renormalizePath(subPoint.obj);
+      else renormalizeStroke(subPoint.obj);
+    }
+  }else if(curTool==="gradient"){
+    if(gradDrag)setGradientHandle(gradDrag.obj,gradDrag.which,p.x,p.y);
+  }else if(curTool==="pen"){
+    penDragTo(p.x,p.y);
+  }else if(curTool==="lasso"){
+    if(lassoMode==="freeform"&&lassoPts)lassoPts.push(p.x,p.y);
+  }else if(curTool==="rect"||curTool==="oval"||curTool==="line"||
+           curTool==="text"||curTool==="polystar"){
     if(dragPreview){dragPreview.x2=p.x;dragPreview.y2=p.y;}
   }else if(curTool==="pencil"||curTool==="brush"||curTool==="eraser"){
     if(dragPreview&&dragPreview.points){dragPreview.points.push(p.x,p.y);}
@@ -4102,6 +4363,38 @@ function onMouseUp(e){
       snapHints=[];
     }
     updateProps();
+  }else if(curTool==="subselect"){
+    if(subPoint){
+      if(subPreSnap)pushUndoSnap(subPreSnap);
+      subPoint=null;subPreSnap=null;
+      updateProps();
+    }
+  }else if(curTool==="gradient"){
+    if(gradDrag){
+      if(movePreSnap)pushUndoSnap(movePreSnap);
+      gradDrag=null;movePreSnap=null;
+      updateProps();
+    }
+  }else if(curTool==="pen"){
+    // The drag that shapes a point's handle ends here; the path stays open
+    // until it is closed, finished or abandoned.
+    penDrag=null;
+  }else if(curTool==="lasso"){
+    if(lassoMode==="freeform"&&lassoPts){
+      lassoSelect(lassoPts);
+      lassoPts=null;
+      updateProps();
+    }
+  }else if(curTool==="polystar"){
+    if(dragPreview){
+      var ps=makePolyStar(dragPreview.x1,dragPreview.y1,dragPreview.x2,dragPreview.y2);
+      if(ps){
+        pushUndo();
+        var kfp=CKF();if(!kfp){var lp=CL();if(lp){kfp=lp.insertKeyframe(curFrame);}}
+        if(kfp){kfp.objects.push(ps);selection=[ps];}
+      }
+      dragPreview=null;
+    }
   }else if(curTool==="rect"||curTool==="oval"||curTool==="line"){
     if(dragPreview){
       pushUndo();
@@ -4141,6 +4434,22 @@ function onMouseUp(e){
         // store points relative to top-left so the object can be moved/exported
         obj2.points=pts.map(function(v,i){return i%2===0?v-minX:v-minY;});
         obj2.fillColor=fillColor;obj2.strokeColor=strokeColor;obj2.strokeWidth=strokeWidth;
+        /* The brush's size is its own control, not the stroke width — but the
+           painter draws a brush at three times `strokeWidth`, and so do the
+           SVG and runtime exports. Storing size/3 keeps one number flowing
+           through four render paths that already agree about it. */
+        if(curTool==="brush")obj2.strokeWidth=Math.max(0.1,brushSize/3);
+        /* Pencil modes, applied on release the way Flash applied them: Smooth
+           rounds the stroke out, Straighten reduces it to its straight runs,
+           Ink leaves it exactly as drawn. A hand-drawn stroke is jittery, and
+           which of those three you want is a property of what you are drawing,
+           not something to fix afterwards every time. */
+        if(curTool==="pencil"&&obj2.points.length>=6){
+          if(pencilMode==="smooth")obj2.points=smoothPoints(obj2.points,false,0.5,3);
+          else if(pencilMode==="straighten")obj2.points=window.FlashyTrace
+            ? FlashyTrace.douglasPeucker(obj2.points,2.5) : obj2.points;
+          if(pencilMode!=="ink")renormalizeStroke(obj2);
+        }
         kf3.objects.push(obj2);selection=[obj2];
       }
     }
@@ -6843,6 +7152,92 @@ function doAction(a){
   case "snapGuides":
     snapGuides=!snapGuides;
     break;
+  /* Shape cleanup. Each reports what it did, because "nothing happened" has
+     three different causes here — nothing selected, a locked layer, or a
+     selection of the wrong kind of object — and they need different fixes. */
+  case "shapeSmooth": case "shapeStraighten":
+    var cl=shapeCleanup(a==="shapeSmooth"?"smooth":"straighten",{tolerance:2.5});
+    if(cl.done)fullRefresh();
+    else reportShapeResult(a==="shapeSmooth"?"Smooth":"Straighten",cl);
+    break;
+  case "shapeOptimize":
+    if(!shapeOperands().length){
+      showMessage("Optimize","Select a drawn line or shape first.");break;
+    }
+    showDialog({
+      title:"Optimize Curves",
+      message:"Fewer points means a smaller file and a smoother shape; too few loses the drawing.",
+      fields:[{name:"tolerance",label:"Smoothing",type:"number",value:3,min:0.2,max:30,step:0.2}],
+      onOk:function(v){
+        var r=shapeCleanup("straighten",{tolerance:parseFloat(v.tolerance)||3});
+        if(r.done)fullRefresh();else reportShapeResult("Optimize",r);
+      }
+    });
+    break;
+  case "linesToFills":
+    var lf=convertLinesToFills();
+    if(lf.done)fullRefresh();
+    else showMessage("Convert Lines to Fills",
+      "Select a pencil, brush or line stroke first. A shape that is already a "+
+      "fill has nothing to convert.");
+    break;
+  case "expandFill":
+    if(!shapeOperands().length){
+      showMessage("Expand Fill","Select a filled shape first.");break;
+    }
+    showDialog({
+      title:"Expand Fill",
+      fields:[
+        {name:"distance",label:"Distance (px)",type:"number",value:4,min:0.5,max:200,step:0.5},
+        {name:"direction",label:"Direction",type:"select",value:"expand",
+         options:[["expand","Expand"],["inset","Inset"]]}
+      ],
+      onOk:function(v){
+        var d=Math.abs(parseFloat(v.distance)||4);
+        var r=expandFill(v.direction==="inset"?-d:d);
+        if(r.done)fullRefresh();else reportShapeResult("Expand Fill",r);
+      }
+    });
+    break;
+  case "softenEdges":
+    if(!shapeOperands().length){
+      showMessage("Soften Fill Edges","Select a filled shape first.");break;
+    }
+    showDialog({
+      title:"Soften Fill Edges",
+      message:"A vector halo in steps — the same trick Flash used, and it stays a vector.",
+      fields:[
+        {name:"distance",label:"Distance (px)",type:"number",value:8,min:1,max:200,step:1},
+        {name:"steps",label:"Number of steps",type:"number",value:4,min:1,max:20,step:1},
+        {name:"direction",label:"Direction",type:"select",value:"expand",
+         options:[["expand","Expand"],["inset","Inset"]]}
+      ],
+      onOk:function(v){
+        var r=softenFillEdges(Math.abs(parseFloat(v.distance)||8),
+                              parseInt(v.steps,10)||4,
+                              v.direction==="inset");
+        if(r.done)fullRefresh();else reportShapeResult("Soften Fill Edges",r);
+      }
+    });
+    break;
+  case "combineUnion": case "combineIntersect":
+  case "combinePunch": case "combineCrop":
+    var cmode={combineUnion:"union",combineIntersect:"intersect",
+               combinePunch:"punch",combineCrop:"crop"}[a];
+    var cr=combineSelection(cmode);
+    if(cr.ok&&cr.made)fullRefresh();
+    else if(cr.ok)showMessage("Combine Objects",
+      "The result is empty — these shapes do not "+
+      (cmode==="intersect"?"overlap":"leave anything behind")+".");
+    else if(cr.reason==="need2")showMessage("Combine Objects",
+      "Select two or more drawn shapes.\n\nPunch and Crop use the TOPMOST shape "+
+      "as the tool and discard it; Union and Intersect merge everything.");
+    else if(cr.reason==="shape")showMessage("Combine Objects",
+      "Combine works on drawn shapes — rectangles, ovals, traced paths and brush "+
+      "strokes. A symbol, a group, a bitmap or a text block has to be broken "+
+      "apart first.");
+    else if(cr.reason==="locked")showMessage("Combine Objects","This layer is locked or hidden.");
+    break;
   case "play":startPlay();break;
   case "stop":stopPlay();break;
   case "test":testMovie();break;
@@ -7442,6 +7837,25 @@ function distributeToLayers(){
   selection=[];
   curLayer=Math.min(at,layers.length-1);
   return true;
+}
+
+/**
+ * Say why a shape command did nothing.
+ *
+ * "Nothing happened" has three causes here and they need different fixes, so
+ * guessing wrong wastes the user's time twice.
+ */
+function reportShapeResult(title,r){
+  if(r.locked){
+    showMessage(title,"This layer is locked or hidden, so nothing on it can be changed.");
+  }else if(r.skipped){
+    showMessage(title,
+      "Nothing here can be reshaped.\n\nThis works on drawn lines and shapes — "+
+      "pencil and brush strokes, traced paths, and pen curves. A rectangle, "+
+      "oval, symbol, bitmap or text block has to be broken apart first.");
+  }else{
+    showMessage(title,"Select a drawn line or shape first.");
+  }
 }
 
 /** A layer name not already taken in this edit context. */
@@ -8632,6 +9046,886 @@ var LIPSYNC_VISEMES=[
  * frames 1..6 all land inside the *first* keyframe, so every mouth resolves to
  * the same drawing and the mouth never moves.
  */
+/* ================================================================== *
+ * Shape editing — the drawing half of Flash parity
+ *
+ * Everything in here exists because a drawing used to be final. You could
+ * move a stroke, scale it and erase bits out of it; you could not reshape it,
+ * clean it up, combine it with another one, or draw a precise curve in the
+ * first place. That is the single biggest gap between this and a drawing tool
+ * people would choose.
+ *
+ * All of it is built on the two pure geometry modules the project already had:
+ * flashy-geom.js (polygon booleans, swept stroke areas) and flashy-trace.js
+ * (path command streams, Douglas–Peucker, curve emission). Nothing here
+ * reimplements either — a second Douglas–Peucker would drift away from the
+ * tested one.
+ * ================================================================== */
+
+/** One point through a 2x3 matrix. */
+function matApplyPoint(m,x,y){
+  return {x:m[0]*x+m[2]*y+m[4],y:m[1]*x+m[3]*y+m[5]};
+}
+
+/* ------------------------------------------------------------------ *
+ * The shape operand set
+ * ------------------------------------------------------------------ */
+
+/** Selected objects on the current keyframe, in z-order, that are artwork. */
+function shapeOperands(){
+  var kf=CKF();
+  if(!kf)return [];
+  return kf.objects.filter(function(o){
+    return selection.indexOf(o)>=0&&!isRigPart(o)&&
+           o.type!=="symbol"&&o.type!=="group"&&o.type!=="bitmap"&&o.type!=="text";
+  });
+}
+
+/** True when the active layer will accept an edit at all. */
+function layerEditable(){
+  var l=CL();
+  return !!l&&!l.locked&&l.visible!==false;
+}
+
+/**
+ * Swap objects out of the current keyframe in place.
+ *
+ * `pairs` is [{from: obj, to: [objs]}]. Order is preserved, which matters:
+ * every one of these commands can turn one object into several, and dropping
+ * them at the end of the list would silently bring them to the front.
+ */
+function replaceObjects(pairs){
+  var kf=CKF();
+  if(!kf)return [];
+  var made=[];
+  pairs.forEach(function(p){
+    var at=kf.objects.indexOf(p.from);
+    if(at<0)return;
+    kf.objects.splice.apply(kf.objects,[at,1].concat(p.to));
+    made=made.concat(p.to);
+  });
+  return made;
+}
+
+/* ------------------------------------------------------------------ *
+ * Combine Objects — Union, Intersect, Punch, Crop
+ *
+ * flashy-geom.js has had polygon union, intersection and difference since the
+ * eraser needed difference. Flash 8's Combine Objects menu is those three
+ * operations with a convention about which shape is the operand and which is
+ * the tool, and that convention is the whole feature:
+ *
+ *   Union      everything merges into one shape
+ *   Intersect  only the area every shape shares survives
+ *   Punch      the TOPMOST shape is a cookie cutter: it removes its area from
+ *              the ones below and is itself discarded
+ *   Crop       the TOPMOST shape is a window: the ones below are clipped to it
+ *              and it is itself discarded
+ *
+ * `kf.objects` runs back to front, so "topmost" is the last one.
+ * ------------------------------------------------------------------ */
+function combineSelection(mode){
+  var G=window.FlashyGeom;
+  if(!G)return {ok:false,reason:"geom"};
+  if(!layerEditable())return {ok:false,reason:"locked"};
+  var members=shapeOperands();
+  if(members.length<2)return {ok:false,reason:"need2"};
+  var regions=members.map(objectRegion);
+  if(regions.some(function(r){return !r||!r.length;}))return {ok:false,reason:"shape"};
+
+  pushUndo();
+  var top=members[members.length-1],topReg=regions[regions.length-1];
+  var kf=CKF();
+  var lowest=kf.objects.length;
+  members.forEach(function(o){
+    var i=kf.objects.indexOf(o);
+    if(i>=0&&i<lowest)lowest=i;
+  });
+
+  var made=[];
+  if(mode==="union"||mode==="intersect"){
+    var acc=regions[0];
+    for(var i=1;i<regions.length;i++){
+      acc=mode==="union"?G.union(acc,regions[i]):G.intersection(acc,regions[i]);
+      if(!acc.length)break;
+    }
+    // The result takes the topmost shape's style, which is the one whose
+    // colour you were looking at when you ran the command.
+    made=acc.length?regionToPathObjects(acc,top):[];
+  }else{
+    for(var j=0;j<members.length-1;j++){
+      var r=mode==="punch"?G.difference(regions[j],topReg)
+                          :G.intersection(regions[j],topReg);
+      if(!r.length)continue;
+      // Each cropped or punched shape keeps its OWN style — it is still that
+      // shape, with a bite taken out of it.
+      made=made.concat(regionToPathObjects(r,members[j]));
+    }
+  }
+
+  kf.objects=kf.objects.filter(function(o){return members.indexOf(o)<0;});
+  var at=Math.min(Math.max(0,lowest),kf.objects.length);
+  kf.objects.splice.apply(kf.objects,[at,0].concat(made));
+  selection=made;
+  return {ok:true,made:made.length};
+}
+
+/* ------------------------------------------------------------------ *
+ * Shape ▸ Smooth / Straighten / Optimize
+ *
+ * These act on the object's OWN coordinates, not on a stage-space region, so
+ * an object keeps its identity, its transform and its place in the z-order.
+ * Rebuilding it as a fresh path would lose all three — and would turn a
+ * two-node pencil line into a filled polygon.
+ * ------------------------------------------------------------------ */
+
+/**
+ * One smoothing pass over a coordinate list.
+ *
+ * A plain neighbour average, which is what Flash's Smooth did: it pulls each
+ * point towards the midpoint of its neighbours. Repeated passes smooth
+ * further, and that is the knob worth exposing, because one pass of a strong
+ * average and ten passes of a weak one look quite different — the weak one
+ * keeps the shape and loses the jitter, which is the point.
+ */
+function smoothPoints(pts,closed,strength,passes){
+  var n=pts.length/2;
+  if(n<3)return pts.slice();
+  var cur=pts.slice();
+  var s=Math.max(0,Math.min(1,strength==null?0.5:strength));
+  for(var p=0;p<(passes||1);p++){
+    var out=cur.slice();
+    for(var i=0;i<n;i++){
+      // An open polyline's endpoints are pinned: smoothing a line's ends
+      // shortens it, and a shortened line no longer meets what it met.
+      if(!closed&&(i===0||i===n-1))continue;
+      var a=(i-1+n)%n,b=(i+1)%n;
+      var mx=(cur[a*2]+cur[b*2])/2,my=(cur[a*2+1]+cur[b*2+1])/2;
+      out[i*2]=cur[i*2]+(mx-cur[i*2])*s;
+      out[i*2+1]=cur[i*2+1]+(my-cur[i*2+1])*s;
+    }
+    cur=out;
+  }
+  return cur;
+}
+
+/** Re-derive a stroke object's box from its points, keeping it where it is. */
+function renormalizeStroke(o){
+  if(!o.points||o.points.length<2)return;
+  var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(var i=0;i<o.points.length;i+=2){
+    if(o.points[i]<minX)minX=o.points[i];
+    if(o.points[i]>maxX)maxX=o.points[i];
+    if(o.points[i+1]<minY)minY=o.points[i+1];
+    if(o.points[i+1]>maxY)maxY=o.points[i+1];
+  }
+  // Points are stored relative to the object's top-left, so shrinking the
+  // extent has to move x/y to compensate or the stroke jumps.
+  o.x=(o.x||0)+minX;
+  o.y=(o.y||0)+minY;
+  o.width=(maxX-minX)||1;
+  o.height=(maxY-minY)||1;
+  for(var j=0;j<o.points.length;j+=2){
+    o.points[j]-=minX;
+    o.points[j+1]-=minY;
+  }
+}
+
+/** Re-derive a path object's box from its command stream. */
+function renormalizePath(o){
+  var T=window.FlashyTrace;
+  if(!T||!o.path||!o.path.length)return;
+  var b=T.pathBounds(o.path);
+  if(!(b.width>0)||!(b.height>0))return;
+  var psx=o.pathW?(o.width/o.pathW):1,psy=o.pathH?(o.height/o.pathH):1;
+  o.path=T.pathTransform(o.path,1,1,-b.minX,-b.minY);
+  // Keep the on-stage size the command stream now implies, under the same
+  // scale the object was already drawn at.
+  o.x=(o.x||0)+b.minX*psx;
+  o.y=(o.y||0)+b.minY*psy;
+  o.pathW=b.width;o.pathH=b.height;
+  o.width=b.width*psx;o.height=b.height*psy;
+}
+
+/**
+ * Smooth, Straighten and Optimize, over whichever of the two artwork
+ * representations an object uses.
+ *
+ * Returns {done, skipped}: a rectangle has nothing to smooth, and saying so
+ * beats appearing to work.
+ */
+function shapeCleanup(mode,opts){
+  opts=opts||{};
+  var T=window.FlashyTrace,G=window.FlashyGeom;
+  if(!T||!G)return {done:0,skipped:0};
+  if(!layerEditable())return {done:0,skipped:0,locked:true};
+  var targets=shapeOperands();
+  if(!targets.length)return {done:0,skipped:0};
+  var done=0,skipped=0,pre=null;
+  var tol=opts.tolerance!=null?opts.tolerance:2;
+  var strength=opts.strength!=null?opts.strength:0.5;
+  var passes=opts.passes!=null?opts.passes:3;
+
+  targets.forEach(function(o){
+    if(o.type==="pencil"||o.type==="brush"){
+      if(!o.points||o.points.length<6){skipped++;return;}
+      if(!pre)pre=snap();
+      // A stroke is an open polyline — the painter walks it point to point and
+      // never closes it, so it must not be smoothed as a ring.
+      if(mode==="smooth"){
+        o.points=smoothPoints(o.points,false,strength,passes);
+      }else{
+        o.points=T.douglasPeucker(o.points,tol);
+      }
+      renormalizeStroke(o);
+      done++;
+      return;
+    }
+    if(o.type==="path"){
+      if(!o.path||!o.path.length){skipped++;return;}
+      if(!pre)pre=snap();
+      var loops=G.pathToLoops(o.path,0.25);
+      if(!loops.length){skipped++;return;}
+      var out=loops.map(function(l){
+        if(mode==="smooth")return smoothPoints(l,true,strength,passes);
+        return T.simplifyLoop(l,tol);
+      }).filter(function(l){return l.length>=6;});
+      if(!out.length){skipped++;return;}
+      /* Smooth re-emits with curve fitting, so the result is actually smooth
+         rather than a polygon with more vertices. Straighten and Optimize
+         emit straight segments, which is the whole point of them. */
+      o.path=mode==="smooth"
+        ? T.loopsToCurvyPath(out,60,1)
+        : G.loopsToPath(out);
+      renormalizePath(o);
+      done++;
+      return;
+    }
+    skipped++;
+  });
+  if(pre)pushUndoSnap(pre);
+  return {done:done,skipped:skipped};
+}
+
+/* ------------------------------------------------------------------ *
+ * Shape ▸ Convert Lines to Fills
+ *
+ * A stroke becomes the filled area it covered. That is what makes a line
+ * scalable without its width changing, erasable with the eraser's own
+ * geometry, and fillable with the paint bucket — three things a stroke is not.
+ * ------------------------------------------------------------------ */
+function convertLinesToFills(){
+  var G=window.FlashyGeom;
+  if(!G)return {done:0,skipped:0};
+  if(!layerEditable())return {done:0,skipped:0,locked:true};
+  var targets=shapeOperands().filter(function(o){
+    return o.type==="pencil"||o.type==="brush"||o.type==="line";
+  });
+  if(!targets.length)return {done:0,skipped:0};
+  pushUndo();
+  var pairs=[],done=0;
+  targets.forEach(function(o){
+    var line=objectPolyline(o);
+    if(!line||line.length<4)return;
+    // A brush is already drawn three times its stroke width; the swept area
+    // has to match what was on screen, not what the number says.
+    var w=o.type==="brush"?(o.strokeWidth||1)*3:(o.strokeWidth||1);
+    var region=G.strokeRegion(line,Math.max(0.25,w/2),false);
+    if(!region.length)return;
+    var made=regionToPathObjects(region,o);
+    if(!made.length)return;
+    // The fill takes the colour the line was drawn in, whichever field it
+    // lived in: a pencil's is strokeColor, a brush's is fillColor.
+    var colour=o.type==="brush"?o.fillColor:o.strokeColor;
+    made.forEach(function(m){
+      m.fillType="solid";
+      m.fillColor=colour;
+      m.fillAlpha=o.type==="brush"?(o.fillAlpha!=null?o.fillAlpha:1)
+                                  :(o.strokeAlpha!=null?o.strokeAlpha:1);
+      m.strokeStyle="none";m.strokeWidth=0;
+    });
+    pairs.push({from:o,to:made});
+    done++;
+  });
+  var made2=replaceObjects(pairs);
+  if(made2.length)selection=made2;
+  return {done:done,skipped:targets.length-done};
+}
+
+/* ------------------------------------------------------------------ *
+ * Shape ▸ Expand Fill / Soften Fill Edges
+ *
+ * Expand grows or shrinks a filled shape by a distance. Soften does the same
+ * thing in steps and fades each ring out, which is how Flash faked a blurred
+ * edge on a vector shape — and unlike a real blur it stays a vector.
+ * ------------------------------------------------------------------ */
+
+/** A region grown (or shrunk, for a negative distance) by `dist`. */
+function offsetRegion(region,dist){
+  var G=window.FlashyGeom;
+  if(!G||!region.length||!dist)return region;
+  // The band around the outline, as the swept area of every loop walked as a
+  // closed polyline. Union it on to grow; subtract it to shrink.
+  var band=[];
+  region.forEach(function(loop){
+    if(loop.length<6)return;
+    var closed=loop.concat([loop[0],loop[1]]);
+    var s=G.strokeRegion(closed,Math.abs(dist),false);
+    band=band.length?G.union(band,s):s;
+  });
+  if(!band.length)return region;
+  return dist>0?G.union(region,band):G.difference(region,band);
+}
+
+function expandFill(dist){
+  var G=window.FlashyGeom;
+  if(!G)return {done:0,skipped:0};
+  if(!layerEditable())return {done:0,skipped:0,locked:true};
+  var targets=shapeOperands();
+  if(!targets.length)return {done:0,skipped:0};
+  pushUndo();
+  var pairs=[],done=0;
+  targets.forEach(function(o){
+    var reg=objectRegion(o);
+    if(!reg||!reg.length)return;
+    var out=offsetRegion(reg,dist);
+    if(!out.length)return;
+    var made=regionToPathObjects(out,o);
+    if(!made.length)return;
+    pairs.push({from:o,to:made});
+    done++;
+  });
+  var made2=replaceObjects(pairs);
+  if(made2.length)selection=made2;
+  return {done:done,skipped:targets.length-done};
+}
+
+function softenFillEdges(dist,steps,inward){
+  var G=window.FlashyGeom;
+  if(!G)return {done:0,skipped:0};
+  if(!layerEditable())return {done:0,skipped:0,locked:true};
+  var targets=shapeOperands();
+  if(!targets.length)return {done:0,skipped:0};
+  steps=Math.max(1,Math.min(20,steps|0||4));
+  pushUndo();
+  var pairs=[],done=0;
+  targets.forEach(function(o){
+    var reg=objectRegion(o);
+    if(!reg||!reg.length)return;
+    var layersOut=[];
+    var prev=reg;
+    for(var i=1;i<=steps;i++){
+      var d=(inward?-1:1)*dist*i/steps;
+      var grown=offsetRegion(reg,d);
+      if(!grown.length)continue;
+      // The ring between this step and the last, so the bands do not stack
+      // their alphas into a hard edge.
+      var ring=inward?G.difference(prev,grown):G.difference(grown,prev);
+      prev=grown;
+      if(!ring.length)continue;
+      var a=1-i/(steps+1);
+      regionToPathObjects(ring,o).forEach(function(p){
+        p.fillAlpha=(o.fillAlpha!=null?o.fillAlpha:1)*a;
+        p.strokeStyle="none";p.strokeWidth=0;
+        layersOut.push(p);
+      });
+    }
+    // The core, drawn on top of its own halo.
+    var core=inward?prev:reg;
+    var coreObjs=regionToPathObjects(core,o);
+    coreObjs.forEach(function(p){p.strokeStyle="none";p.strokeWidth=0;});
+    if(!layersOut.length&&!coreObjs.length)return;
+    pairs.push({from:o,to:layersOut.concat(coreObjs)});
+    done++;
+  });
+  var made=replaceObjects(pairs);
+  if(made.length)selection=made;
+  return {done:done,skipped:targets.length-done};
+}
+
+/* ------------------------------------------------------------------ *
+ * PolyStar
+ *
+ * Emitted as a `path` object rather than a new primitive type, which means it
+ * inherits everything a traced path already has: gradient fills, resizing
+ * through pathW/pathH, the eraser's geometry, and all four export paths. A
+ * fifth primitive would have needed a branch in each of them.
+ * ------------------------------------------------------------------ */
+function polyStarLoop(cx,cy,rx,ry,sides,shape,point){
+  sides=Math.max(3,Math.min(64,sides|0||5));
+  var pts=[];
+  // Start at the top, so a polygon sits the way one is drawn by hand.
+  var base=-Math.PI/2;
+  if(shape==="star"){
+    var inner=Math.max(0.02,Math.min(0.98,point==null?0.5:point));
+    for(var i=0;i<sides*2;i++){
+      var a=base+i*Math.PI/sides;
+      var r=(i%2===0)?1:inner;
+      pts.push(cx+Math.cos(a)*rx*r,cy+Math.sin(a)*ry*r);
+    }
+  }else{
+    for(var j=0;j<sides;j++){
+      var b=base+j*2*Math.PI/sides;
+      pts.push(cx+Math.cos(b)*rx,cy+Math.sin(b)*ry);
+    }
+  }
+  return pts;
+}
+
+/** A finished PolyStar object for a drag from (x1,y1) to (x2,y2). */
+function makePolyStar(x1,y1,x2,y2){
+  var G=window.FlashyGeom;
+  if(!G)return null;
+  var x0=Math.min(x1,x2),y0=Math.min(y1,y2);
+  var w=Math.abs(x2-x1),h=Math.abs(y2-y1);
+  if(w<1||h<1)return null;
+  // Built in a 0,0-origin box so the path stream needs no shifting afterwards.
+  var loop=polyStarLoop(w/2,h/2,w/2,h/2,polyStar.sides,polyStar.shape,polyStar.point);
+  var o=new EditorObject("path");
+  o.path=G.loopsToPath([loop]);
+  o.pathW=w;o.pathH=h;
+  o.x=x0;o.y=y0;o.width=w;o.height=h;
+  o.fillColor=fillColor;o.fillAlpha=fillAlpha;o.fillType="solid";
+  o.strokeColor=strokeColor;o.strokeAlpha=strokeAlpha;o.strokeWidth=strokeWidth;
+  o.strokeStyle=strokeWidth>0?"solid":"none";
+  return o;
+}
+
+/* ------------------------------------------------------------------ *
+ * Lasso
+ *
+ * Marquee selection cannot reach a shape that overlaps another one, and that
+ * is most of a drawing. The lasso selects by what its outline encloses:
+ * freeform, corner-to-corner polygon, or — the magic wand — everything the
+ * same colour as what you clicked.
+ * ------------------------------------------------------------------ */
+var lassoPts=null;       // flat [x,y,…] while drawing
+var lassoPending=false;  // polygon mode: a path is open between clicks
+
+/** Select every object on the active layer the lasso outline encloses. */
+function lassoSelect(pts){
+  var G=window.FlashyGeom;
+  var kf=CKF();
+  if(!kf||!pts||pts.length<6)return 0;
+  var region=G?G.normalize([pts.slice()]):null;
+  selection=kf.objects.filter(function(o){
+    if(isRigPart(o))return false;
+    // Centre-inside is the test Flash's lasso effectively used: enclose a
+    // shape's middle and you have selected it, without needing to trace it
+    // exactly. Falls back to the bounding box when the geometry is missing.
+    var cx=(o.x||0)+(o.width||0)/2,cy=(o.y||0)+(o.height||0)/2;
+    if(region)return G.contains(region,cx,cy);
+    return false;
+  });
+  return selection.length;
+}
+
+/** The lasso outline as it is being drawn. */
+function drawLassoOverlay(cx){
+  if(!lassoPts||lassoPts.length<4)return;
+  cx.save();
+  cx.lineWidth=1/zoom;
+  cx.setLineDash([4/zoom,3/zoom]);
+  cx.strokeStyle="rgba(0,120,255,0.95)";
+  cx.beginPath();
+  cx.moveTo(lassoPts[0],lassoPts[1]);
+  for(var i=2;i<lassoPts.length;i+=2)cx.lineTo(lassoPts[i],lassoPts[i+1]);
+  // Polygon mode rubber-bands the segment to the pointer, so you can see the
+  // corner you are about to place before you click it.
+  if(lassoPending&&stageHover)cx.lineTo(stageHover.x,stageHover.y);
+  cx.stroke();
+  // The closing segment, faint: the lasso always encloses, even mid-draw.
+  cx.strokeStyle="rgba(0,120,255,0.35)";
+  cx.beginPath();
+  var lastX=lassoPending&&stageHover?stageHover.x:lassoPts[lassoPts.length-2];
+  var lastY=lassoPending&&stageHover?stageHover.y:lassoPts[lassoPts.length-1];
+  cx.moveTo(lastX,lastY);
+  cx.lineTo(lassoPts[0],lassoPts[1]);
+  cx.stroke();
+  cx.setLineDash([]);
+  cx.restore();
+}
+
+/** Magic wand: everything on the layer sharing the clicked shape's fill. */
+function magicWandSelect(x,y){
+  var kf=CKF();
+  if(!kf)return 0;
+  var hit=hitTest(x,y);
+  if(!hit)return 0;
+  var want=(hit.fillColor||"").toUpperCase();
+  var type=hit.fillType||"solid";
+  selection=kf.objects.filter(function(o){
+    if(isRigPart(o)||o.type==="symbol"||o.type==="bitmap")return false;
+    return (o.fillColor||"").toUpperCase()===want&&(o.fillType||"solid")===type;
+  });
+  return selection.length;
+}
+
+/* ------------------------------------------------------------------ *
+ * Ink Bottle
+ *
+ * Click a shape and its stroke takes the current stroke settings. It is the
+ * paint bucket's other half, and without it restyling an outline means
+ * selecting the shape and retyping three numbers in the Properties panel.
+ * ------------------------------------------------------------------ */
+function inkBottleApply(o){
+  if(!o)return false;
+  pushUndo();
+  o.strokeColor=strokeColor;
+  o.strokeAlpha=strokeAlpha;
+  o.strokeWidth=strokeWidth;
+  o.strokeStyle=strokeWidth>0?(o.strokeStyle&&o.strokeStyle!=="none"?o.strokeStyle:"solid"):"none";
+  // A brush stroke's colour lives in fillColor because it is painted as a
+  // stroke; the ink bottle has to write where the painter reads.
+  if(o.type==="brush")o.fillColor=strokeColor;
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Subselection — the anchor points of a drawing
+ *
+ * Every drawn stroke used to be final. objectNodes() exposes an object's own
+ * coordinates as draggable stage-space points, and setObjectNode() writes one
+ * back through the inverse of the same matrix the painter uses, so a node
+ * lands exactly under the pointer at any zoom, rotation or scale.
+ *
+ * Two representations, one interface:
+ *   pencil / brush   a flat `points` list in top-left box space
+ *   path             a command stream — every on-curve endpoint is an anchor,
+ *                    every quadratic control point is a handle
+ * ------------------------------------------------------------------ */
+
+/** Which matrix maps an object's own artwork coordinates to the stage. */
+function artworkMatrix(o){
+  if(o.type==="path")return pathMatrix(o);
+  return boxMatrix(o);
+}
+
+/**
+ * An object's editable points, in stage coordinates.
+ * Each is {x, y, i, kind} where `i` indexes into the object's own storage and
+ * `kind` is "anchor" (on the curve) or "control" (a quadratic's handle).
+ */
+function objectNodes(o){
+  var out=[];
+  if(!o)return out;
+  var m=artworkMatrix(o);
+  if((o.type==="pencil"||o.type==="brush")&&o.points&&o.points.length>=4){
+    for(var i=0;i<o.points.length;i+=2){
+      var p=matApplyPoint(m,o.points[i],o.points[i+1]);
+      out.push({x:p.x,y:p.y,i:i,kind:"anchor"});
+    }
+    return out;
+  }
+  if(o.type==="path"&&o.path&&o.path.length){
+    var T=window.FlashyTrace;
+    if(!T)return out;
+    var path=o.path;
+    var k=0;
+    while(k<path.length){
+      var cmd=path[k];
+      if(cmd===T.CMD.MOVE||cmd===T.CMD.LINE){
+        var q=matApplyPoint(m,path[k+1],path[k+2]);
+        out.push({x:q.x,y:q.y,i:k+1,kind:"anchor"});
+        k+=3;
+      }else if(cmd===T.CMD.QUAD){
+        var c=matApplyPoint(m,path[k+1],path[k+2]);
+        out.push({x:c.x,y:c.y,i:k+1,kind:"control"});
+        var e=matApplyPoint(m,path[k+3],path[k+4]);
+        out.push({x:e.x,y:e.y,i:k+3,kind:"anchor"});
+        k+=5;
+      }else{
+        k+=1;   // CLOSE carries no coordinates
+      }
+    }
+    return out;
+  }
+  return out;
+}
+
+/** Move one node to a stage point, through the inverse of its own matrix. */
+function setObjectNode(o,node,sx,sy){
+  var m=artworkMatrix(o);
+  var inv=matInvert(m);
+  if(!inv)return false;
+  var l=matApplyPoint(inv,sx,sy);
+  if(o.type==="path"){
+    if(!o.path||node.i+1>=o.path.length)return false;
+    o.path[node.i]=l.x;
+    o.path[node.i+1]=l.y;
+    return true;
+  }
+  if(!o.points||node.i+1>=o.points.length)return false;
+  o.points[node.i]=l.x;
+  o.points[node.i+1]=l.y;
+  return true;
+}
+
+/** The node nearest a stage point, within a screen-space tolerance. */
+function nodeHitTest(x,y){
+  var kf=CKF();
+  if(!kf)return null;
+  var tol=7/zoom;
+  // Search the selection first when there is one — reshaping what you already
+  // picked beats grabbing whatever happens to be nearest.
+  var pool=selection.length?selection:kf.objects;
+  var best=null,bestD=tol*tol;
+  pool.forEach(function(o){
+    objectNodes(o).forEach(function(n){
+      var dx=n.x-x,dy=n.y-y,d=dx*dx+dy*dy;
+      if(d<=bestD){bestD=d;best={obj:o,node:n};}
+    });
+  });
+  return best;
+}
+
+var subPoint=null;   // {obj, node} while dragging a node
+var subPreSnap=null;
+
+/** The anchor handles, drawn inside the stage transform. */
+function drawSubselectOverlay(cx){
+  var kf=CKF();
+  if(!kf)return;
+  var pool=selection.length?selection:kf.objects;
+  var r=3.2/zoom;
+  cx.save();
+  cx.lineWidth=1/zoom;
+  pool.forEach(function(o){
+    var nodes=objectNodes(o);
+    if(!nodes.length)return;
+    // Handle tethers first, so the squares sit on top of their lines.
+    cx.strokeStyle="rgba(120,200,255,0.5)";
+    for(var i=1;i<nodes.length;i++){
+      if(nodes[i].kind!=="control"&&nodes[i-1].kind!=="control")continue;
+      cx.beginPath();
+      cx.moveTo(nodes[i-1].x,nodes[i-1].y);
+      cx.lineTo(nodes[i].x,nodes[i].y);
+      cx.stroke();
+    }
+    nodes.forEach(function(n){
+      cx.beginPath();
+      if(n.kind==="control"){
+        // Round for a curve handle, square for an on-curve anchor — the same
+        // distinction Flash drew, and the only way to tell them apart.
+        cx.arc(n.x,n.y,r,0,Math.PI*2);
+        cx.fillStyle="rgba(120,200,255,0.9)";
+      }else{
+        cx.rect(n.x-r,n.y-r,r*2,r*2);
+        cx.fillStyle="rgba(255,255,255,0.95)";
+      }
+      cx.fill();
+      cx.strokeStyle="rgba(20,60,120,0.9)";
+      cx.stroke();
+    });
+  });
+  cx.restore();
+}
+
+/* ------------------------------------------------------------------ *
+ * Pen
+ *
+ * Bézier drawing. The path command stream carries quadratics, not cubics, so
+ * one drag sets one control point — which is exactly what a quadratic needs,
+ * and it is what the whole rest of the pipeline already understands.
+ *
+ * Click for a corner, drag for a curve, click the first point (or press Enter)
+ * to close, Escape to abandon.
+ * ------------------------------------------------------------------ */
+var penPts=null;      // [{x,y,cx,cy,curved}] in stage space
+var penDrag=null;     // the point currently being dragged out
+
+function penStart(x,y){
+  if(!penPts)penPts=[];
+  penPts.push({x:x,y:y,cx:x,cy:y,curved:false});
+  penDrag=penPts[penPts.length-1];
+}
+
+function penDragTo(x,y){
+  if(!penDrag)return;
+  penDrag.cx=x;penDrag.cy=y;
+  // A drag of less than a pixel or two is a click, not a curve. Without the
+  // threshold every click would produce a degenerate quadratic.
+  penDrag.curved=Math.hypot(x-penDrag.x,y-penDrag.y)>2/zoom;
+}
+
+/** True when a click at (x,y) lands on the path's first point. */
+function penClosesAt(x,y){
+  if(!penPts||penPts.length<3)return false;
+  var f=penPts[0];
+  return Math.hypot(x-f.x,y-f.y)<=8/zoom;
+}
+
+/**
+ * Turn the pen's points into a path object and put it on the stage.
+ *
+ * Each point carries its own control handle, so the segment arriving at a
+ * point is the quadratic through that point's handle. A point with no handle
+ * gets a straight segment — which is what a click, rather than a drag, means.
+ */
+function penCommit(close){
+  var G=window.FlashyGeom,T=window.FlashyTrace;
+  var pts=penPts;
+  penPts=null;penDrag=null;
+  if(!pts||pts.length<2||!G||!T)return false;
+  if(!layerEditable())return false;
+  var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  var note=function(x,y){
+    if(x<minX)minX=x;if(x>maxX)maxX=x;
+    if(y<minY)minY=y;if(y>maxY)maxY=y;
+  };
+  pts.forEach(function(p){note(p.x,p.y);if(p.curved)note(p.cx,p.cy);});
+  var w=Math.max(1,maxX-minX),h=Math.max(1,maxY-minY);
+  var path=[];
+  path.push(T.CMD.MOVE,pts[0].x-minX,pts[0].y-minY);
+  for(var i=1;i<pts.length;i++){
+    var p=pts[i];
+    if(p.curved){
+      path.push(T.CMD.QUAD,p.cx-minX,p.cy-minY,p.x-minX,p.y-minY);
+    }else{
+      path.push(T.CMD.LINE,p.x-minX,p.y-minY);
+    }
+  }
+  if(close)path.push(T.CMD.CLOSE);
+
+  pushUndo();
+  var kf=CKF();
+  if(!kf){var l=CL();if(l)kf=l.insertKeyframe(curFrame);}
+  if(!kf)return false;
+  var o=new EditorObject("path");
+  o.path=path;
+  o.pathW=w;o.pathH=h;
+  o.x=minX;o.y=minY;o.width=w;o.height=h;
+  // An open pen path is a line, so it must not be filled: a closed one is a
+  // shape, so it is. Getting this the wrong way round makes every drawn curve
+  // look like a filled blob.
+  o.fillType=close?"solid":"none";
+  o.fillColor=fillColor;o.fillAlpha=fillAlpha;
+  o.strokeColor=strokeColor;o.strokeAlpha=strokeAlpha;
+  o.strokeWidth=strokeWidth>0?strokeWidth:1;
+  o.strokeStyle="solid";
+  kf.objects.push(o);
+  selection=[o];
+  return true;
+}
+
+/** The pen's path as it is being drawn, with its handles. */
+function drawPenOverlay(cx){
+  if(!penPts||!penPts.length)return;
+  var T=window.FlashyTrace;
+  cx.save();
+  cx.lineWidth=1/zoom;
+  cx.strokeStyle="rgba(80,170,255,0.95)";
+  cx.beginPath();
+  cx.moveTo(penPts[0].x,penPts[0].y);
+  for(var i=1;i<penPts.length;i++){
+    var p=penPts[i];
+    if(p.curved)cx.quadraticCurveTo(p.cx,p.cy,p.x,p.y);
+    else cx.lineTo(p.x,p.y);
+  }
+  cx.stroke();
+  void T;
+  // The segment that would be added if you clicked where the pointer is.
+  if(stageHover){
+    cx.strokeStyle="rgba(80,170,255,0.4)";
+    cx.setLineDash([4/zoom,3/zoom]);
+    cx.beginPath();
+    var last=penPts[penPts.length-1];
+    cx.moveTo(last.x,last.y);
+    cx.lineTo(stageHover.x,stageHover.y);
+    cx.stroke();
+    cx.setLineDash([]);
+  }
+  var r=3.2/zoom;
+  penPts.forEach(function(p,idx){
+    if(p.curved){
+      cx.strokeStyle="rgba(120,200,255,0.6)";
+      cx.beginPath();cx.moveTo(p.x,p.y);cx.lineTo(p.cx,p.cy);cx.stroke();
+      cx.beginPath();cx.arc(p.cx,p.cy,r,0,Math.PI*2);
+      cx.fillStyle="rgba(120,200,255,0.9)";cx.fill();
+    }
+    cx.beginPath();
+    cx.rect(p.x-r,p.y-r,r*2,r*2);
+    // The first point is the one a click closes on, so it is marked.
+    cx.fillStyle=idx===0?"rgba(120,255,150,0.95)":"rgba(255,255,255,0.95)";
+    cx.fill();
+    cx.strokeStyle="rgba(20,60,120,0.9)";
+    cx.stroke();
+  });
+  cx.restore();
+}
+
+/* ------------------------------------------------------------------ *
+ * Gradient Transform
+ *
+ * `fillGrad` is [x1,y1,x2,y2] in objectBoundingBox units — fractions of the
+ * object's own box — which is what the canvas painter, the SVG exporter and
+ * the runtime all already read. The tool drags those two points, so a linear
+ * gradient's angle and length and a radial one's centre and radius become
+ * direct manipulation instead of four numbers nobody can picture.
+ * ------------------------------------------------------------------ */
+var gradDrag=null;   // {obj, which:0|1}
+
+/** The gradient handles of an object, in stage coordinates. */
+function gradientHandles(o){
+  if(!isGradient(o))return null;
+  var g=(o.fillGrad&&o.fillGrad.length>=4)?o.fillGrad:[0,0,1,0];
+  var m=boxMatrix(o);
+  var w=Math.abs(o.width||0),h=Math.abs(o.height||0);
+  return [
+    matApplyPoint(m,g[0]*w,g[1]*h),
+    matApplyPoint(m,g[2]*w,g[3]*h)
+  ];
+}
+
+function gradientHandleHit(x,y){
+  var kf=CKF();
+  if(!kf)return null;
+  var tol=9/zoom;
+  var pool=selection.length?selection:kf.objects;
+  for(var i=pool.length-1;i>=0;i--){
+    var hs=gradientHandles(pool[i]);
+    if(!hs)continue;
+    for(var k=0;k<2;k++){
+      if(Math.hypot(hs[k].x-x,hs[k].y-y)<=tol)return {obj:pool[i],which:k};
+    }
+  }
+  return null;
+}
+
+function setGradientHandle(o,which,sx,sy){
+  var inv=matInvert(boxMatrix(o));
+  if(!inv)return false;
+  var l=matApplyPoint(inv,sx,sy);
+  var w=Math.abs(o.width||0)||1,h=Math.abs(o.height||0)||1;
+  if(!o.fillGrad||o.fillGrad.length<4)o.fillGrad=[0,0,1,0];
+  o.fillGrad=o.fillGrad.slice();
+  o.fillGrad[which*2]=l.x/w;
+  o.fillGrad[which*2+1]=l.y/h;
+  return true;
+}
+
+function drawGradientOverlay(cx){
+  var kf=CKF();
+  if(!kf)return;
+  var pool=selection.length?selection:kf.objects;
+  var r=4/zoom;
+  cx.save();
+  cx.lineWidth=1/zoom;
+  pool.forEach(function(o){
+    var hs=gradientHandles(o);
+    if(!hs)return;
+    cx.strokeStyle="rgba(255,220,80,0.9)";
+    cx.beginPath();cx.moveTo(hs[0].x,hs[0].y);cx.lineTo(hs[1].x,hs[1].y);cx.stroke();
+    // Round for the start (a radial gradient's centre), square for the end.
+    cx.beginPath();cx.arc(hs[0].x,hs[0].y,r,0,Math.PI*2);
+    cx.fillStyle="rgba(255,255,255,0.95)";cx.fill();
+    cx.strokeStyle="rgba(120,80,0,0.9)";cx.stroke();
+    cx.beginPath();cx.rect(hs[1].x-r,hs[1].y-r,r*2,r*2);
+    cx.fillStyle="rgba(255,220,80,0.95)";cx.fill();cx.stroke();
+  });
+  cx.restore();
+}
+
 function mouthFrameCandidates(sym){
   var out=[];
   if(!sym||!sym.layers||!sym.layers.length)return out;
@@ -9342,6 +10636,40 @@ function initKeys(){
       e.preventDefault();
       var step=Math.max(1,Math.round(eraserSize*0.25));
       setEraserSize(eraserSize+(e.key==="]"?step:-step));
+      return;
+    }
+    // The brush gets the same brackets, for the same reason.
+    if(!ctrl&&curTool==="brush"&&(e.key==="["||e.key==="]")){
+      e.preventDefault();
+      var bstep=Math.max(1,Math.round(brushSize*0.25));
+      brushSize=Math.max(1,Math.min(200,brushSize+(e.key==="]"?bstep:-bstep)));
+      updateToolOptions();
+      return;
+    }
+    /* The pen owns Enter and Escape while it has a path open: Enter finishes
+       it as an open curve, Escape abandons it. Tested before the global
+       Enter (play) and Escape (exit symbol) so an unfinished path does not
+       start the movie playing. */
+    if(curTool==="pen"&&penPts&&penPts.length){
+      if(e.key==="Enter"){
+        e.preventDefault();
+        penCommit(penPts.length>2&&e.shiftKey);
+        fullRefresh();
+        return;
+      }
+      if(e.key==="Escape"){
+        e.preventDefault();
+        penPts=null;penDrag=null;
+        render();
+        return;
+      }
+    }
+    // An unfinished lasso polygon gives up on Escape rather than staying on
+    // screen until the tool changes.
+    if(curTool==="lasso"&&lassoPts&&e.key==="Escape"){
+      e.preventDefault();
+      lassoPts=null;lassoPending=false;
+      render();
       return;
     }
     /* Flash's object-editing accelerators. Tested before the plain Ctrl
@@ -12205,7 +13533,57 @@ function init(){
       }
       return {objects:snapObjects,guides:snapGuides,grid:snapGrid,rulers:showRulers};
     },
-    snapBox: snapBox
+    snapBox: snapBox,
+    /* Wave-2 shape editing. The specs drive these directly as well as through
+       the pointer, because several are pure geometry and testing the geometry
+       separately from the gesture is the only way to pin down what the
+       gesture is supposed to produce. */
+    combine: combineSelection,
+    shapeCleanup: shapeCleanup,
+    linesToFills: convertLinesToFills,
+    expandFill: expandFill,
+    softenFillEdges: softenFillEdges,
+    /** An object's editable anchor points, in stage coordinates. */
+    objectNodes: objectNodes,
+    setObjectNode: setObjectNode,
+    nodeHitTest: nodeHitTest,
+    makePolyStar: makePolyStar,
+    lassoSelect: lassoSelect,
+    magicWandSelect: magicWandSelect,
+    inkBottleApply: inkBottleApply,
+    /* The current fill and stroke, which every drawing tool reads when it
+       commits. The Color Mixer owns these; this is the seam for driving them
+       without clicking through the colour picker. */
+    setStrokeStyle: function(v){
+      if(v.color!=null)strokeColor=v.color;
+      if(v.alpha!=null)strokeAlpha=v.alpha;
+      if(v.width!=null)strokeWidth=v.width;
+      updateColorUI();updateToolOptions();
+    },
+    setFillStyle: function(v){
+      if(v.color!=null)fillColor=v.color;
+      if(v.alpha!=null)fillAlpha=v.alpha;
+      updateColorUI();
+    },
+    gradientHandles: gradientHandles,
+    setGradientHandle: setGradientHandle,
+    /** The pen, as its three gestures: place, shape the handle, finish. */
+    pen: function(){
+      return {start:penStart,dragTo:penDragTo,commit:penCommit,
+              points:function(){return penPts;}};
+    },
+    /** Per-tool options, which the toolbox strip renders and the tools read. */
+    toolOptions: function(v){
+      if(v){
+        if(v.polyStar)Object.keys(v.polyStar).forEach(function(k){polyStar[k]=v.polyStar[k];});
+        if(v.brushSize!=null)brushSize=v.brushSize;
+        if(v.pencilMode)pencilMode=v.pencilMode;
+        if(v.lassoMode)lassoMode=v.lassoMode;
+        updateToolOptions();
+      }
+      return {polyStar:polyStar,brushSize:brushSize,
+              pencilMode:pencilMode,lassoMode:lassoMode};
+    }
   };
   fullRefresh();
   window.addEventListener("resize",function(){
