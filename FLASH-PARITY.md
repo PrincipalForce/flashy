@@ -95,7 +95,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Symbol linkage (export for ActionScript / class name) | ✅ | And it does something: the exported player registers linked symbols and `attachMovie(name, instance, depth)` — until now a stub that logged a warning — builds one. A clip a script attached survives the root's display-list rebuild. |
 | Shared libraries, runtime sharing | ◐ | Author-time sharing: import symbols (and the bitmaps and sounds they use) out of another .flashy, with `sharedFrom` recording the origin so Update can fetch a newer version in place. Runtime sharing is deliberately not done — it needs a second file that has to still be there, which is most of why Flash content rotted. |
 | 9-slice scaling | ✅ | `Flashy.Slice9` — the cell maths once, shared by the stage, the SVG export and the `NineSlice` container the exported player uses. Guides are set in Symbol Properties. |
-| Edit in Place / Edit in New Window | ◐ | `enterSymbol`/`exitSymbol` is Edit in Place; no new-window edit. |
+| Edit in Place / Edit in New Window | ✅ | `enterSymbol`/`exitSymbol` is Edit in Place. Edit in New Window sends the symbol to a second editor window AS A DOCUMENT — a .flashy in both directions — so the other window is just the editor and needs to know nothing. Save there sends it back; the symbol’s contents are replaced and the entry kept, so its instances are never orphaned. |
 | Registration / transformation point editing | ✅ | A registration point as a fraction of the object’s box — so it survives a resize — editable in the inspector and draggable on the stage as a crosshair. Defaults to the centre, so no existing document moves. It drives a guided tween’s Snap. |
 
 ## 5. Filters and colour effects
@@ -208,11 +208,11 @@ name — an entire class of Flash content is unreachable.
 | Document Settings (size, fps, background) | ✅ | — |
 | Match stage size to contents / printer | ✅ | Match Stage Size to Contents measures every frame through each object’s own matrix. Match Stage to Paper sizes it to A3–A5, Letter or Legal at 72dpi less a half-inch margin, and does NOT move the artwork — the point is to see what fits. Print rasterises a frame range as sheets or a contact sheet. |
 | Templates / New from Template | ✅ | Three built-ins — banner, slideshow, looping sprite — each a real document loaded through the ordinary path, not a list of settings. |
-| Recent files | ◐ | Desktop shell only. |
+| Recent files | ✅ | Desktop shell by path; the browser keeps the documents themselves in localStorage, newest first, deduplicated and bounded. A document too big to keep a copy of is listed by NAME with the reason, rather than quietly evicting the others. |
 | Save As / Save a Copy / Revert | ✅ | Save As, Save a Copy (which deliberately does NOT mark the document saved) and Revert, which keeps a copy of the saved document rather than relying on undo history. |
 | Preferences | ✅ | — |
 | Keyboard shortcut customisation | ✅ | Any menu command bindable to a chord, stored in localStorage. Overrides are consulted BEFORE the built-in chain rather than replacing it, so the defaults keep their careful ordering. |
-| Multiple documents / tabs in one window | ◐ | Desktop opens one document per window. |
+| Multiple documents / tabs in one window | ✅ | A tab bar, hidden while only one document is open. A tab is a serialised document plus a name, so switching is parking one and loading another through the paths that already exist — including its playhead and its unsaved state. The last document cannot be closed. |
 | AI Assistant | ✅ | Beyond Flash. |
 | SWF/FLA/XFL import, AVM1 + ABC decompilation | ✅ | Well beyond Flash. |
 
@@ -755,8 +755,7 @@ than quietly dropped:
 * **SWF text, bitmaps, sound, filters and scripts** — glyph tables, JPEG/zlib,
   MP3 framing, filter tags, an ActionScript assembler. The writer reports each
   as missing rather than silently dropping it.
-* **Runtime** shared libraries, **multiple documents in one window**, and
-  **Edit in New Window** on the web build.
+* **Runtime** shared libraries.
 * **A user-supplied HTML template** and publish **alignment**.
 
 Both of the small leftovers above are now done as well: the registration point
@@ -925,3 +924,58 @@ a name, inserted at the caret.
     rather than silent or truncated.
 
     Covered by `tests/output-print.spec.js` (20 specs).
+
+### Wave 12 — more than one document
+
+65. ✅ **Document tabs.** Flashy opened one document and that was that: New
+    threw away what you had, and comparing two cartoons meant two browser
+    windows with no way to move anything between them.
+
+    A tab is a serialised document plus a name, so switching is parking one
+    and loading another through the paths that already exist. There is no
+    second kind of document and no second loader — which is what keeps this
+    from becoming a second editor.
+
+    Two details matter. A tab remembers its PLAYHEAD as well as its artwork,
+    because landing back on frame 1 every time is maddening in a long movie.
+    And it remembers its unsaved state: `loadDocFromObject` marks a document
+    clean, which is right for a file off disk and wrong for a tab you are
+    coming back to. The bar is hidden while only one document is open, and the
+    last one cannot be closed — an editor with no document is a state with no
+    way out of it.
+
+    Open now adds a tab rather than replacing what is there, which is why it
+    used to have to ask first. Ctrl+W is intercepted, because closing the
+    browser tab when several documents are open in it is exactly the wrong
+    thing.
+
+66. ✅ **Recent files in the browser.** The desktop shell has had these
+    because it has real file paths. A browser has none, so "recent" has to
+    mean the document itself — which is also a crash net: close the tab by
+    accident and the work is still there.
+
+    Bounded hard, because localStorage is a few megabytes for the whole origin
+    and one photograph can be most of that. A document too big to keep is
+    recorded by NAME with the reason given, rather than quietly evicting the
+    other five; and if the write fails anyway, the payloads are dropped
+    oldest-first and the names kept, because a list of what you were working
+    on is still worth more than nothing.
+
+67. ✅ **Edit in New Window.** This is how you work on a walk cycle while
+    watching it in the scene.
+
+    The symbol is sent to a second editor window AS A DOCUMENT — its layers
+    are already the right shape — and comes back the same way. Nothing new is
+    invented for the wire: it is a .flashy in both directions, which means the
+    other window is just the editor and needs to know nothing about any of
+    this. The library and the assets travel too, or a symbol containing
+    another symbol opens empty.
+
+    The child window ASKS for its content when it is ready rather than being
+    told after a guessed delay — a slow machine would otherwise get the symbol
+    before the editor existed to receive it. Save in a symbol window sends the
+    content back instead of writing a file, because a .flashy of one symbol is
+    not what anyone wanted. Coming back, the symbol’s contents are replaced
+    and the entry kept: every instance on the stage points at that name.
+
+    Covered by `tests/documents.spec.js` (18 specs).

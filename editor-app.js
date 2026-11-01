@@ -166,7 +166,7 @@ function syncDirty(){
 }
 function touchDoc(){docRev++;syncDirty();}
 /** Called after a successful write to disk, and when a fresh document loads. */
-function markSaved(){savedRev=docRev;syncDirty();}
+function markSaved(){savedRev=docRev;syncDirty();updateDocTabs();}
 function isDirty(){return dirty;}
 
 // Snapshots carry the edit stack (which symbol you are inside), so undo does
@@ -499,7 +499,10 @@ var menus=[
   {label:"File",items:[
     {label:"New",action:"new",shortcut:"Ctrl+N"},
     {label:"New from Template...",action:"newFromTemplate"},
+    {label:"New Tab",action:"newTab",shortcut:"Ctrl+Alt+N"},
     {label:"Open...",action:"open",shortcut:"Ctrl+O"},
+    {label:"Open Recent...",action:"openRecent"},
+    {label:"Close Document",action:"closeTab",shortcut:"Ctrl+W"},
     {label:"Save",action:"save",shortcut:"Ctrl+S"},
     {label:"Save a Copy...",action:"saveCopy"},
     {type:"sep"},
@@ -7173,6 +7176,11 @@ function updateProps(){
 
       actionRow([
         {label:"Edit Symbol",onClick:function(){if(o.symbolName)enterSymbol(o.symbolName);}},
+        {label:"Edit in New Window",onClick:function(){
+          if(!o.symbolName)return;
+          var r=editSymbolInNewWindow(o.symbolName);
+          if(!r.ok)showMessage("Edit in New Window","Not opened: "+r.why+".");
+        }},
         {label:"Swap Symbol",onClick:function(ev){swapSymbolOn(o,ev);}}
       ]);
     }
@@ -8798,6 +8806,9 @@ function initOutputPanel(){
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
   timelineEffect:"Timeline Effect",
+  newTab:"New Tab",
+  closeTab:"Close Document",
+  openRecent:"Open Recent",
   htmlTemplate:"HTML Template",
   soundSettings:"Sound Settings",
   print:"Print",
@@ -11678,7 +11689,20 @@ function doActionInner(a){
       var r=new FileReader();
       r.onload=function(){
         try{
-          loadDocFromObject(JSON.parse(r.result));
+          var opened=JSON.parse(r.result);
+          /* Into a new tab rather than over the top: the old behaviour threw
+             away whatever was open, which is why Open asked first. */
+          var nm=(inp.files[0].name||"Untitled").replace(/\.(flashy|json)$/i,"");
+          if(openDocs.length){
+            parkActiveDoc();
+            var tab=addDocTab(nm,JSON.stringify(opened),{show:false});
+            activeDocId=tab.id;
+          }
+          loadDocFromObject(opened);
+          ensureActiveDoc(nm);
+          renameDocTab(activeDocId,nm);
+          rememberRecent(nm);
+          updateDocTabs();
         }catch(e){alert("Failed to open file: "+e.message);}
       };
       r.readAsText(inp.files[0]);
@@ -11686,6 +11710,14 @@ function doActionInner(a){
     inp.click();
     break;
   case "save":
+    /* In a symbol-editing window, Save sends the symbol back to the document
+       it belongs to. A .flashy containing one symbol is not what anyone
+       wanted when they opened it. */
+    if(saveSymbolBack()){
+      outputLog("Sent \u201c"+symbolEditingName+"\u201d back to the main window.");
+      break;
+    }
+    rememberRecent(activeDocEntry()?activeDocEntry().name:"Untitled");
     // Desktop Save writes back to the file the document came from, with no
     // dialog; the browser has no such notion, so it downloads a fresh copy.
     // (The desktop host clears the dirty flag itself, once the bytes land.)
@@ -11709,6 +11741,19 @@ function doActionInner(a){
     break;
   case "newFromTemplate":
     showTemplateDialog();
+    break;
+  case "newTab":
+    /* A new document BESIDE this one rather than instead of it, which is what
+       New has always done and the reason comparing two cartoons meant two
+       browser windows. */
+    addDocTab("Untitled " + (openDocs.length + 1), null);
+    break;
+  case "closeTab":
+    var ctr = closeDocTab(activeDocId);
+    if (!ctr.ok) showMessage("Documents", "Not closed: " + ctr.why + ".");
+    break;
+  case "openRecent":
+    showRecentDialog();
     break;
   case "simpleButtons":
     simpleButtons=!simpleButtons;
@@ -19378,6 +19423,427 @@ function showSoundSettingsDialog() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Several documents at once
+ *
+ * Flashy opened one document and that was that: New threw away what you had,
+ * and comparing two cartoons meant two browser windows and no way to move
+ * anything between them.
+ *
+ * A document here is its serialised form plus a name, so "switching" is
+ * parking one and loading another through the paths that already exist. There
+ * is no second kind of document and no second loader -- which is what keeps
+ * this from becoming a second editor.
+ * ------------------------------------------------------------------ */
+
+var openDocs = [];          // [{id, name, json, dirtyRev}]
+var activeDocId = null;
+var docSeq = 0;
+
+function newDocId() { return "d" + (++docSeq); }
+
+/** The tab record for the document on screen. */
+function activeDocEntry() {
+  return openDocs.filter(function (d) { return d.id === activeDocId; })[0] || null;
+}
+
+/**
+ * Write what is on screen back into its tab.
+ *
+ * The same shape as parkCurrentScene, and for the same reason: the live state
+ * lives on `doc` and in the editor's own variables, so there has to be exactly
+ * one place it is captured.
+ */
+function parkActiveDoc() {
+  var entry = activeDocEntry();
+  if (!entry) return null;
+  try { entry.json = JSON.stringify(serializeDoc()); }
+  catch (e) { return null; }
+  entry.dirty = isDirty();
+  entry.frame = curFrame;
+  entry.layer = curLayer;
+  return entry;
+}
+
+/** Make sure the document on screen has a tab, so the bar is never empty. */
+function ensureActiveDoc(name) {
+  if (activeDocEntry()) return activeDocEntry();
+  var entry = { id: newDocId(), name: name || "Untitled", json: null,
+                dirty: false, frame: 1, layer: 0 };
+  openDocs.push(entry);
+  activeDocId = entry.id;
+  parkActiveDoc();
+  return entry;
+}
+
+/** Open a serialised document in a new tab and show it. */
+function addDocTab(name, json, opts) {
+  opts = opts || {};
+  ensureActiveDoc();
+  parkActiveDoc();
+  var entry = { id: newDocId(), name: name || "Untitled", json: json || null,
+                dirty: false, frame: 1, layer: 0 };
+  openDocs.push(entry);
+  if (opts.show !== false) showDocTab(entry.id);
+  else updateDocTabs();
+  return entry;
+}
+
+/** Switch to a tab: park the current one, load the other. */
+function showDocTab(id) {
+  var entry = openDocs.filter(function (d) { return d.id === id; })[0];
+  if (!entry) return false;
+  if (entry.id === activeDocId) return true;
+  parkActiveDoc();
+  activeDocId = entry.id;
+  if (entry.json) {
+    loadDocFromObject(JSON.parse(entry.json));
+    /* loadDocFromObject marks the document clean, which is right for a file
+       off disk and wrong here: a tab with unsaved changes still has them. */
+    if (entry.dirty) touchDoc();
+    curFrame = Math.max(1, entry.frame || 1);
+    curLayer = Math.min(Math.max(0, entry.layer || 0),
+                        Math.max(0, currentLayers().length - 1));
+  } else {
+    doAction("new");
+  }
+  updateDocTabs();
+  fullRefresh();
+  return true;
+}
+
+/**
+ * Close a tab.
+ *
+ * Refuses the last one: an editor with no document is a state with no way out
+ * of it, and Flash never had one either.
+ */
+function closeDocTab(id) {
+  if (openDocs.length <= 1) {
+    return { ok: false, why: "this is the only document open" };
+  }
+  var at = -1;
+  openDocs.forEach(function (d, i) { if (d.id === id) at = i; });
+  if (at < 0) return { ok: false, why: "no such document" };
+  var entry = openDocs[at];
+  var wasActive = entry.id === activeDocId;
+  openDocs.splice(at, 1);
+  if (wasActive) {
+    activeDocId = null;
+    var next = openDocs[Math.min(at, openDocs.length - 1)];
+    activeDocId = next.id;
+    if (next.json) {
+      loadDocFromObject(JSON.parse(next.json));
+      if (next.dirty) touchDoc();
+    }
+  }
+  updateDocTabs();
+  fullRefresh();
+  return { ok: true, closed: entry.name, dirty: !!entry.dirty };
+}
+
+function renameDocTab(id, name) {
+  var entry = openDocs.filter(function (d) { return d.id === id; })[0];
+  if (!entry) return false;
+  entry.name = String(name || "").trim() || entry.name;
+  updateDocTabs();
+  return true;
+}
+
+function updateDocTabs() {
+  var bar = document.getElementById("doc-tabs");
+  if (!bar) return;
+  ensureActiveDoc();
+  bar.textContent = "";
+  /* Hidden with one document open. A tab bar showing a single tab is pure
+     chrome, and the editor has always had exactly one document. */
+  if (openDocs.length < 2) { bar.style.display = "none"; return; }
+  bar.style.display = "";
+  openDocs.forEach(function (d) {
+    var tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "doc-tab" + (d.id === activeDocId ? " active" : "");
+    var live = d.id === activeDocId ? isDirty() : !!d.dirty;
+    tab.textContent = d.name + (live ? " *" : "");
+    tab.title = d.name + (live ? " — unsaved changes" : "");
+    tab.addEventListener("click", function () { showDocTab(d.id); });
+    var x = document.createElement("span");
+    x.className = "doc-tab-close";
+    x.textContent = "✕";
+    x.title = "Close this document";
+    x.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var live2 = d.id === activeDocId ? isDirty() : !!d.dirty;
+      if (live2 && !confirm("Close “" + d.name + "”? Unsaved changes will be lost.")) return;
+      var r = closeDocTab(d.id);
+      if (!r.ok) showMessage("Documents", "Not closed: " + r.why + ".");
+    });
+    tab.appendChild(x);
+    bar.appendChild(tab);
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Recent files
+ *
+ * The desktop shell has had these because it has real file paths. A browser
+ * does not, so "recent" has to mean the document itself -- which is fine, and
+ * is also a crash net: close the tab by accident and the work is still there.
+ *
+ * Bounded hard. localStorage is a few megabytes for the whole origin, and a
+ * document with one photograph in it can be most of that on its own, so a
+ * document too big to keep is recorded by NAME and says so rather than
+ * quietly evicting the other four.
+ * ------------------------------------------------------------------ */
+var RECENT_STORE = "flashy_recent";
+var RECENT_MAX = 6;
+var RECENT_BYTES = 900000;      // per document
+
+function recentFiles() {
+  try {
+    var raw = localStorage.getItem(RECENT_STORE);
+    if (!raw) return [];
+    var list = JSON.parse(raw);
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (r) { return r && typeof r.name === "string"; });
+  } catch (e) { return []; }
+}
+
+function writeRecent(list) {
+  try { localStorage.setItem(RECENT_STORE, JSON.stringify(list)); return true; }
+  catch (e) {
+    /* Out of quota. Drop the payloads oldest-first and keep the names: a list
+       of what you were working on is still worth more than nothing. */
+    try {
+      localStorage.setItem(RECENT_STORE, JSON.stringify(
+        list.map(function (r) { return { name: r.name, at: r.at, tooBig: true }; })));
+      return true;
+    } catch (e2) { return false; }
+  }
+}
+
+/** Remember the document on screen. Called when one is opened or saved. */
+function rememberRecent(name) {
+  var json = null;
+  try { json = JSON.stringify(serializeDoc()); } catch (e) { json = null; }
+  var entry = { name: String(name || "Untitled"), at: Date.now() };
+  if (json && json.length <= RECENT_BYTES) entry.json = json;
+  else entry.tooBig = true;
+  var list = recentFiles().filter(function (r) { return r.name !== entry.name; });
+  list.unshift(entry);
+  if (list.length > RECENT_MAX) list.length = RECENT_MAX;
+  writeRecent(list);
+  return entry;
+}
+
+function clearRecent() {
+  try { localStorage.removeItem(RECENT_STORE); } catch (e) { /* nothing to do */ }
+}
+
+/** Reopen a remembered document, in a new tab. */
+function openRecent(name) {
+  var entry = recentFiles().filter(function (r) { return r.name === name; })[0];
+  if (!entry) return { ok: false, why: "it is no longer in the list" };
+  if (!entry.json) {
+    return { ok: false, why: "that document was too big to keep a copy of — " +
+             "open the file itself" };
+  }
+  var parsed;
+  try { parsed = JSON.parse(entry.json); }
+  catch (e) { return { ok: false, why: "the stored copy is unreadable" }; }
+  addDocTab(entry.name, entry.json, { show: false });
+  var tab = openDocs[openDocs.length - 1];
+  activeDocId = tab.id;
+  loadDocFromObject(parsed);
+  updateDocTabs();
+  fullRefresh();
+  return { ok: true, name: entry.name };
+}
+
+function showRecentDialog() {
+  var list = recentFiles();
+  if (!list.length) {
+    showMessage("Open Recent",
+      "Nothing yet. A document is remembered when you open or save it, which " +
+      "also makes this a net: close the tab by accident and the work is " +
+      "still here.");
+    return;
+  }
+  showDialog({
+    title: "Open Recent",
+    message: "Kept in this browser, newest first. A document too big to keep " +
+             "a copy of is listed by name only — localStorage is a few " +
+             "megabytes for the whole origin and one photograph can be most " +
+             "of that.",
+    fields: [{
+      name: "which", label: "Document", type: "select", value: list[0].name,
+      options: list.map(function (r) {
+        return [r.name, r.name + (r.json ? "" : " (name only)")];
+      })
+    }],
+    okLabel: "Open",
+    extraButtons: [{ label: "Clear list", onClick: function (v, close) {
+      clearRecent();
+      close();
+      showMessage("Open Recent", "The list is empty.");
+    } }],
+    onOk: function (v) {
+      var r = openRecent(v.which);
+      if (!r.ok) showMessage("Open Recent", "Not opened: " + r.why + ".");
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Edit in New Window
+ *
+ * Flash could open a symbol in a window of its own, which is how you work on
+ * a walk cycle while watching it in the scene.
+ *
+ * The symbol is sent to a second editor window as a DOCUMENT -- its layers are
+ * already the right shape -- and comes back the same way. Nothing new is
+ * invented for the wire: it is a .flashy, both directions, which means the
+ * other window is just the editor and needs to know nothing about this.
+ * ------------------------------------------------------------------ */
+
+/** Windows opened for symbol editing, so a reply can be matched to one. */
+var symbolWindows = {};
+
+/** The message a symbol-editing window is opened with. */
+function symbolAsDocument(name) {
+  var sym = doc.library[name];
+  if (!sym) return null;
+  ensureSymbolLayers(sym);
+  return {
+    width: doc.width, height: doc.height, fps: doc.fps,
+    backgroundColor: doc.backgroundColor,
+    totalFrames: sym.totalFrames || 60,
+    layers: serializeLayers(sym.layers),
+    // The library travels, or a symbol containing another symbol opens empty.
+    library: serializeLibrary(doc.library),
+    bitmaps: serializeBitmaps(doc.bitmaps),
+    sounds: serializeSounds(doc.sounds),
+    scriptDialect: doc.scriptDialect || "js"
+  };
+}
+
+/** Take a document back from a symbol-editing window into the symbol. */
+function applySymbolDocument(name, data) {
+  var sym = doc.library[name];
+  if (!sym) return { ok: false, why: "that symbol is no longer here" };
+  if (!data || !Array.isArray(data.layers)) {
+    return { ok: false, why: "that window sent nothing usable" };
+  }
+  pushUndo();
+  /* The symbol's CONTENTS are replaced and the entry kept: every instance on
+     the stage points at this name. Same rule as a shared symbol update. */
+  sym.layers = reviveLayers(data.layers);
+  sym.totalFrames = Math.max(1, parseInt(data.totalFrames, 10) || 60);
+  touchDoc();
+  fullRefresh();
+  return { ok: true, name: name, layers: sym.layers.length };
+}
+
+function editSymbolInNewWindow(name) {
+  var payload = symbolAsDocument(name);
+  if (!payload) return { ok: false, why: "there is no such symbol" };
+  if (desktopHost && desktopHost.newWindow) {
+    /* The desktop shell owns its windows, so it is asked rather than told.
+       It opens a fresh editor; the symbol is handed over by the same
+       postMessage handshake once that window announces itself. */
+    desktopHost.newWindow();
+  }
+  var w = window.open(location.pathname + "?symbol=" + encodeURIComponent(name),
+                      "_blank");
+  if (!w) {
+    return { ok: false, why: "the window was blocked — allow pop-ups for " +
+             "this page, or double-click the symbol to edit it in place" };
+  }
+  symbolWindows[name] = w;
+  /* The child announces itself when it is ready rather than being told after
+     a guessed delay: a slow machine would otherwise get the symbol before the
+     editor existed to receive it. */
+  return { ok: true, name: name };
+}
+
+/**
+ * Wire up the two ends of symbol editing.
+ *
+ * One handler, both roles: a window that was opened with `?symbol=` asks its
+ * opener for the content and sends it back when asked, and a window that
+ * opened one answers and accepts the reply. Keeping it in one place is what
+ * stops the two halves drifting apart.
+ */
+function initSymbolWindows() {
+  if (typeof window === "undefined" || !window.addEventListener) return;
+
+  var params = (function () {
+    try { return new URLSearchParams(location.search); }
+    catch (e) { return null; }
+  })();
+  var editing = params ? params.get("symbol") : null;
+
+  window.addEventListener("message", function (e) {
+    var msg = e.data;
+    if (!msg || typeof msg !== "object" || msg.flashy !== 1) return;
+
+    // ── Parent side ──
+    if (msg.kind === "symbolReady" && msg.symbol) {
+      var payload = symbolAsDocument(msg.symbol);
+      if (payload && e.source) {
+        e.source.postMessage({ flashy: 1, kind: "symbolDocument",
+                               symbol: msg.symbol, data: payload }, "*");
+      }
+      return;
+    }
+    if (msg.kind === "symbolSaved" && msg.symbol) {
+      var r = applySymbolDocument(msg.symbol, msg.data);
+      showMessage("Edit in New Window", r.ok
+        ? "“" + msg.symbol + "” was updated from the other window."
+        : "Not updated: " + r.why + ".");
+      return;
+    }
+
+    // ── Child side ──
+    if (msg.kind === "symbolDocument" && editing && msg.symbol === editing) {
+      loadDocFromObject(msg.data);
+      document.title = "Flashy — " + editing;
+      updateDocTabs();
+      return;
+    }
+  });
+
+  if (editing && window.opener) {
+    /* Ask for the content. The opener has it; this window has only the name,
+       which is all a URL can carry safely. */
+    try {
+      window.opener.postMessage({ flashy: 1, kind: "symbolReady",
+                                  symbol: editing }, "*");
+    } catch (err) { /* opener gone: the window is just an empty editor */ }
+    /* Saving in a symbol window sends the content back instead of writing a
+       file: the symbol belongs to the other document, and a .flashy of one
+       symbol is not what anyone wanted. */
+    symbolEditingName = editing;
+  }
+}
+
+/* Set when this window IS a symbol editor, which changes what Save means. */
+var symbolEditingName = null;
+
+/** Send the symbol back to the window that opened it. Returns false if alone. */
+function saveSymbolBack() {
+  if (!symbolEditingName || !window.opener) return false;
+  try {
+    window.opener.postMessage({
+      flashy: 1, kind: "symbolSaved", symbol: symbolEditingName,
+      data: { layers: serializeLayers(doc.layers),
+              totalFrames: doc.totalFrames }
+    }, "*");
+  } catch (e) { return false; }
+  markSaved();
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -20524,6 +20990,12 @@ function initKeys(){
     /* Ctrl+P is intercepted: the browser's own print would print the editor's
        panels, which is never what was meant. */
     if(ctrl&&(e.key==="p"||e.key==="P")){e.preventDefault();doAction("print");return;}
+    /* Ctrl+W would close the browser tab, which with several documents open
+       in one window is exactly the wrong thing. Intercepted so it closes the
+       DOCUMENT; a browser that refuses to let a page have the key simply
+       leaves the menu item. */
+    if(ctrl&&!e.shiftKey&&(e.key==="w"||e.key==="W")){e.preventDefault();doAction("closeTab");return;}
+    if(ctrl&&e.altKey&&(e.key==="n"||e.key==="N")){e.preventDefault();doAction("newTab");return;}
     if(ctrl&&e.key==="z"){e.preventDefault();doAction("undo");return;}
     if(ctrl&&e.key==="y"){e.preventDefault();doAction("redo");return;}
     if(ctrl&&e.key==="s"){e.preventDefault();doAction("save");return;}
@@ -25014,6 +25486,9 @@ function init(){
     fullyErased:bitmapFullyErased
   };
   loadShortcutOverrides();
+  ensureActiveDoc();
+  updateDocTabs();
+  initSymbolWindows();
   updateDebuggerPanel();
   initActionsPanel();
   initOutputPanel();
@@ -25225,6 +25700,22 @@ function init(){
     /* Strings and localisation, accessibility, and shared libraries. */
     /* Font embedding and the proofreader. */
     /* Templates, printing and per-sound export settings. */
+    /* Several documents at once, recent files, and symbol windows. */
+    openDocs: function(){ return openDocs; },
+    activeDocId: function(){ return activeDocId; },
+    addDocTab: addDocTab,
+    showDocTab: showDocTab,
+    closeDocTab: closeDocTab,
+    renameDocTab: renameDocTab,
+    parkActiveDoc: parkActiveDoc,
+    ensureActiveDoc: ensureActiveDoc,
+    updateDocTabs: updateDocTabs,
+    recentFiles: recentFiles,
+    rememberRecent: rememberRecent,
+    openRecent: openRecent,
+    clearRecent: clearRecent,
+    symbolAsDocument: symbolAsDocument,
+    applySymbolDocument: applySymbolDocument,
     HTML_PLACEHOLDERS: HTML_PLACEHOLDERS,
     DEFAULT_HTML_TEMPLATE: DEFAULT_HTML_TEMPLATE,
     alignCSS: alignCSS,
