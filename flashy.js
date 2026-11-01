@@ -439,6 +439,41 @@
     },
 
     /**
+     * Two colour transforms, applied one after the other.
+     *
+     * A per-object Colour Effect and a per-LAYER tint both end up here, and a
+     * tinted layer holding a tinted object has to show both. Each transform is
+     * a per-channel multiply and offset, so composing them is arithmetic:
+     * applying `a` then `b` gives b.mul*a.mul and b.mul*a.off + b.off.
+     *
+     * Here rather than in the editor because the authoring stage, the SVG
+     * export and the exported player all need the same answer.
+     */
+    composeColor(a, b) {
+      if (!a) return b || null;
+      if (!b) return a;
+      const out = {};
+      ['r', 'g', 'b', 'a'].forEach(ch => {
+        const am = a[ch + 'Mul'] == null ? 1 : a[ch + 'Mul'];
+        const bm = b[ch + 'Mul'] == null ? 1 : b[ch + 'Mul'];
+        out[ch + 'Mul'] = bm * am;
+        out[ch + 'Off'] = bm * (a[ch + 'Off'] || 0) + (b[ch + 'Off'] || 0);
+      });
+      return out;
+    },
+
+    /** A transform as a Colour Effect spec, so it can live on an object. */
+    asEffect(t) {
+      if (!t) return null;
+      return {
+        mode: 'advanced',
+        rMul: t.rMul == null ? 1 : t.rMul, gMul: t.gMul == null ? 1 : t.gMul,
+        bMul: t.bMul == null ? 1 : t.bMul, aMul: t.aMul == null ? 1 : t.aMul,
+        rOff: t.rOff || 0, gOff: t.gOff || 0, bOff: t.bOff || 0, aOff: t.aOff || 0
+      };
+    },
+
+    /**
      * A filter stack as a CSS filter string.
      *
      * `blurX`/`blurY` collapse to one radius: the canvas filter property has
@@ -1662,6 +1697,134 @@
    * Without the last two there is no score display, no form and no typed-in
    * name — an entire class of Flash content is unreachable.
    */
+  /* -------------------- Rich text --------------------
+   *
+   * Flash's `TextField.html`: a dynamic field whose VALUE is markup. It is how
+   * every score display with a coloured number, every chat window and every
+   * styled caption in Flash content was built, because a field could only have
+   * one format otherwise.
+   *
+   * The subset is Flash's own, and it is small: b, i, u, br, p align, font
+   * with color/size/face, and a href (drawn as a link, not clickable — there
+   * is nothing here to navigate). Anything else is dropped rather than shown,
+   * because showing a tag the user did not write is worse than ignoring one
+   * this does not know.
+   *
+   * It lives here, beside TextField, because the authoring stage, the raster
+   * exports and the exported player all draw through that one class. The SVG
+   * export emits tspans from the same run list.
+   * ------------------------------------------------------------------ */
+  const RichText = {
+    /** The five entities Flash decoded, and the only ones worth the table. */
+    ENTITIES: { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: '\u00a0' },
+
+    decode(s) {
+      return String(s).replace(/&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);/g, (m, k) => {
+        if (k[0] === '#') {
+          const n = k[1] === 'x' || k[1] === 'X'
+            ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10);
+          return isFinite(n) && n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+        }
+        const e = this.ENTITIES[k.toLowerCase()];
+        return e == null ? m : e;
+      });
+    },
+
+    /**
+     * Parse markup into paragraphs of styled runs.
+     *
+     * Returns `[{align, runs: [{text, bold, italic, underline, color, size,
+     * face, link}]}]`. Style is a stack, so nesting works and a stray closing
+     * tag pops nothing rather than throwing — a field's value is data, usually
+     * assembled by a script, and refusing to draw it is the worst outcome.
+     */
+    parse(src, base) {
+      base = base || {};
+      const paras = [];
+      let runs = [];
+      let align = base.align || 'left';
+      /* Whether the last paragraph break came from </p> rather than <br>. A
+         trailing </p> closes the last paragraph and does NOT add a blank line
+         after it; a trailing <br> does, because that is what a line break at
+         the end of a value means. */
+      let closedByP = false;
+      const stack = [{
+        bold: !!base.bold, italic: !!base.italic, underline: !!base.underline,
+        color: base.color == null ? null : base.color,
+        size: base.size || null, face: base.face || null, link: null
+      }];
+      const top = () => stack[stack.length - 1];
+      const endPara = () => { paras.push({ align, runs }); runs = []; };
+      const push = text => {
+        if (!text) return;
+        const st = top();
+        runs.push({
+          text, bold: st.bold, italic: st.italic, underline: st.underline,
+          color: st.color, size: st.size, face: st.face, link: st.link
+        });
+      };
+
+      const re = /<\s*(\/?)\s*([a-zA-Z]+)([^>]*)>/g;
+      let at = 0, m;
+      while ((m = re.exec(String(src))) !== null) {
+        push(this.decode(String(src).slice(at, m.index)));
+        at = m.index + m[0].length;
+        const closing = m[1] === '/';
+        const tag = m[2].toLowerCase();
+        const attrs = m[3] || '';
+        const attr = name => {
+          const a = new RegExp(name + '\\s*=\\s*("([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i')
+            .exec(attrs);
+          return a ? this.decode(a[2] != null ? a[2] : (a[3] != null ? a[3] : a[4])) : null;
+        };
+        if (tag === 'br') { endPara(); closedByP = false; continue; }
+        if (tag === 'p') {
+          if (closing) { endPara(); closedByP = true; continue; }
+          // An opening <p> starts a paragraph only if the current one has
+          // content; otherwise it is just setting this one's alignment.
+          if (runs.length) endPara();
+          align = (attr('align') || 'left').toLowerCase();
+          continue;
+        }
+        if (closing) {
+          if (stack.length > 1) stack.pop();
+          continue;
+        }
+        const st = Object.assign({}, top());
+        if (tag === 'b' || tag === 'strong') st.bold = true;
+        else if (tag === 'i' || tag === 'em') st.italic = true;
+        else if (tag === 'u') st.underline = true;
+        else if (tag === 'a') { st.link = attr('href') || ''; st.underline = true; }
+        else if (tag === 'font') {
+          const c = attr('color');
+          if (c) st.color = parseInt(String(c).replace('#', ''), 16);
+          const sz = parseFloat(attr('size'));
+          if (isFinite(sz) && sz > 0) st.size = sz;
+          const f = attr('face');
+          if (f) st.face = f;
+        }
+        /* An unknown tag still pushes a style frame, so its closing tag pops
+           that frame rather than one that mattered. */
+        stack.push(st);
+      }
+      push(this.decode(String(src).slice(at)));
+      if (runs.length || !closedByP || !paras.length) endPara();
+      return paras;
+    },
+
+    /** The canvas font string for one run, given the field's own. */
+    fontFor(run, baseSize, baseFace, bold, italic) {
+      const size = run.size || baseSize;
+      const face = run.face || baseFace;
+      const parts = [];
+      if (run.italic || italic) parts.push('italic');
+      if (run.bold || bold) parts.push('bold');
+      parts.push(size + 'px');
+      parts.push(face);
+      return parts.join(' ');
+    }
+  };
+
   class TextField extends DisplayObject {
     constructor(text, opts) {
       super();
@@ -1692,6 +1855,18 @@
       this.letterSpacing = opts.letterSpacing || 0;
       this.maxChars = opts.maxChars || 0;
       this.underline = !!opts.underline;
+      /** Render the value as markup rather than as literal text. */
+      this.html = !!opts.html;
+      /* Auto-kern. Canvas applies a font's kerning pairs when it draws a whole
+         string and cannot when it draws one character at a time, so this is
+         literally a choice between the two draw paths rather than a table
+         lookup. Default on, which is what every existing document has been
+         getting. */
+      this.kerning = opts.kerning !== false;
+      /* Baseline shift, in pixels: positive lifts. Superscript and subscript
+         are this plus a smaller size, which is what they always were. */
+      this.baselineShift = opts.baselineShift || 0;
+      this.scriptStyle = opts.scriptStyle || 'normal';   // normal|super|sub
 
       // Input state. A field only reacts when the Stage has focused it.
       this.focused = false;
@@ -1709,8 +1884,37 @@
     fontSize() { return parseInt(this.font, 10) || 24; }
     lineStep() { return this.lineHeight || this.fontSize() * 1.2; }
 
+    /**
+     * The font and baseline offset after superscript or subscript.
+     *
+     * Flash drew both as a smaller face shifted off the baseline -- there is no
+     * separate glyph set -- and at 58% and a third of the size the result
+     * matches the proportions it used closely enough to be unremarkable.
+     */
+    scriptMetrics() {
+      const size = this.fontSize();
+      let shift = this.baselineShift;
+      let scale = 1;
+      if (this.scriptStyle === 'super') { shift += size * 0.33; scale = 0.58; }
+      else if (this.scriptStyle === 'sub') { shift -= size * 0.16; scale = 0.58; }
+      return { shift, scale, size: Math.max(1, Math.round(size * scale)) };
+    }
+
+    /** The font string with one size swapped in, keeping style and face. */
+    _fontAtSize(size) {
+      return this.font.replace(/(\d+(?:\.\d+)?)px/, size + 'px');
+    }
+
     /** Measure a string, honouring letter spacing. */
     measure(ctx, str) {
+      if (!this.kerning && !this.letterSpacing) {
+        /* Unkerned: the width is the sum of the individual advances, which is
+           what the unkerned DRAW produces. Measuring the whole string here
+           and drawing it per character would misplace every centred line. */
+        let sum = 0;
+        for (let i = 0; i < str.length; i++) sum += ctx.measureText(str[i]).width;
+        return sum;
+      }
       const w = ctx.measureText(str).width;
       return this.letterSpacing ? w + this.letterSpacing * str.length : w;
     }
@@ -1749,7 +1953,7 @@
 
     /** Draw one line, character by character when letter spacing is in play. */
     _drawLine(ctx, str, x, y) {
-      if (!this.letterSpacing) {
+      if (!this.letterSpacing && this.kerning) {
         if (this.strokeWidth > 0 && this.stroke != null) {
           ctx.lineWidth = this.strokeWidth;
           ctx.strokeStyle = toRGBA(this.stroke, 1);
@@ -1782,7 +1986,12 @@
     }
 
     render(ctx) {
-      ctx.font = this.font;
+      /* Markup is a different layout problem -- runs with their own fonts,
+         measured and wrapped together -- so it gets its own pass rather than
+         a flag threaded through this one. */
+      if (this.html) { this._renderHTML(ctx); return; }
+      const met = this.scriptMetrics();
+      ctx.font = met.scale === 1 ? this.font : this._fontAtSize(met.size);
       ctx.textAlign = this.align;
       ctx.textBaseline = this.baseline;
       const lh = this.lineStep();
@@ -1804,7 +2013,8 @@
       const x = this.align === 'center' ? boxW / 2
               : (this.align === 'right' ? boxW : 0);
       for (let i = 0; i < lines.length; i++) {
-        this._drawLine(ctx, lines[i], x, i * lh);
+        // A positive shift LIFTS, so it subtracts from a downward y axis.
+        this._drawLine(ctx, lines[i], x, i * lh - met.shift);
         if (this.underline) {
           const w = this.measure(ctx, lines[i]);
           let ux = x;
@@ -1813,7 +2023,7 @@
           ctx.strokeStyle = toRGBA(this.color, 1);
           ctx.lineWidth = 1;
           ctx.beginPath();
-          const uy = i * lh + this.fontSize() + 1;
+          const uy = i * lh + this.fontSize() + 1 - met.shift;
           ctx.moveTo(ux, uy);
           ctx.lineTo(ux + w, uy);
           ctx.stroke();
@@ -1834,6 +2044,103 @@
           ctx.fillRect(cx, 0, 1, lh);
         }
       }
+    }
+
+    /**
+     * Lay markup out as lines of runs.
+     *
+     * Each run keeps its own font, so a line's height is its tallest run and
+     * wrapping has to measure run by run. Returns `[{runs, align, h}]` with
+     * every run carrying the width it measured at, because the draw would
+     * otherwise have to set every font a second time to find out.
+     */
+    _htmlLines(ctx) {
+      const baseSize = this.fontSize();
+      const faceMatch = /\d+(?:\.\d+)?px\s+(.*)$/.exec(this.font);
+      const baseFace = faceMatch ? faceMatch[1] : 'sans-serif';
+      const bold = /bold/.test(this.font), italic = /italic/.test(this.font);
+      const paras = RichText.parse(this.text, {
+        align: this.align, bold, italic, underline: this.underline,
+        color: this.color
+      });
+      const wrap = this.lineType === 'multiline' && this.width;
+      const out = [];
+      paras.forEach(p => {
+        let line = [], used = 0, tallest = baseSize;
+        const flush = () => {
+          out.push({ runs: line, align: p.align, h: tallest });
+          line = []; used = 0; tallest = baseSize;
+        };
+        p.runs.forEach(run => {
+          ctx.font = RichText.fontFor(run, baseSize, baseFace, bold, italic);
+          const size = run.size || baseSize;
+          // Split on spaces only when wrapping; otherwise the run is one piece.
+          const pieces = wrap ? String(run.text).split(/(\s+)/) : [String(run.text)];
+          pieces.forEach(piece => {
+            if (!piece) return;
+            const w = this.measure(ctx, piece);
+            if (wrap && used && used + w > this.width && piece.trim()) {
+              flush();
+              ctx.font = RichText.fontFor(run, baseSize, baseFace, bold, italic);
+            }
+            line.push(Object.assign({}, run, { text: piece, w, size }));
+            used += w;
+            if (size > tallest) tallest = size;
+          });
+        });
+        flush();
+      });
+      return out;
+    }
+
+    _renderHTML(ctx) {
+      const baseSize = this.fontSize();
+      const faceMatch = /\d+(?:\.\d+)?px\s+(.*)$/.exec(this.font);
+      const baseFace = faceMatch ? faceMatch[1] : 'sans-serif';
+      const bold = /bold/.test(this.font), italic = /italic/.test(this.font);
+      const lines = this._htmlLines(ctx);
+      const lh = this.lineStep();
+      const boxW = this.width ||
+        lines.reduce((m, l) => Math.max(m, l.runs.reduce((a, r) => a + r.w, 0)), 0);
+      const boxH = this.height || lines.length * lh;
+
+      if (this.background != null) {
+        ctx.fillStyle = toRGBA(this.background, 1);
+        ctx.fillRect(0, 0, boxW, boxH);
+      }
+      if (this.border) {
+        ctx.strokeStyle = toRGBA(this.borderColor, 1);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0.5, 0.5, boxW - 1, boxH - 1);
+      }
+
+      // Runs are drawn left to right from a pen, so the alignment is applied
+      // once per line rather than through ctx.textAlign.
+      ctx.textAlign = 'left';
+      ctx.textBaseline = this.baseline;
+      const met = this.scriptMetrics();
+      lines.forEach((line, i) => {
+        const total = line.runs.reduce((a, r) => a + r.w, 0);
+        let pen = line.align === 'center' ? (boxW - total) / 2
+                : line.align === 'right' ? boxW - total : 0;
+        const y = i * lh - met.shift;
+        line.runs.forEach(run => {
+          ctx.font = RichText.fontFor(run, baseSize, baseFace, bold, italic);
+          ctx.fillStyle = toRGBA(run.color == null ? this.color : run.color, 1);
+          ctx.fillText(run.text, pen, y);
+          if (run.underline) {
+            ctx.strokeStyle = ctx.fillStyle;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            const uy = y + run.size + 1;
+            ctx.moveTo(pen, uy);
+            ctx.lineTo(pen + run.w, uy);
+            ctx.stroke();
+          }
+          pen += run.w;
+        });
+      });
+      ctx.textAlign = this.align;
     }
 
     /**
@@ -1881,7 +2188,15 @@
         lineType: o.lineType || 'single',
         letterSpacing: o.letterSpacing || 0,
         maxChars: o.maxChars || 0,
-        underline: !!o.fontUnderline
+        underline: !!o.fontUnderline,
+        /* Render as HTML, auto-kern, baseline shift and super/subscript.
+           `renderAsHtml` has been on every text object since text fields were
+           added and was read by nothing at all -- a field could be marked as
+           markup and would still draw its tags. */
+        html: !!o.renderAsHtml,
+        kerning: o.kerning !== false,
+        baselineShift: o.baselineShift || 0,
+        scriptStyle: o.scriptStyle || 'normal'
       });
       /* On the authoring stage an empty field would be invisible, so it shows
          its placeholder — but an EXPORT must contain the artwork and nothing
@@ -3025,7 +3340,7 @@
     version: '0.7.6',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
-    Shape, TextField, Bitmap, MovieClip, Timeline, Tween, Stage,
+    Shape, TextField, RichText, Bitmap, MovieClip, Timeline, Tween, Stage,
     /* 9-slice: the cell maths plus the container that uses it, shared with the
        authoring stage and the SVG export so all three agree to the pixel. */
     Slice9, NineSlice,

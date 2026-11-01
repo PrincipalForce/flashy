@@ -448,11 +448,11 @@ test("the Property inspector adds, reorders, disables and removes filters", asyn
   await expect(props).toContainText("Filters");
   await expect(props).toContainText("No filters");
 
-  // Add two.
-  const add = props.locator("select").last();
+  // Add two. Named, because the row also holds the preset picker.
+  const add = props.locator("select.filter-add");
   await add.selectOption("dropShadow");
   await expect(props).toContainText("Drop Shadow");
-  await props.locator("select").last().selectOption("glow");
+  await props.locator("select.filter-add").selectOption("glow");
   await expect(props).toContainText("Glow");
 
   const types = () =>

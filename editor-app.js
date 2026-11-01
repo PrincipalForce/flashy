@@ -31,8 +31,8 @@ if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clon
    `easeBezier` is a custom easing curve; `rotateDir`/`rotateTimes` make a
    tween spin instead of taking the short way round; `tweenScale` is Flash's
    Scale checkbox. All default to the behaviour documents already have. */
-function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;this.orientToPath=false;this.shapeHints=null;}
-KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;return c;};
+function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;this.orientToPath=false;this.tweenSnap=false;this.tweenSync=false;this.shapeHints=null;}
+KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.tweenSnap=!!this.tweenSnap;c.tweenSync=!!this.tweenSync;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;return c;};
 function cloneSound(s){
   return {
     asset:s.asset,sync:s.sync||"stream",
@@ -1745,6 +1745,14 @@ function symbolDisplayFrame(o,sym,parentFrame,startFrame){
   if(behavior!=="graphic")return behavior==="button"?1:1;
   var mode=o.loopMode||"loop";
   if(mode==="single")return first;
+  /* Sync: the symbol's own animation is STRETCHED across the span of the
+     keyframe it sits on rather than advancing a frame per frame. A 12-frame
+     walk cycle on a 24-frame tween then plays once at half speed instead of
+     looping twice -- which is the whole reason Flash had the option. */
+  if(o._syncSpan>1){
+     var at=Math.max(0,Math.min(1,((parentFrame||1)-(startFrame||1))/o._syncSpan));
+     return Math.max(1,Math.min(total,Math.round(first+at*(total-first))));
+  }
   var elapsed=Math.max(0,(parentFrame||1)-(startFrame||1));
   var f=first+elapsed;
   if(mode==="once")return Math.min(f,total);
@@ -4478,6 +4486,11 @@ function frameObjects(layers,frame,opts){
     if(lt==="folder"||lt==="motionguide")continue;
     var kf=typeof l.getKeyframeAt==="function"?l.getKeyframeAt(frame):null;
     if(!kf)continue;
+    /* The layer's tint, composed onto everything the layer draws. Done here
+       rather than in each painter because three of the four render paths --
+       the stage, the raster exports and the SVG -- all come through this
+       function, so they cannot disagree about it. */
+    var tintFx=layerTintEffect(l);
     if(kf.tweenType&&kf.tweenType!=="none"&&kf.duration>1){
       var nk=l.keyframes[l.keyframes.indexOf(kf)+1];
       if(nk){
@@ -4495,12 +4508,14 @@ function frameObjects(layers,frame,opts){
             view=b?interpObj(kf.objects[oi],b,t,kf.easing,kf):kf.objects[oi];
           }
           if(b&&guide)view=applyMotionGuide(view,guide,eased,kf);
-          out.push(withTiming(view,kf,frame));
+          out.push(withLayerTint(withTiming(view,kf,frame),tintFx));
         }
         continue;
       }
     }
-    for(var oj=0;oj<kf.objects.length;oj++)out.push(withTiming(kf.objects[oj],kf,frame));
+    for(var oj=0;oj<kf.objects.length;oj++){
+      out.push(withLayerTint(withTiming(kf.objects[oj],kf,frame),tintFx));
+    }
   }
   return out;
 }
@@ -4695,6 +4710,30 @@ function motionGuideFor(layers,layer){
  * symbol dragged onto a guide. `orientToPath` turns it to face along the path
  * as well — the difference between a leaf blowing past and a leaf tumbling.
  */
+/**
+ * An object's registration point, as a fraction of its own box.
+ *
+ * Flash's registration point is what a tween snaps to a guide by, what a
+ * symbol rotates around in a nested animation, and what the Info panel's X/Y
+ * actually report. Flashy has always used the centre and had no way to move
+ * it, so the default here is the centre -- every existing document keeps
+ * exactly the geometry it had.
+ */
+function regPoint(o){
+  return {
+    x: o && o.regX != null ? o.regX : 0.5,
+    y: o && o.regY != null ? o.regY : 0.5
+  };
+}
+
+/**
+ * Ride a motion guide.
+ *
+ * Which POINT of the object rides the path is the whole of Flash's Snap
+ * option: off, the object's centre follows (which is what this always did);
+ * on, its registration point does, so a car's wheels can sit on the road
+ * rather than its middle.
+ */
 function applyMotionGuide(view,guide,eased,kf){
   if(!window.Flashy||!Flashy.MotionGuide)return view;
   var p=Flashy.MotionGuide.sampleAt(guide.points,eased,guide.arc);
@@ -4702,8 +4741,9 @@ function applyMotionGuide(view,guide,eased,kf){
   // `view` is already a fresh object: this is only reached on a tweened
   // frame, and interpObj returns a clone. Mutating it cannot touch the
   // document.
-  view.x=p.x-(view.width||0)/2;
-  view.y=p.y-(view.height||0)/2;
+  var r=(kf&&kf.tweenSnap)?regPoint(view):{x:0.5,y:0.5};
+  view.x=p.x-(view.width||0)*r.x;
+  view.y=p.y-(view.height||0)*r.y;
   if(kf.orientToPath)view.rotation=p.angle;
   return view;
 }
@@ -4717,11 +4757,46 @@ function applyMotionGuide(view,guide,eased,kf){
  * document object untouched. Only symbols need it; everything else is passed
  * through as-is.
  */
+/**
+ * The Colour Effect a layer's tint contributes, or null.
+ *
+ * A tint IS a Colour Effect in Tint mode, which is why there is no second
+ * implementation of it here: it goes to Flashy.Filters like the per-object one
+ * and gets the same exact per-channel pass.
+ */
+function layerTintEffect(l){
+  if(!l||!l.tint)return null;
+  return {
+    mode:"tint",
+    color:parseInt(String(l.tintColor||"#808080").replace("#",""),16),
+    amount:l.tintAmount==null?0.5:l.tintAmount
+  };
+}
+
+/**
+ * An object as the layer's tint makes it look.
+ *
+ * A prototype view, like withTiming's: the document object is never touched,
+ * so a tint can be switched off again and nothing has been lost. The object's
+ * OWN effect is applied first and the layer's over the top, which is the order
+ * the two mean -- the layer washes whatever the object already looked like.
+ */
+function withLayerTint(o,effect){
+  if(!o||!effect||!window.Flashy||!Flashy.Filters)return o;
+  var F=Flashy.Filters;
+  var own=F.colorEffect(o.colorEffect);
+  var view=Object.create(o);
+  view.colorEffect=F.asEffect(F.composeColor(own,F.colorEffect(effect)));
+  return view;
+}
+
 function withTiming(o,kf,frame){
   if(!o||o.type!=="symbol")return o;
   var view=Object.create(o);
   view._startFrame=kf.index;
   view._parentFrame=frame;
+  // Flash's Sync, as a span the display-frame maths can divide by.
+  if(kf.tweenSync&&kf.duration>1)view._syncSpan=kf.duration;
   return view;
 }
 
@@ -5937,6 +6012,7 @@ function addScene(opts){
         var nl=new Layer(l.name);
         nl.visible=l.visible;nl.locked=l.locked;
         nl.layerType=l.layerType;nl.outlineColor=l.outlineColor;
+        nl.tint=!!l.tint;nl.tintColor=l.tintColor;nl.tintAmount=l.tintAmount;
         nl.layerHeight=l.layerHeight;nl.indent=l.indent||0;
         nl.folderOpen=l.folderOpen!==false;nl.outlines=!!l.outlines;
         nl.keyframes=l.keyframes.map(function(k){return k.clone();});
@@ -6966,6 +7042,18 @@ function updateProps(){
     row("Rotation",Math.round(o.rotation*100)/100,function(v){pushUndo();o.rotation=parseFloat(v)||0;render();},{unit:"\u00B0",width:"50px"});
     rowPair("SX",o.scaleX,function(v){pushUndo();o.scaleX=v;render();},"SY",o.scaleY,function(v){pushUndo();o.scaleY=v;render();});
     rowPair("SkX",o.skewX||0,function(v){pushUndo();o.skewX=v;render();},"SkY",o.skewY||0,function(v){pushUndo();o.skewY=v;render();});
+    /* The registration point, as a fraction of the object's own box. It is
+       what a guided tween with Snap rides the path by, and it was fixed at
+       the centre with no way to move it. */
+    rowPair("RegX",regPoint(o).x,function(v){
+      pushUndo();o.regX=Math.max(0,Math.min(1,v));render();
+    },"RegY",regPoint(o).y,function(v){
+      pushUndo();o.regY=Math.max(0,Math.min(1,v));render();
+    });
+    if(o.regX!=null&&(o.regX!==0.5||o.regY!==0.5)){
+      note("0,0 is the top-left corner and 0.5,0.5 the centre. A guided tween "+
+           "with Snap on rides the path by this point.");
+    }
     sliderRow("Alpha",o.alpha,0,1,0.01,function(v){pushUndo();o.alpha=v;render();},{percent:true,unit:"%"});
 
     // ── Blend Mode ──
@@ -7177,6 +7265,36 @@ function updateProps(){
       row("Letter spacing",o.letterSpacing||0,function(v){
         pushUndo();o.letterSpacing=parseFloat(v)||0;render();
       },{width:"45px",unit:"px"});
+      /* Auto-kern. Canvas applies a font's kerning pairs only when it draws a
+         whole string, so this really is a choice between two draw paths
+         rather than a recorded preference. */
+      row("Auto kern",o.kerning!==false,function(v){
+        pushUndo();o.kerning=v;render();
+      },{type:"checkbox"});
+      row("Baseline shift",o.baselineShift||0,function(v){
+        pushUndo();o.baselineShift=parseFloat(v)||0;render();
+      },{width:"45px",unit:"px"});
+      /* Superscript and subscript are a baseline shift plus a smaller face --
+         which is all they ever were -- so they sit next to the shift that
+         drives them rather than in a character panel of their own. */
+      row("Script",o.scriptStyle||"normal",function(v){
+        pushUndo();o.scriptStyle=v;render();
+      },{type:"select",width:"100px",options:[
+        ["normal","Normal"],["super","Superscript"],["sub","Subscript"]
+      ]});
+      /* Render as HTML. This flag has been on every text object since text
+         fields were added and was read by NOTHING: a field could be marked as
+         markup and would still draw its tags. */
+      if((o.textType||"static")!=="static"){
+        row("Render as HTML",!!o.renderAsHtml,function(v){
+          pushUndo();o.renderAsHtml=v;fullRefresh();
+        },{type:"checkbox"});
+        if(o.renderAsHtml){
+          note("The field's value is markup: b, i, u, br, p align, "+
+               "font color/size/face and a href. Anything else is ignored "+
+               "rather than drawn.");
+        }
+      }
       /* Anti-alias mode is a hint, not a renderer: the canvas has one text
          rasteriser and no way to pick another, so this records the intent for
          a future SWF export rather than pretending to change the pixels. */
@@ -7283,6 +7401,19 @@ function updateProps(){
             pushUndo();skf.rotateTimes=Math.max(1,parseInt(v,10)||1);fullRefresh();
           },{type:"number",width:"45px"});
         }
+        /* Snap: a tweened object's registration point is pulled onto the
+           motion guide at every frame rather than only at the keyframes.
+           Without it an object following a tight curve drifts off the path in
+           between, which is exactly when you notice. */
+        row("Snap",!!skf.tweenSnap,function(v){
+          pushUndo();skf.tweenSnap=v;fullRefresh();
+        },{type:"checkbox"});
+        /* Sync: re-time a graphic symbol's own animation to the span of this
+           tween, so a 12-frame walk cycle stretched over 24 frames plays at
+           half speed instead of looping twice. */
+        row("Sync",!!skf.tweenSync,function(v){
+          pushUndo();skf.tweenSync=v;fullRefresh();
+        },{type:"checkbox"});
         row("Scale",skf.tweenScale!==false,function(v){
           pushUndo();skf.tweenScale=v;fullRefresh();
         },{type:"checkbox"});
@@ -7450,6 +7581,28 @@ function updateProps(){
       },{type:"number",width:"45px"});
 
       // Outline color
+      /* Per-layer tint: everything on the layer drawn towards one colour.
+         Flash used it to grey back a reference layer or wash a background,
+         and it is a layer-level Colour Effect -- so it goes through the same
+         Flashy.Filters.colorEffect the per-object one does. */
+      row("Tint",!!curLayerObj.tint,function(v){
+        pushUndo();
+        curLayerObj.tint=v;
+        if(v&&!curLayerObj.tintColor)curLayerObj.tintColor="#808080";
+        if(v&&curLayerObj.tintAmount==null)curLayerObj.tintAmount=0.5;
+        fullRefresh();
+      },{type:"checkbox"});
+      if(curLayerObj.tint){
+        colorRow("Tint color",curLayerObj.tintColor||"#808080",function(nc){
+          pushUndo();curLayerObj.tintColor=nc;fullRefresh();
+        });
+        sliderRow("Tint amount",curLayerObj.tintAmount==null?0.5:curLayerObj.tintAmount,
+          0,1,0.01,function(v){
+            curLayerObj.tintAmount=v;touchDoc();render();
+          },{percent:true,unit:"%"});
+        note("Drawn on the stage AND in every export: a tint is part of the "+
+             "artwork, unlike the outline view above it.");
+      }
       colorRow("Outline",curLayerObj.outlineColor||"#4488CC",function(nc){
         pushUndo();curLayerObj.outlineColor=nc;fullRefresh();
       });
@@ -7578,6 +7731,67 @@ function filterColorFromHex(h){
   return parseInt(String(h).replace("#",""),16)|0;
 }
 
+/* ------------------------------------------------------------------ *
+ * Filter presets
+ *
+ * Flash let you save a filter STACK by name and drop it on anything else,
+ * which is the only practical way to give nine buttons the same glow. The
+ * stack is plain data, so a preset is a deep copy under a name, kept in
+ * localStorage -- it belongs to the person, not to the document, exactly like
+ * Flash's own.
+ * ------------------------------------------------------------------ */
+var FILTER_PRESET_STORE="flashy_filter_presets";
+
+function filterPresets(){
+  try{
+    var raw=localStorage.getItem(FILTER_PRESET_STORE);
+    if(!raw)return {};
+    var o=JSON.parse(raw);
+    if(!o||typeof o!=="object"||Array.isArray(o))return {};
+    // A stale or hand-edited store must not break the inspector, so anything
+    // that is not a list of filter objects is dropped rather than trusted.
+    var out={};
+    Object.keys(o).forEach(function(k){
+      if(Array.isArray(o[k])&&o[k].every(function(f){return f&&f.type;}))out[k]=o[k];
+    });
+    return out;
+  }catch(e){return {};}
+}
+
+function saveFilterPreset(name,stack){
+  name=String(name||"").trim();
+  if(!name)return {ok:false,why:"a preset needs a name"};
+  if(!stack||!stack.length)return {ok:false,why:"there are no filters to save"};
+  var all=filterPresets();
+  all[name]=JSON.parse(JSON.stringify(stack));
+  try{localStorage.setItem(FILTER_PRESET_STORE,JSON.stringify(all));}
+  catch(e){return {ok:false,why:"this browser would not store it"};}
+  return {ok:true,name:name};
+}
+
+function deleteFilterPreset(name){
+  var all=filterPresets();
+  if(!(name in all))return false;
+  delete all[name];
+  try{localStorage.setItem(FILTER_PRESET_STORE,JSON.stringify(all));}catch(e){}
+  return true;
+}
+
+/** Apply a preset to every selected object, replacing whatever they had. */
+function applyFilterPreset(name){
+  var all=filterPresets();
+  if(!all[name])return 0;
+  if(!selection.length)return 0;
+  pushUndo();
+  selection.forEach(function(o){
+    // A deep copy per object: sharing one array would make editing one
+    // instance's blur change every other instance's too.
+    o.filters=JSON.parse(JSON.stringify(all[name]));
+  });
+  fullRefresh();
+  return selection.length;
+}
+
 function buildFiltersSection(pp,o,sect,note){
   sect("Filters");
   var filters=o.filters||[];
@@ -7586,7 +7800,9 @@ function buildFiltersSection(pp,o,sect,note){
   addRow.className="props-row";
   addRow.style.cssText="flex-wrap:wrap;gap:2px";
   var addSel=document.createElement("select");
-  addSel.className="props-select";
+  // Named, because the row now holds a preset picker too and "the last select
+  // in the panel" stopped meaning this one.
+  addSel.className="props-select filter-add";
   addSel.style.width="110px";
   var ph=document.createElement("option");
   ph.value="";ph.textContent="Add filter…";
@@ -7606,6 +7822,69 @@ function buildFiltersSection(pp,o,sect,note){
     fullRefresh();
   });
   addRow.appendChild(addSel);
+
+  // Presets, beside the add control: saving and applying a stack belong with
+  // building one.
+  var presets=filterPresets();
+  var names=Object.keys(presets).sort();
+  var preSel=document.createElement("select");
+  preSel.className="props-select filter-preset";
+  preSel.style.width="100px";
+  var pph=document.createElement("option");
+  pph.value="";pph.textContent=names.length?"Preset\u2026":"No presets";
+  preSel.appendChild(pph);
+  names.forEach(function(n){
+    var op=document.createElement("option");
+    op.value=n;op.textContent=n;
+    preSel.appendChild(op);
+  });
+  preSel.title="Apply a saved filter stack to everything selected";
+  preSel.addEventListener("change",function(){
+    var name=preSel.value;
+    preSel.value="";
+    if(!name)return;
+    var n=applyFilterPreset(name);
+    if(!n){
+      showMessage("Filter Presets",
+        "Nothing was changed: select the artwork you want \""+name+"\" on first.");
+    }
+  });
+  addRow.appendChild(preSel);
+
+  var saveBtn=document.createElement("button");
+  saveBtn.className="props-btn-action";
+  saveBtn.textContent="Save\u2026";
+  saveBtn.title="Save this object's filter stack as a preset";
+  saveBtn.addEventListener("click",function(){
+    if(!(o.filters&&o.filters.length)){
+      showMessage("Filter Presets","Add a filter first, then save the stack.");
+      return;
+    }
+    askFor("Save Filter Preset","Name","Preset name",function(name){
+      if(!name)return;
+      var r=saveFilterPreset(name,o.filters);
+      if(!r.ok)showMessage("Filter Presets","Not saved: "+r.why+".");
+      else updateProps();
+    });
+  });
+  addRow.appendChild(saveBtn);
+
+  if(names.length){
+    var delBtn=document.createElement("button");
+    delBtn.className="props-btn-action";
+    delBtn.textContent="\u2715";
+    delBtn.title="Delete a preset";
+    delBtn.addEventListener("click",function(){
+      showDialog({
+        title:"Delete Filter Preset",
+        fields:[{name:"which",label:"Preset",type:"select",value:names[0],
+                 options:names.map(function(n){return [n,n];})}],
+        okLabel:"Delete",
+        onOk:function(v){ deleteFilterPreset(v.which); updateProps(); }
+      });
+    });
+    addRow.appendChild(delBtn);
+  }
   pp.appendChild(addRow);
 
   if(!filters.length){
@@ -16879,6 +17158,9 @@ function serializeLayers(layers){
     return{
       name:l.name,visible:l.visible,locked:l.locked,
       layerType:l.layerType,outlineColor:l.outlineColor,layerHeight:l.layerHeight,
+      // A tint is artwork, so it is saved and exported like any other.
+      tint:!!l.tint,tintColor:l.tintColor||null,
+      tintAmount:l.tintAmount==null?null:l.tintAmount,
       // Folder nesting and the outline-view toggle.
       indent:l.indent||0,folderOpen:l.folderOpen!==false,outlines:!!l.outlines,
       keyframes:l.keyframes.map(function(kf){
@@ -16892,6 +17174,9 @@ function serializeLayers(layers){
           easeBezier:kf.easeBezier?kf.easeBezier.slice():null,
           rotateDir:kf.rotateDir||"none",rotateTimes:kf.rotateTimes||1,
           tweenScale:kf.tweenScale!==false,orientToPath:!!kf.orientToPath,
+          // Snap rides the guide by the registration point; Sync re-times a
+          // graphic symbol to the tween's span.
+          tweenSnap:!!kf.tweenSnap,tweenSync:!!kf.tweenSync,
           // Shape hints: [ax,ay,bx,by] in stage space, a point on the start
           // shape and the point it becomes on the end shape.
           shapeHints:kf.shapeHints?kf.shapeHints.map(function(h){return h.slice();}):null,
@@ -17097,6 +17382,10 @@ function reviveKeyframe(kd){
   kf.rotateTimes=Math.max(1,parseInt(kd.rotateTimes,10)||1);
   kf.tweenScale=kd.tweenScale!==false;
   kf.orientToPath=!!kd.orientToPath;
+  // Snap rides the guide by the registration point; Sync re-times a graphic
+  // symbol to this keyframe's span.
+  kf.tweenSnap=!!kd.tweenSnap;
+  kf.tweenSync=!!kd.tweenSync;
   kf.shapeHints=Array.isArray(kd.shapeHints)
     ? kd.shapeHints.filter(function(h){return Array.isArray(h)&&h.length>=4;})
         .map(function(h){return h.slice(0,4).map(Number);})
@@ -17112,6 +17401,10 @@ function reviveLayers(arr){
     if(ld.layerType)l.layerType=ld.layerType;
     if(ld.outlineColor)l.outlineColor=ld.outlineColor;
     if(ld.layerHeight)l.layerHeight=ld.layerHeight;
+    // A tint is artwork, so it comes back with the layer.
+    l.tint=!!ld.tint;
+    if(ld.tintColor)l.tintColor=ld.tintColor;
+    if(ld.tintAmount!=null)l.tintAmount=Number(ld.tintAmount);
     l.indent=Math.max(0,Math.min(8,parseInt(ld.indent,10)||0));
     l.folderOpen=ld.folderOpen!==false;
     l.outlines=!!ld.outlines;
@@ -17519,6 +17812,15 @@ function exportRuntime(data, canvas, options) {
     var first = Math.max(1, Math.min(o.firstFrame || 1, total));
     var mode = o.loopMode || "loop";
     if (mode === "single") return first;
+    /* Flash's Sync: the symbol's animation is stretched across the keyframe's
+       span instead of advancing one frame per frame, so a 12-frame cycle on a
+       24-frame tween plays once at half speed rather than looping twice. Same
+       maths as the authoring stage, because this is the runtime's own copy. */
+    if (o._syncSpan > 1) {
+      var at = Math.max(0, Math.min(1,
+        ((parentFrame || 1) - (startFrame || 1)) / o._syncSpan));
+      return Math.max(1, Math.min(total, Math.round(first + at * (total - first))));
+    }
     var f = first + Math.max(0, (parentFrame || 1) - (startFrame || 1));
     if (mode === "once") return Math.min(f, total);
     return ((f - 1) % total + total) % total + 1;
@@ -17960,7 +18262,15 @@ function exportRuntime(data, canvas, options) {
        rather than only when present, so clearing a filter in the document
        clears it on a cached node too. */
     node.filters = (o.filters && o.filters.length) ? o.filters : null;
-    node.colorTransform = Flashy.Filters ? Flashy.Filters.colorEffect(o.colorEffect) : null;
+    /* The layer's tint, composed over the object's own effect. This function
+       is the runtime's own copy of the display-list build, so a tint taught
+       only to frameObjects would show on the stage and vanish in the export --
+       the exact divergence class paintObj exists to prevent. */
+    var ownFx = Flashy.Filters ? Flashy.Filters.colorEffect(o.colorEffect) : null;
+    var layerFx = (Flashy.Filters && o._layerTint)
+      ? Flashy.Filters.colorEffect(o._layerTint) : null;
+    node.colorTransform = Flashy.Filters
+      ? Flashy.Filters.composeColor(ownFx, layerFx) : null;
     if (o.instanceName) {
       node.name = o.instanceName;
       /* …and published on the root, so a script can reach it by that name.
@@ -18433,12 +18743,35 @@ function exportRuntime(data, canvas, options) {
         if (g && Flashy.MotionGuide) {
           var gp = Flashy.MotionGuide.sampleAt(g.points, t, g.arc);
           if (gp) {
-            o.x = gp.x - (o.width || 0) / 2;
-            o.y = gp.y - (o.height || 0) / 2;
+            /* Snap rides the path by the registration point rather than the
+               centre, exactly as on the authoring stage. */
+            var rgx = kf.tweenSnap && a.regX != null ? a.regX : 0.5;
+            var rgy = kf.tweenSnap && a.regY != null ? a.regY : 0.5;
+            o.x = gp.x - (o.width || 0) * rgx;
+            o.y = gp.y - (o.height || 0) * rgy;
             if (kf.orientToPath) o.rotation = gp.angle;
           }
         }
         o.__tween = true;              // the timeline is driving this one
+      }
+      /* The layer's tint, carried on the object for the display-list build to
+         compose over the object's own effect. A copy is made when there is a
+         tint and the object is the document's own, so the exported data is
+         never mutated -- this function runs once per frame. */
+      /* Sync, as a span the graphic-frame maths can divide by. Set here for
+         the same reason the tint is: this function is where the runtime's
+         per-frame object views are made. */
+      if (kf.tweenSync && kf.duration > 1 && a.type === "symbol") {
+        if (o === a) { o = {}; for (var sp in a) o[sp] = a[sp]; }
+        o._syncSpan = kf.duration;
+      }
+      if (la.tint) {
+        if (o === a) { o = {}; for (var tp in a) o[tp] = a[tp]; }
+        o._layerTint = {
+          mode: "tint",
+          color: parseInt(String(la.tintColor || "#808080").replace("#", ""), 16),
+          amount: la.tintAmount == null ? 0.5 : la.tintAmount
+        };
       }
       out.push(o);
     }
@@ -19459,8 +19792,40 @@ function _objToSVGRaw(o, depth) {
         (o.fontUnderline?' text-decoration="underline"':'')+
         (o.letterSpacing?' letter-spacing="'+o.letterSpacing+'"':'')+
         ' fill="'+fl+'" text-anchor="'+anchor+'" dominant-baseline="hanging">\n';
-      for (var li=0;li<lines.length;li++) {
-        out += '  <tspan x="'+tx+'" y="'+(-hh+li*lh)+'">'+xmlText(lines[li])+'</tspan>\n';
+      /* A field rendered as HTML emits one tspan per RUN, not per line, so
+         the SVG carries the same colours, sizes and weights the stage drew.
+         The runs come from Flashy.RichText -- the same parser -- so the two
+         cannot disagree about where a tag starts. */
+      if (o.renderAsHtml && window.Flashy && Flashy.RichText) {
+        var paras = Flashy.RichText.parse(o.text == null ? "" : o.text, {
+          align: o.textAlign || "left", bold: !!o.fontBold,
+          italic: !!o.fontItalic, underline: !!o.fontUnderline
+        });
+        out = out.replace(/>\n$/, ">\n");
+        for (var pi2 = 0; pi2 < paras.length; pi2++) {
+          var para = paras[pi2];
+          var py = -hh + pi2 * lh;
+          out += '  <tspan x="' + tx + '" y="' + py + '">';
+          if (!para.runs.length) out += " ";
+          for (var ri = 0; ri < para.runs.length; ri++) {
+            var run = para.runs[ri];
+            var hexRun = run.color == null ? null
+              : "#" + ("000000" + (run.color & 0xffffff).toString(16)).slice(-6);
+            out += '<tspan' +
+              (hexRun ? ' fill="' + xmlAttr(hexRun) + '"' : '') +
+              (run.size ? ' font-size="' + run.size + '"' : '') +
+              (run.face ? ' font-family="' + xmlAttr(run.face) + '"' : '') +
+              (run.bold ? ' font-weight="bold"' : '') +
+              (run.italic ? ' font-style="italic"' : '') +
+              (run.underline ? ' text-decoration="underline"' : '') +
+              '>' + xmlText(run.text) + '</tspan>';
+          }
+          out += '</tspan>\n';
+        }
+      } else {
+        for (var li=0;li<lines.length;li++) {
+          out += '  <tspan x="'+tx+'" y="'+(-hh+li*lh)+'">'+xmlText(lines[li])+'</tspan>\n';
+        }
       }
       out += '</text>\n';
       /* Border and background are what make an input field look like one, so
@@ -20948,6 +21313,13 @@ function init(){
       if(o.strokeWidth!=null)strokeWidth=o.strokeWidth;
       updateColorUI();
     },
+    /* Filter presets and the layer tint: both are stacks of plain data that
+       have to reach every render path, so both are worth checking directly. */
+    filterPresets: filterPresets,
+    saveFilterPreset: saveFilterPreset,
+    deleteFilterPreset: deleteFilterPreset,
+    applyFilterPreset: applyFilterPreset,
+    layerTintEffect: layerTintEffect,
     BRUSH_TIPS: BRUSH_TIPS,
     brushSettings: function(){
       return {tip:brushTip,mode:brushMode,size:brushSize,locked:brushLocked};
@@ -20982,6 +21354,8 @@ function init(){
     /* Anchor editing: the Pen's other three jobs, and the stream surgery they
        perform. Exposed because a spec can aim at them far more precisely than
        it can point at a quadratic. */
+    regPoint: regPoint,
+    symbolDisplayFrame: symbolDisplayFrame,
     pathSegments: pathSegments,
     pathSegHit: pathSegHit,
     pathInsertAnchor: pathInsertAnchor,

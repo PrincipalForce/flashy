@@ -96,7 +96,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Shared libraries, runtime sharing | ⬜ | Missing (low value). |
 | 9-slice scaling | ✅ | `Flashy.Slice9` — the cell maths once, shared by the stage, the SVG export and the `NineSlice` container the exported player uses. Guides are set in Symbol Properties. |
 | Edit in Place / Edit in New Window | ◐ | `enterSymbol`/`exitSymbol` is Edit in Place; no new-window edit. |
-| Registration / transformation point editing | ⬜ | Missing. |
+| Registration / transformation point editing | ◐ | A registration point as a fraction of the object’s box, editable in the inspector, defaulting to the centre so no existing document moves. It drives a guided tween’s Snap. No on-stage handle to drag it by yet. |
 
 ## 5. Filters and colour effects
 
@@ -113,7 +113,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Filters ▸ Bevel | ✅ | A highlight and a shadow on opposite sides. |
 | Filters ▸ Gradient Glow / Gradient Bevel | ✅ | The blurred alpha silhouette looked up in a ramp, which is how Flash built them. One ramp in `Flashy.Filters` feeds the canvas pass, the SVG export (blur `SourceAlpha`, alpha into RGB, one `feComponentTransfer` table per channel), the exported player and the tween. |
 | Filters ▸ Adjust Color | ✅ | Brightness, contrast, saturation, hue. |
-| Filter presets, per-filter enable/disable | ◐ | Enable, disable, reorder and remove per filter. Saved presets are still missing. |
+| Filter presets, per-filter enable/disable | ✅ | Enable, disable, reorder, remove, and named presets in localStorage — applied as a deep copy per object, so editing one instance’s blur cannot change another’s. |
 
 **Two mechanisms, deliberately.** Filters are geometric — a blur has to see the
 shape's neighbourhood — so they go through the canvas `filter` property applied
@@ -132,9 +132,9 @@ the exported player.
 | Dynamic text (bound to a variable, readable by script) | ✅ | The clip's `text` proxies the field, and a named instance is published on the root, so `root.score.text = "10"` works in a frame script. |
 | Input text (user-editable at runtime) | ✅ | Click to focus, type, caret, Backspace/Delete/arrows/Home/End, `maxChars`. The Stage's hit test learned about text fields — it only matched nodes with `graphics`, so a field could never be clicked into. |
 | Instance name / variable name on a text field | ✅ | Both; a variable-bound field also publishes its value on the root. |
-| Selectable, Border/Background | ◐ | Selectable, border and background, with their own colours, honoured on the stage and in the SVG export. Render as HTML is still missing. |
+| Selectable, Border/Background | ✅ | Selectable, border and background with their own colours, and Render as HTML — one markup parser (`Flashy.RichText`) feeding the stage, the raster exports, the player and the SVG’s tspan runs. |
 | Line type: single / multiline / multiline-no-wrap / password | ✅ | Multiline wraps at the box width; single collapses newlines rather than silently overflowing; password masks. |
-| Letter spacing | ◐ | Letter spacing, applied by walking the string rather than relying on the canvas `letterSpacing` property an export cannot count on. Kerning, baseline shift and super/subscript remain. |
+| Letter spacing | ✅ | Letter spacing by walking the string, auto-kern (which really is a choice between the whole-string and per-character draw paths), baseline shift, and super/subscript as a shift plus a smaller face. |
 | Device fonts vs embedded outlines, character embedding ranges | ⬜ | Missing. |
 | Break Apart text → letters → shapes | ✅ | `textToCharacters` — one object per glyph, measured with the painter's own metrics so each piece lands where its letter was. Letters to shapes needs the pen outlines the browser does not expose. |
 | Anti-alias mode (device / bitmap / animation / readability) | ◐ | Recorded on the field and said to be a record — the canvas has one text rasteriser and no way to pick another, so claiming it changes the pixels would be a lie. |
@@ -281,10 +281,10 @@ Covered by `tests/filters.spec.js` (17 specs) and `tests/nine-slice.spec.js`
 (12 specs).
 
 ### ✅ Wave 4 — timeline depth (shipped)
-17. ✅ **Layer folders**, **guide layers**, outline view, layer height. (Per-layer tint remains.)
+17. ✅ **Layer folders**, **guide layers**, outline view, layer height, per-layer tint (see Wave 7).
 18. ✅ **Scenes** + Scene panel.
 19. ✅ **Motion guide layers** and **orient to path**.
-20. ✅ **Custom easing editor**, tween rotate CW/CCW × n, scale. (Snap and sync remain.)
+20. ✅ **Custom easing editor**, tween rotate CW/CCW × n, scale, Snap and Sync (see Wave 7).
 21. ✅ **Shape hints** — and the shape tween they steer, which did not morph at all before.
 22. ✅ **Reverse Frames**, **Edit Multiple Frames**, **Copy/Paste Motion**, frame label types.
 
@@ -299,8 +299,8 @@ Covered by `tests/layers-scenes.spec.js` (16), `tests/tween-frames.spec.js`
 
 ### ✅ Wave 5 — text and interactivity (shipped)
 23. ✅ **Dynamic and input text**, instance/variable names, selectable, border,
-    line type, letter spacing, anti-alias mode, break apart text. (Render as
-    HTML remains.)
+    line type, letter spacing, anti-alias mode, break apart text, Render as
+    HTML (see Wave 7).
 24. ✅ **Output panel** and a `trace()` that reaches it.
 25. ✅ **Actions panel upgrade** — line numbers, syntax highlighting, error marking, code hints.
 26. ✅ **Behaviors panel** and a **component set**.
@@ -547,3 +547,70 @@ History replay and save-as-command.
     never have run.
 
     Covered by `tests/paint-modes.spec.js` (23 specs).
+
+### Wave 7d — the flags that were already in the file
+
+43. ✅ **Render as HTML.** `renderAsHtml` has been on every text object since
+    text fields were added, and was read by **nothing**: a field could be
+    marked as markup and would still draw its tags. This is the fourth time
+    this audit has found that exact shape — after `skewX`, `layerHeight` and
+    `kf.label` — and the fix is the same one: make it do the thing it is named
+    after.
+
+    `Flashy.RichText` parses Flash’s own subset — b, i, u, br, p align, font
+    with color/size/face, a href — into paragraphs of styled runs. It lives in
+    the engine beside `TextField`, which means the authoring stage, the raster
+    exports and the exported player all get it from one implementation; the
+    SVG export emits one `tspan` per run from the same parser.
+
+    Markup gets its own layout pass rather than a flag threaded through the
+    plain one, because runs with their own fonts have to be measured and
+    wrapped together and a line’s height is its tallest run. The parser is
+    deliberately forgiving: a field’s value is usually assembled by a script,
+    so an unclosed tag, a stray closing tag and a tag it has never heard of
+    all still draw. An unknown tag is dropped rather than shown — printing a
+    tag the user did not write is worse than ignoring one.
+
+44. ✅ **Auto-kern, baseline shift, superscript and subscript.** Auto-kern is
+    not a recorded preference here but a real choice between two draw paths:
+    canvas applies a font’s kerning pairs when it draws a whole string and
+    cannot when it draws one character at a time. `measure()` had to learn the
+    same split, or a centred unkerned line lands in the wrong place.
+
+    Super and subscript are a baseline shift plus a smaller face, which is all
+    they ever were, so they sit next to the shift that drives them.
+
+45. ✅ **Per-layer tint.** A tint IS a Colour Effect in Tint mode, so there is
+    no second implementation of it: `Flashy.Filters.composeColor` applies the
+    object’s own effect and then the layer’s, which is what the two mean —
+    the layer washes whatever the object already looked like.
+
+    It is applied in `frameObjects`, as a prototype view like `withTiming`’s:
+    the document object is never touched, so a tint can be switched off and
+    nothing has been lost. Three of the four render paths come through that
+    function, so they cannot disagree. The exported player builds its own
+    display list and therefore composes its own — a tint taught only to
+    `frameObjects` would show on the stage and vanish in the export, which is
+    the divergence class this file keeps rediscovering.
+
+46. ✅ **Tween Snap and Sync, and the registration point.** Both options needed
+    something else to exist first.
+
+    Snap is about WHICH POINT of the object rides a motion guide. Off, the
+    centre follows, which is what Flashy always did; on, the registration
+    point does — a car’s wheels on the road rather than its middle. So the
+    registration point had to become editable, as a fraction of the object’s
+    own box, defaulting to the centre so no existing document moves.
+
+    Sync stretches a graphic symbol’s own animation across the keyframe’s
+    span instead of advancing a frame per frame: a 12-frame walk cycle on a
+    24-frame tween plays once at half speed rather than looping twice, which
+    is the whole reason the option existed.
+
+47. ✅ **Filter presets.** A filter stack is plain data, so a preset is a deep
+    copy under a name in localStorage — it belongs to the person, not the
+    document, exactly like Flash’s. Applying one deep-copies per object:
+    sharing the array would make editing one instance’s blur change every
+    other instance’s.
+
+    Covered by `tests/rich-text-tint.spec.js` (24 specs).
