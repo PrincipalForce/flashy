@@ -184,7 +184,16 @@ function snap(){
   };
 }
 function pushUndo(){pushUndoSnap(snap());}
-function pushUndoSnap(s){undoStack.push(s);if(undoStack.length>50)undoStack.shift();redoStack.length=0;touchDoc();}
+function pushUndoSnap(s){
+  /* Name the step after whatever caused it. doAction() announces the command
+     it is about to run and this picks the name up, so a command added later is
+     labelled without anyone having to remember to label it. */
+  if(!s.label)s.label=undoLabelFor();
+  undoStack.push(s);
+  if(undoStack.length>50)undoStack.shift();
+  redoStack.length=0;
+  touchDoc();
+}
 /**
  * Restore a snapshot, including which symbol was being edited.
  *
@@ -213,8 +222,27 @@ function restoreSnap(s){
   updateBreadcrumb();
   fullRefresh();
 }
-function doUndo(){if(!undoStack.length)return;redoStack.push(snap());restoreSnap(undoStack.pop());touchDoc();}
-function doRedo(){if(!redoStack.length)return;undoStack.push(snap());restoreSnap(redoStack.pop());touchDoc();}
+function doUndo(){
+  if(!undoStack.length)return;
+  var step=undoStack.pop();
+  /* The snapshot pushed onto the redo stack describes the state we are LEAVING
+     and must carry the name of the change being undone — otherwise redoing it
+     shows a different label from undoing it. */
+  var forward=snap();
+  forward.label=step.label;
+  redoStack.push(forward);
+  restoreSnap(step);
+  touchDoc();
+}
+function doRedo(){
+  if(!redoStack.length)return;
+  var step=redoStack.pop();
+  var back=snap();
+  back.label=step.label;
+  undoStack.push(back);
+  restoreSnap(step);
+  touchDoc();
+}
 function CL(){return currentLayers()[curLayer];}
 function CKF(){var l=CL();return l?l.getKeyframeAt(curFrame):null;}
 
@@ -618,6 +646,9 @@ var menus=[
     {label:"Transform",action:"winTransform",shortcut:"Ctrl+T"},
     {label:"Scene",action:"winScene",shortcut:"Shift+F2"},
     {label:"Output",action:"winOutput",shortcut:"F2"},
+    {label:"History",action:"winHistory",shortcut:"Ctrl+F10"},
+    {label:"Movie Explorer",action:"winExplorer",shortcut:"Alt+F3"},
+    {label:"Behaviors",action:"winBehaviors",shortcut:"Shift+F3"},
     {label:"AI Assistant",action:"winAI"},
     {type:"sep"},
     {label:"Workspace: Animation",action:"wsAnimation"},
@@ -7843,6 +7874,687 @@ function initOutputPanel(){
   updateOutputCount();
 }
 
+/* ------------------------------------------------------------------ *
+ * Undo step labels, and the History panel
+ *
+ * A 50-deep undo stack existed and was completely invisible: there was no way
+ * to see what Ctrl+Z was about to undo, and no way to step back five changes
+ * without pressing it five times and watching to see what happened.
+ *
+ * Labelling is done without touching the hundred-odd pushUndo() calls.
+ * doAction() announces which command is running, and pushUndo() picks the name
+ * up — so a step is named after the thing that caused it, and a command added
+ * later is labelled automatically rather than being forgotten.
+ * ------------------------------------------------------------------ */
+
+/** Human names for the actions that produce an undo step. */
+var ACTION_LABELS={
+  group:"Group",ungroup:"Ungroup",breakApart:"Break Apart",
+  bringFront:"Bring to Front",bringForward:"Bring Forward",
+  sendBackward:"Send Backward",sendBack:"Send to Back",
+  flipH:"Flip Horizontal",flipV:"Flip Vertical",
+  rot90cw:"Rotate 90° CW",rot90ccw:"Rotate 90° CCW",
+  transformReset:"Remove Transform",scaleRotate:"Scale and Rotate",
+  distributeToLayers:"Distribute to Layers",
+  alignLeft:"Align Left",alignHCenter:"Align Centre",alignRight:"Align Right",
+  alignTop:"Align Top",alignVCenter:"Align Middle",alignBottom:"Align Bottom",
+  alignMatchW:"Match Width",alignMatchH:"Match Height",alignMatchWH:"Match Size",
+  alignDistH:"Distribute Horizontally",alignDistV:"Distribute Vertically",
+  alignSpaceH:"Space Horizontally",alignSpaceV:"Space Vertically",
+  shapeSmooth:"Smooth",shapeStraighten:"Straighten",shapeOptimize:"Optimize",
+  linesToFills:"Convert Lines to Fills",expandFill:"Expand Fill",
+  softenEdges:"Soften Fill Edges",
+  combineUnion:"Union",combineIntersect:"Intersect",
+  combinePunch:"Punch",combineCrop:"Crop",
+  addShapeHint:"Add Shape Hint",removeShapeHints:"Remove Shape Hints",
+  reverseFrames:"Reverse Frames",pasteMotion:"Paste Motion",
+  insKF:"Insert Keyframe",insBlankKF:"Insert Blank Keyframe",
+  insFrame:"Insert Frame",removeKF:"Remove Keyframe",removeFrames:"Remove Frames",
+  addLayer:"New Layer",addFolder:"New Layer Folder",delLayer:"Delete Layer",
+  motionTween:"Create Motion Tween",shapeTween:"Create Shape Tween",
+  removeTween:"Remove Tween",
+  convertSym:"Convert to Symbol",newSymbol:"New Symbol",
+  framesToSymbol:"Convert Frames to Symbol",
+  cut:"Cut",copy:"Copy",paste:"Paste",delete:"Delete",
+  cutFrames:"Cut Frames",pasteFrames:"Paste Frames",
+  addSceneAction:"Add Scene",duplicateScene:"Duplicate Scene",
+  deleteSceneAction:"Delete Scene",renameScene:"Rename Scene",
+  traceBitmap:"Trace Bitmap",swapBitmap:"Swap Bitmap",
+  importImage:"Import Image",importSound:"Import Sound",
+  guidesClear:"Clear Guides",docSettings:"Document Settings",
+  lipSync:"Auto Lip Sync",mouthSetup:"Set Up Mouth Shapes",
+  newBiped:"New Biped",newCharacter:"New Character",
+  addCharacterPart:"Add Character Part",editCharacterPart:"Edit Character Part",
+  saveCharacterPose:"Save Pose",animateCharacter:"Animate Poses",
+  placeCharacter:"Place Character",deleteCharacter:"Delete Character"
+};
+
+/* What is being done right now, if anything. Set around a doAction() call and
+   read by pushUndo(); a tool that commits a drag sets it directly. */
+var currentActionLabel=null;
+
+/** Name the next undo step. Tools call this before committing. */
+function labelNextUndo(label){currentActionLabel=label;}
+
+function undoLabelFor(){
+  if(currentActionLabel)return currentActionLabel;
+  // A step with no announced cause is almost always a tool commit; naming it
+  // after the active tool beats calling everything "Edit".
+  var t=TOOLS.filter(function(x){return x.id===curTool;})[0];
+  if(t&&curTool!=="select")return t.label.replace(/\s*\(.*$/,"").replace(/\s*—.*$/,"");
+  return "Edit";
+}
+
+function updateHistoryPanel(){
+  var host=document.getElementById("historyPanel");
+  if(!host)return;
+  host.textContent="";
+
+  var note=function(text){
+    var d=document.createElement("div");
+    d.className="props-note";
+    d.textContent=text;
+    host.appendChild(d);
+  };
+
+  if(!undoStack.length&&!redoStack.length){
+    note("Nothing to undo yet. Every change you make is listed here, newest "+
+         "last — click one to step back to it.");
+    return;
+  }
+
+  var list=document.createElement("div");
+  list.className="history-list";
+
+  /* Oldest first, which is the order the steps happened in. The marker sits
+     between the undo steps and the redo steps: everything above it has been
+     applied, everything below it has been undone. */
+  undoStack.forEach(function(s,i){
+    var row=document.createElement("div");
+    row.className="history-row";
+    row.textContent=s.label||"Edit";
+    row.title="Step back to just after this change";
+    /* Clicking a step means "leave THAT change applied and undo everything
+       after it", so the count is the number of later steps — not that plus
+       one, which undid the clicked change as well and made the first row
+       unreachable. */
+    var steps=undoStack.length-i-1;
+    row.addEventListener("click",function(){
+      for(var k=0;k<steps;k++)doUndo();
+      updateHistoryPanel();
+    });
+    list.appendChild(row);
+  });
+
+  var here=document.createElement("div");
+  here.className="history-here";
+  here.textContent="▸ you are here";
+  list.appendChild(here);
+
+  // Redo steps, newest first — the stack's top is the next one to come back.
+  redoStack.slice().reverse().forEach(function(s,i){
+    var row=document.createElement("div");
+    row.className="history-row undone";
+    row.textContent=s.label||"Edit";
+    row.title="Step forward to this change";
+    row.addEventListener("click",function(){
+      for(var k=0;k<=i;k++)doRedo();
+      updateHistoryPanel();
+    });
+    list.appendChild(row);
+  });
+
+  host.appendChild(list);
+
+  var acts=document.createElement("div");
+  acts.className="props-row";
+  acts.style.cssText="gap:2px";
+  [["Undo","undo"],["Redo","redo"]].forEach(function(p){
+    var b=document.createElement("button");
+    b.className="props-btn-action";
+    b.textContent=p[0];
+    b.disabled=p[1]==="undo"?!undoStack.length:!redoStack.length;
+    b.addEventListener("click",function(){doAction(p[1]);updateHistoryPanel();});
+    acts.appendChild(b);
+  });
+  host.appendChild(acts);
+  note(undoStack.length+" of 50 steps kept. Older changes are dropped, which "+
+       "is why the list has a ceiling rather than growing without limit.");
+}
+
+/* ------------------------------------------------------------------ *
+ * Movie Explorer
+ *
+ * A structural view of the whole document: every scene, layer, frame and
+ * object, plus the library. There was no way to answer "where is every
+ * instance of this symbol", "which frames have scripts on them" or "where is
+ * that text block I cannot find" short of clicking through the timeline.
+ *
+ * Filters rather than a search box first, because the question is almost
+ * always "show me all the X" — Flash's own explorer led with the same five
+ * toggles. The text search narrows whatever the filters left.
+ * ------------------------------------------------------------------ */
+
+var explorerFilters={text:true,scripts:true,symbols:true,bitmaps:true,sounds:true};
+var explorerQuery="";
+
+/** Everything in the document the explorer can list. */
+function explorerItems(){
+  var items=[];
+  var q=explorerQuery.trim().toLowerCase();
+  var matches=function(label){
+    return !q||label.toLowerCase().indexOf(q)>=0;
+  };
+  /* With nothing filtered out and nothing searched for, the explorer is a
+     STRUCTURAL view and shows every layer — including an empty one, because
+     its being empty is part of the structure. Narrow a filter or type a
+     search and it becomes a finder instead, where an empty layer is noise. */
+  var showAll=!q&&Object.keys(explorerFilters).every(function(k){
+    return explorerFilters[k];
+  });
+
+  docScenes().forEach(function(scene,si){
+    // The live scene's layers are doc.layers; a parked one's are its own.
+    var layers=(si===doc.sceneIndex)?doc.layers:scene.layers;
+    items.push({kind:"scene",depth:0,label:scene.name,sceneIndex:si,always:true});
+    (layers||[]).forEach(function(l,li){
+      var rows=[];
+      (l.keyframes||[]).forEach(function(kf){
+        if(explorerFilters.scripts&&kf.script&&kf.script.trim()){
+          rows.push({kind:"script",depth:2,label:"script @ frame "+kf.index,
+            sceneIndex:si,layerIndex:li,frame:kf.index});
+        }
+        if(explorerFilters.scripts&&kf.label){
+          rows.push({kind:"label",depth:2,
+            label:"label “"+kf.label+"” @ "+kf.index,
+            sceneIndex:si,layerIndex:li,frame:kf.index});
+        }
+        if(explorerFilters.sounds&&kf.sound&&kf.sound.asset){
+          rows.push({kind:"sound",depth:2,
+            label:"sound "+kf.sound.asset+" @ "+kf.index,
+            sceneIndex:si,layerIndex:li,frame:kf.index});
+        }
+        (kf.objects||[]).forEach(function(o,oi){
+          var r=explorerRowFor(o,si,li,kf.index,oi);
+          if(r)rows.push(r);
+        });
+      });
+      var keep=rows.filter(function(r){return matches(r.label);});
+      /* A layer with nothing to show in it is noise, so it is left out. A
+         layer whose own NAME matches the search is worth showing even when
+         empty — but only when there IS a search: with an empty query every
+         name "matches", which listed every layer however the filters were
+         set. */
+      if(keep.length||showAll||(q&&matches(l.name))){
+        items.push({kind:"layer",depth:1,label:l.name,
+          sceneIndex:si,layerIndex:li,
+          meta:(l.layerType&&l.layerType!=="normal")?l.layerType:""});
+        keep.forEach(function(r){items.push(r);});
+      }
+    });
+  });
+
+  // The library, which is where a symbol's definition lives rather than any
+  // one of its instances.
+  var libNames=Object.keys(doc.library||{});
+  var bmpNames=Object.keys(doc.bitmaps||{});
+  var sndNames=Object.keys(doc.sounds||{});
+  var libRows=[];
+  if(explorerFilters.symbols){
+    libNames.forEach(function(n){
+      libRows.push({kind:"libSymbol",depth:1,label:n,libName:n,libKind:"symbol"});
+    });
+  }
+  if(explorerFilters.bitmaps){
+    bmpNames.forEach(function(n){
+      libRows.push({kind:"libBitmap",depth:1,label:n,libName:n,libKind:"bitmap"});
+    });
+  }
+  if(explorerFilters.sounds){
+    sndNames.forEach(function(n){
+      libRows.push({kind:"libSound",depth:1,label:n,libName:n});
+    });
+  }
+  libRows=libRows.filter(function(r){return matches(r.label);});
+  if(libRows.length){
+    items.push({kind:"libraryHeader",depth:0,label:"Library",always:true});
+    libRows.forEach(function(r){items.push(r);});
+  }
+  return items;
+}
+
+/** One stage object as an explorer row, or null when a filter excludes it. */
+function explorerRowFor(o,si,li,frame,oi){
+  var base={depth:2,sceneIndex:si,layerIndex:li,frame:frame,objIndex:oi};
+  if(o.type==="text"){
+    if(!explorerFilters.text)return null;
+    var t=String(o.text==null?"":o.text).replace(/\n/g," ").slice(0,28);
+    return Object.assign(base,{
+      kind:"text",
+      label:(o.textType&&o.textType!=="static"?(o.textType+" text"):"text")+
+            ": “"+t+"”"+(o.instanceName?"  ("+o.instanceName+")":"")
+    });
+  }
+  if(o.type==="symbol"){
+    if(!explorerFilters.symbols)return null;
+    return Object.assign(base,{
+      kind:"instance",
+      label:(o.symbolName||"symbol")+(o.instanceName?"  ("+o.instanceName+")":"")+
+            " @ frame "+frame,
+      libName:o.symbolName
+    });
+  }
+  if(o.type==="bitmap"){
+    if(!explorerFilters.bitmaps)return null;
+    return Object.assign(base,{kind:"bitmap",
+      label:(o.bitmapAsset||"bitmap")+" @ frame "+frame,libName:o.bitmapAsset});
+  }
+  if(o.clipScript&&o.clipScript.trim()){
+    if(!explorerFilters.scripts)return null;
+    return Object.assign(base,{kind:"handler",
+      label:"handlers on "+(o.instanceName||o.type)+" @ frame "+frame});
+  }
+  return null;
+}
+
+/** Jump to whatever a row points at. */
+function explorerGoTo(row){
+  if(row.sceneIndex!=null&&row.sceneIndex!==doc.sceneIndex)gotoScene(row.sceneIndex);
+  if(row.libKind==="symbol"&&row.libName){
+    selectLibItem("symbol",row.libName);
+    return;
+  }
+  if(row.libKind==="bitmap"&&row.libName){
+    selectLibItem("bitmap",row.libName);
+    return;
+  }
+  if(row.layerIndex!=null){
+    var layers=currentLayers();
+    if(row.layerIndex<layers.length)curLayer=row.layerIndex;
+  }
+  if(row.frame)curFrame=row.frame;
+  selection=[];
+  if(row.objIndex!=null){
+    var l=currentLayers()[curLayer];
+    var kf=l&&l.getKeyframeAt(curFrame);
+    if(kf&&kf.objects[row.objIndex])selection=[kf.objects[row.objIndex]];
+  }
+  var lay=currentLayers()[curLayer];
+  var skf=lay&&lay.getKeyframeAt(curFrame);
+  selectedKF=skf?{layerIdx:curLayer,frameIdx:skf.index,kf:skf}:null;
+  fullRefresh();
+}
+
+var EXPLORER_ICONS={
+  scene:"🎬",layer:"▤",text:"T",instance:"◆",bitmap:"▣",sound:"♪",
+  script:"{}",handler:"{}",label:"⚑",libraryHeader:"📚",
+  libSymbol:"◆",libBitmap:"▣",libSound:"♪"
+};
+
+function updateExplorerPanel(){
+  var host=document.getElementById("explorerPanel");
+  if(!host)return;
+  host.textContent="";
+
+  var bar=document.createElement("div");
+  bar.className="explorer-bar";
+  [["text","T","Text blocks"],["scripts","{}","Scripts, labels and handlers"],
+   ["symbols","◆","Symbols and their instances"],["bitmaps","▣","Bitmaps"],
+   ["sounds","♪","Sounds"]].forEach(function(f){
+    var b=document.createElement("button");
+    b.type="button";
+    b.className="explorer-filter"+(explorerFilters[f[0]]?" active":"");
+    b.textContent=f[1];
+    b.title=f[2];
+    b.addEventListener("click",function(){
+      explorerFilters[f[0]]=!explorerFilters[f[0]];
+      updateExplorerPanel();
+    });
+    bar.appendChild(b);
+  });
+  var q=document.createElement("input");
+  q.type="text";
+  q.className="explorer-search";
+  q.placeholder="Find…";
+  q.value=explorerQuery;
+  q.addEventListener("input",function(){
+    explorerQuery=q.value;
+    updateExplorerPanel();
+    // Rebuilding the panel destroys the field, so focus has to be put back or
+    // the second keystroke goes nowhere.
+    var again=document.querySelector(".explorer-search");
+    if(again){again.focus();again.setSelectionRange(again.value.length,again.value.length);}
+  });
+  bar.appendChild(q);
+  host.appendChild(bar);
+
+  var items=explorerItems();
+  var listed=items.filter(function(i){return !i.always;});
+  if(!listed.length){
+    var n=document.createElement("div");
+    n.className="props-note";
+    n.textContent=explorerQuery
+      ? "Nothing matches “"+explorerQuery+"”."
+      : "Nothing to list. Turn a filter back on, or put something on the stage.";
+    host.appendChild(n);
+    return;
+  }
+
+  var list=document.createElement("div");
+  list.className="explorer-list";
+  items.forEach(function(it){
+    var row=document.createElement("div");
+    row.className="explorer-row depth"+it.depth+
+      ((it.kind==="scene"||it.kind==="libraryHeader")?" head":"");
+    var icon=document.createElement("span");
+    icon.className="explorer-icon";
+    icon.textContent=EXPLORER_ICONS[it.kind]||"·";
+    row.appendChild(icon);
+    var label=document.createElement("span");
+    label.className="explorer-label";
+    label.textContent=it.label+(it.meta?("  ["+it.meta+"]"):"");
+    row.appendChild(label);
+    if(it.kind!=="libraryHeader"){
+      row.title="Go to this";
+      row.addEventListener("click",function(){explorerGoTo(it);});
+    }
+    list.appendChild(row);
+  });
+  host.appendChild(list);
+
+  var count=document.createElement("div");
+  count.className="props-note";
+  count.textContent=listed.length+" item"+(listed.length===1?"":"s")+" listed.";
+  host.appendChild(count);
+}
+
+/* ------------------------------------------------------------------ *
+ * Behaviors
+ *
+ * Interactivity without writing code. Pick an event, pick what should happen,
+ * and the panel writes the handler — in Flash's own `on(release) { … }` form,
+ * which flashy-as2.js already runs in Test Movie and in exports.
+ *
+ * This is the shortest path from "I drew a button" to "the button does
+ * something", and it was missing entirely: the only way to make anything
+ * interactive was to know the handler syntax and type it.
+ *
+ * The generated handler is plain text in `clipScript`, deliberately: it is
+ * editable afterwards in the Actions panel, so a behaviour is a starting point
+ * rather than a black box that has to be deleted to be changed.
+ * ------------------------------------------------------------------ */
+
+var BEHAVIOR_EVENTS=[
+  ["release","On release (click)"],
+  ["press","On press"],
+  ["rollOver","On roll over"],
+  ["rollOut","On roll out"],
+  ["load","On load (clip appears)"],
+  ["enterFrame","Every frame"]
+];
+
+/* Each behaviour knows which fields it needs, and builds its own body. Keeping
+   the two together is what stops a behaviour growing a field it never reads. */
+var BEHAVIORS=[
+  {id:"gotoAndPlay",label:"Go to frame and play",
+   fields:[{name:"frame",label:"Frame",type:"text",value:"1"}],
+   body:function(v){return "_root.gotoAndPlay("+behaviorFrameArg(v.frame)+");";}},
+  {id:"gotoAndStop",label:"Go to frame and stop",
+   fields:[{name:"frame",label:"Frame",type:"text",value:"1"}],
+   body:function(v){return "_root.gotoAndStop("+behaviorFrameArg(v.frame)+");";}},
+  {id:"play",label:"Play the movie",fields:[],
+   body:function(){return "_root.play();";}},
+  {id:"stop",label:"Stop the movie",fields:[],
+   body:function(){return "_root.stop();";}},
+  {id:"nextFrame",label:"Go to the next frame",fields:[],
+   body:function(){return "_root.nextFrame();";}},
+  {id:"prevFrame",label:"Go to the previous frame",fields:[],
+   body:function(){return "_root.prevFrame();";}},
+  {id:"getURL",label:"Open a web page",
+   fields:[{name:"url",label:"URL",type:"text",value:"https://"},
+           {name:"target",label:"Window",type:"select",value:"_blank",
+            options:[["_blank","New window"],["_self","Same window"]]}],
+   body:function(v){
+     return "getURL(\""+behaviorEscape(v.url)+"\", \""+behaviorEscape(v.target)+"\");";
+   }},
+  {id:"trace",label:"Write to the Output panel",
+   fields:[{name:"message",label:"Message",type:"text",value:"clicked"}],
+   body:function(v){return "trace(\""+behaviorEscape(v.message)+"\");";}},
+  {id:"setText",label:"Write to a text field",
+   fields:[{name:"field",label:"Field name",type:"text",value:""},
+           {name:"value",label:"Text",type:"text",value:""}],
+   body:function(v){
+     return "_root."+behaviorIdent(v.field)+".text = \""+behaviorEscape(v.value)+"\";";
+   }},
+  {id:"hide",label:"Hide this object",fields:[],
+   body:function(){return "this._visible = false;";}},
+  {id:"show",label:"Show this object",fields:[],
+   body:function(){return "this._visible = true;";}},
+  {id:"nudge",label:"Move this object",
+   fields:[{name:"dx",label:"X by",type:"text",value:"10"},
+           {name:"dy",label:"Y by",type:"text",value:"0"}],
+   body:function(v){
+     return "this._x += "+behaviorNum(v.dx)+"; this._y += "+behaviorNum(v.dy)+";";
+   }}
+];
+
+/** A frame argument: a number stays a number, anything else becomes a label. */
+function behaviorFrameArg(v){
+  var s=String(v==null?"":v).trim();
+  if(/^\d+$/.test(s))return s;
+  return "\""+behaviorEscape(s)+"\"";
+}
+
+/** Text going into a double-quoted ActionScript string. */
+function behaviorEscape(v){
+  return String(v==null?"":v)
+    .replace(/\\/g,"\\\\")
+    .replace(/"/g,"\\\"")
+    .replace(/\r?\n/g,"\\n");
+}
+
+/** A number, or zero — never an expression spliced into generated code. */
+function behaviorNum(v){
+  var s=String(v==null?"":v).trim();
+  /* The WHOLE string has to be a number. parseFloat("1); evil(") returns 1 and
+     silently drops the rest; nothing is injected either way, because only the
+     parsed number is emitted — but a rule that depends on that is a rule that
+     breaks the first time a field is used somewhere less careful. */
+  if(!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(s))return "0";
+  var n=parseFloat(s);
+  return isFinite(n)?String(n):"0";
+}
+
+/** An identifier, or a placeholder: generated code must still parse. */
+function behaviorIdent(v){
+  var s=String(v==null?"":v).trim();
+  return /^[A-Za-z_$][\w$]*$/.test(s)?s:"field";
+}
+
+/**
+ * Add a behaviour to the selected object.
+ *
+ * Appended to whatever handlers it already has rather than replacing them: an
+ * object usually ends up with two or three, and a panel that silently
+ * overwrote the last one would be unusable.
+ */
+function addBehavior(spec,event,values){
+  if(!selection.length)return {ok:false,reason:"selection"};
+  var o=selection[0];
+  if(isRigPart(o))return {ok:false,reason:"rig"};
+  var body=spec.body(values||{});
+  var wrapper=(event==="load"||event==="enterFrame")?"onClipEvent":"on";
+  var handler=wrapper+" ("+event+") {\n  "+body+"\n}";
+  pushUndo();
+  o.clipScript=(o.clipScript&&o.clipScript.trim())
+    ? (o.clipScript.replace(/\s+$/,"")+"\n\n"+handler)
+    : handler;
+  return {ok:true,script:o.clipScript};
+}
+
+/** The handlers already on the selected object, as {event, body} rows. */
+function behaviorsOn(o){
+  if(!o||!o.clipScript)return [];
+  var out=[];
+  var re=/(on|onClipEvent)\s*\(\s*([A-Za-z]+)\s*\)\s*\{([\s\S]*?)\}/g;
+  var m;
+  while((m=re.exec(o.clipScript))){
+    out.push({wrapper:m[1],event:m[2],body:m[3].trim(),at:m.index,text:m[0]});
+  }
+  return out;
+}
+
+function updateBehaviorsPanel(){
+  var host=document.getElementById("behaviorsPanel");
+  if(!host)return;
+  host.textContent="";
+  var note=function(text){
+    var d=document.createElement("div");
+    d.className="props-note";
+    d.textContent=text;
+    host.appendChild(d);
+  };
+
+  if(selection.length!==1){
+    note(selection.length
+      ? "Select one object. A behaviour attaches to a single object's handlers."
+      : "Select an object on the stage to give it a behaviour — interactivity "+
+        "without writing the handler yourself.");
+    return;
+  }
+  var o=selection[0];
+  if(isRigPart(o)){
+    note("A character rig part is driven by its rig, so a behaviour on it "+
+         "would fight the pose. Put the behaviour on the rig's symbol instead.");
+    return;
+  }
+
+  alignSectionLabel(host,"Add a behaviour");
+
+  var state=updateBehaviorsPanel._state||(updateBehaviorsPanel._state={
+    event:"release",behavior:"gotoAndPlay",values:{}
+  });
+
+  var row=function(label,el){
+    var r=document.createElement("div");
+    r.className="props-row";
+    var l=document.createElement("label");
+    l.className="props-label";
+    l.textContent=label+":";
+    r.appendChild(l);
+    r.appendChild(el);
+    host.appendChild(r);
+    return r;
+  };
+
+  var evSel=document.createElement("select");
+  evSel.className="props-select";
+  evSel.style.width="120px";
+  BEHAVIOR_EVENTS.forEach(function(e){
+    var op=document.createElement("option");
+    op.value=e[0];op.textContent=e[1];
+    if(state.event===e[0])op.selected=true;
+    evSel.appendChild(op);
+  });
+  evSel.addEventListener("change",function(){
+    state.event=evSel.value;updateBehaviorsPanel();
+  });
+  row("When",evSel);
+
+  var bSel=document.createElement("select");
+  bSel.className="props-select";
+  bSel.style.width="140px";
+  BEHAVIORS.forEach(function(b){
+    var op=document.createElement("option");
+    op.value=b.id;op.textContent=b.label;
+    if(state.behavior===b.id)op.selected=true;
+    bSel.appendChild(op);
+  });
+  bSel.addEventListener("change",function(){
+    state.behavior=bSel.value;
+    state.values={};
+    updateBehaviorsPanel();
+  });
+  row("Do", bSel);
+
+  var spec=BEHAVIORS.filter(function(b){return b.id===state.behavior;})[0]||BEHAVIORS[0];
+  spec.fields.forEach(function(f){
+    if(state.values[f.name]==null)state.values[f.name]=f.value;
+    var el;
+    if(f.type==="select"){
+      el=document.createElement("select");
+      el.className="props-select";
+      el.style.width="110px";
+      f.options.forEach(function(op){
+        var o2=document.createElement("option");
+        o2.value=op[0];o2.textContent=op[1];
+        if(state.values[f.name]===op[0])o2.selected=true;
+        el.appendChild(o2);
+      });
+      el.addEventListener("change",function(){state.values[f.name]=el.value;});
+    }else{
+      el=document.createElement("input");
+      el.className="props-input";
+      el.type="text";
+      el.value=state.values[f.name];
+      el.addEventListener("input",function(){state.values[f.name]=el.value;});
+    }
+    row(f.label,el);
+  });
+
+  var add=document.createElement("div");
+  add.className="props-row";
+  var addBtn=document.createElement("button");
+  addBtn.className="props-btn-action";
+  addBtn.textContent="Add behaviour";
+  addBtn.addEventListener("click",function(){
+    var r=addBehavior(spec,state.event,state.values);
+    if(r.ok){
+      fullRefresh();
+      outputLog("Behaviour added: "+spec.label+" on "+state.event);
+    }
+  });
+  add.appendChild(addBtn);
+  host.appendChild(add);
+
+  var existing=behaviorsOn(o);
+  alignSectionLabel(host,"On this object");
+  if(!existing.length){
+    note("No handlers yet. They run in Test Movie and in exports, not on this "+
+         "stage — the same split Flash had between authoring and playing.");
+    return;
+  }
+  existing.forEach(function(h,i){
+    var r=document.createElement("div");
+    r.className="behavior-row";
+    var t=document.createElement("span");
+    t.className="behavior-event";
+    t.textContent=h.event;
+    r.appendChild(t);
+    var b=document.createElement("span");
+    b.className="behavior-body";
+    b.textContent=h.body.replace(/\s+/g," ").slice(0,48);
+    r.appendChild(b);
+    var del=document.createElement("button");
+    del.className="scene-btn";
+    del.textContent="✕";
+    del.title="Remove this handler";
+    del.addEventListener("click",function(){
+      pushUndo();
+      // By text, not by index: the script may have been hand-edited since the
+      // panel listed it, and an index would then remove the wrong one.
+      o.clipScript=o.clipScript.replace(h.text,"").replace(/\n{3,}/g,"\n\n").trim();
+      if(!o.clipScript)o.clipScript="";
+      fullRefresh();
+    });
+    r.appendChild(del);
+    host.appendChild(r);
+    void i;
+  });
+  note("Edit them as code in the Actions panel — a behaviour is a starting "+
+       "point, not a black box.");
+}
+
 /**
  * The Scene panel: the movie's scenes, in playing order.
  *
@@ -8775,6 +9487,20 @@ function showMenuAt(x,y,items){
 
 // === doAction ===
 function doAction(a){
+  /* Announce the command so pushUndo() can name the step after it. Restored
+     afterwards rather than cleared, because a command can call another and the
+     inner one must not leave the outer one anonymous. */
+  var prevActionLabel=currentActionLabel;
+  currentActionLabel=ACTION_LABELS[a]||null;
+  try{
+    return doActionInner(a);
+  }finally{
+    currentActionLabel=prevActionLabel;
+    updateHistoryPanel();
+  }
+}
+
+function doActionInner(a){
   switch(a){
   case "new":
     // Only interrupt when there is actually something to lose.
@@ -9383,6 +10109,9 @@ function doAction(a){
   case "winTransform":if(workspace())workspace().toggle("transform");break;
   case "winScene":   if(workspace())workspace().toggle("scene");break;
   case "winOutput":  if(workspace())workspace().toggle("output");break;
+  case "winHistory": if(workspace())workspace().toggle("history");break;
+  case "winExplorer":if(workspace())workspace().toggle("explorer");break;
+  case "winBehaviors":if(workspace())workspace().toggle("behaviors");break;
   case "wsAnimation":if(workspace())workspace().preset("animation");break;
   case "wsDrawing":  if(workspace())workspace().preset("drawing");break;
   case "wsCoding":   if(workspace())workspace().preset("coding");break;
@@ -12816,6 +13545,9 @@ function initKeys(){
     if(ctrl&&(e.key==="t"||e.key==="T")){e.preventDefault();doAction("winTransform");return;}
     if(e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winScene");return;}
     if(!ctrl&&!e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winOutput");return;}
+    if(ctrl&&e.key==="F10"){e.preventDefault();doAction("winHistory");return;}
+    if(e.altKey&&e.key==="F3"){e.preventDefault();doAction("winExplorer");return;}
+    if(e.shiftKey&&e.key==="F3"){e.preventDefault();doAction("winBehaviors");return;}
     if(ctrl&&e.key==="PageUp"){e.preventDefault();doAction("prevScene");return;}
     if(ctrl&&e.key==="PageDown"){e.preventDefault();doAction("nextScene");return;}
     if(ctrl&&e.altKey&&e.shiftKey&&(e.key==="r"||e.key==="R")){e.preventDefault();doAction("rulers");return;}
@@ -16207,6 +16939,9 @@ function fullRefresh(){
   updateTransformPanel();
   updateScenePanel();
   updateOutputCount();
+  updateHistoryPanel();
+  updateExplorerPanel();
+  updateBehaviorsPanel();
   updateOnionUI();
   // The Character panel rebuilds from the document rather than tracking it, so
   // one notification after every refresh is all it needs. Note this is
@@ -16515,6 +17250,32 @@ function init(){
     highlightScript: highlightScript,
     checkScript: checkScript,
     refreshCodeEditor: refreshCodeEditor,
+    /** The labelled undo stack, which the History panel lists. */
+    historySteps: function(){
+      return {
+        undo:undoStack.map(function(x){return x.label||"Edit";}),
+        redo:redoStack.map(function(x){return x.label||"Edit";})
+      };
+    },
+    labelNextUndo: labelNextUndo,
+    /** Movie Explorer: the document's structure, as rows. */
+    explorerItems: explorerItems,
+    explorerFilters: function(v){
+      if(v)Object.keys(v).forEach(function(k){explorerFilters[k]=!!v[k];});
+      return explorerFilters;
+    },
+    explorerSearch: function(q){
+      if(q!=null){explorerQuery=String(q);updateExplorerPanel();}
+      return explorerQuery;
+    },
+    /** Behaviors: the generated-handler entry points. */
+    behaviors: function(){ return BEHAVIORS; },
+    addBehavior: function(id,event,values){
+      var spec=BEHAVIORS.filter(function(b){return b.id===id;})[0];
+      if(!spec)return {ok:false,reason:"unknown"};
+      return addBehavior(spec,event,values||{});
+    },
+    behaviorsOn: behaviorsOn,
     /* Wave-2 shape editing. The specs drive these directly as well as through
        the pointer, because several are pure geometry and testing the geometry
        separately from the gesture is the only way to pin down what the

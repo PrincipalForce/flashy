@@ -63,7 +63,14 @@
     { id: "scene", title: "Scene", home: "right", with: "library", closed: true },
     /* Output joins the Actions group at the bottom: you read a trace while
        looking at the script that produced it, and both want width. */
-    { id: "output", title: "Output", home: "bottom", with: "actions", closed: true }
+    { id: "output", title: "Output", home: "bottom", with: "actions", closed: true },
+    /* History joins Properties' group: both answer "what is the state of this
+       thing", and you step back through history while watching the stage. */
+    { id: "history", title: "History", home: "right", with: "props", closed: true },
+    /* The Movie Explorer is a list you browse, so it joins the Library's
+       group; Behaviors edits one object, so it joins Properties'. */
+    { id: "explorer", title: "Movie Explorer", home: "right", with: "library", closed: true },
+    { id: "behaviors", title: "Behaviors", home: "right", with: "props", closed: true }
   ];
 
   var ZONES = ["right", "bottom"];

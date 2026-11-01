@@ -51,7 +51,10 @@ test("nothing in the editor calls prompt() — it throws in the desktop app", as
   await page.locator("#fy-dialog").getByText("Cancel").click();
 
   // The Text tool asked with prompt() too, so you could not make text at all.
-  await page.locator('button[title*="Text"]').click();
+  /* By its tool id, not by a title substring: "Text" also matches the Movie
+     Explorer's "Text blocks" filter, and a selector that depends on no other
+     control ever mentioning the word is a selector that breaks later. */
+  await page.locator('#toolbox .tool-btn[data-tool="text"]').click();
   const box = await page.locator("#stageCanvas").boundingBox();
   await page.evaluate(({ box }) => {
     const c = document.getElementById("stageCanvas");

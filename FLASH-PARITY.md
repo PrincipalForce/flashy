@@ -151,12 +151,12 @@ name — an entire class of Flash content is unreachable.
 | Object handlers (`on` / `onClipEvent`) | ✅ | `flashy-as2.js`, `clipScript`. |
 | Actions panel | ✅ | Line numbers, syntax highlighting, a live syntax check through the same `new Function` the player compiles with, the broken line marked in the gutter, API chips (Flash's Script Assist), and Tab that indents instead of leaving the field. The textarea still holds the text, so the caret, selection, undo and IME behaviour stay the browser's own. |
 | `trace()` + **Output panel** | ✅ | `Flashy.Output` is the sink; the panel lists it, clears and copies. `trace()` is now in scope for a JavaScript frame script too — it was in scope for an imported movie's ActionScript and not for a script written here, which was backwards. Test Movie runs in its own window and forwards its lines back. |
-| Movie Explorer | ⬜ | No structural view — no way to find every instance of a symbol, every script, every text block. |
+| Movie Explorer | ✅ | Every scene, layer, frame, object and library item, with Flash's five filters and a search. Click a row to go to it. Reaches parked scenes, not just the open one. |
 | Debugger (breakpoints, watch, variable inspector) | ⬜ | Missing. |
-| Behaviors panel (scriptless interactivity) | ⬜ | Missing. |
+| Behaviors panel (scriptless interactivity) | ✅ | Eleven behaviours across six events, written as Flash's own `on(release) { … }` handlers — which flashy-as2.js already runs. They stack rather than replacing each other, and stay editable as code in the Actions panel. |
 | Components (Button, CheckBox, ComboBox, …) | ⬜ | Missing. |
 | Code snippets library | ◐ | The API chips insert working calls at the caret. A saved, user-editable snippet library is still missing. |
-| Button event wiring without code | ⬜ | Missing. |
+| Button event wiring without code | ✅ | The Behaviors panel. |
 
 ## 8. Panels
 
@@ -169,11 +169,11 @@ name — an entire class of Flash content is unreachable.
 | **Align** | ✅ | — |
 | **Info** (x/y/w/h readout, cursor position) | ✅ | Selection box, pointer position, whether the pointer is on the stage. Colour under cursor is still missing. |
 | **Transform** (numeric scale/rotate/skew) | ✅ | Applies to a whole selection, which Properties does not. Copy-and-apply is still missing. |
-| **History** (+ replay steps, save as command) | ⬜ | A 50-deep undo stack exists but is invisible. |
+| **History** (+ replay steps, save as command) | ◐ | The stack is listed, named after the command that made each step, and clicking one steps back to it. Replay and save-as-command are still missing. |
 | **Output** | ✅ | §7. |
 | **Scene** | ✅ | §3. |
 | Color Swatches (+ load/save palettes, web-safe) | ⬜ | Missing. |
-| Movie Explorer | ⬜ | §7. |
+| Movie Explorer | ✅ | §7. |
 | Accessibility | ⬜ | Missing (low value). |
 | Strings / localisation | ⬜ | Missing (low value). |
 | Dockable workspace, saved layouts | ✅ | `workspace.js`. |

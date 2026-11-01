@@ -1420,3 +1420,73 @@ input[type="range"].props-input {
   font-variant-numeric: tabular-nums;
 }
 .output-line { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+
+/* ── History panel ──
+   Oldest first, which is the order the changes happened in. The marker sits
+   between what has been applied and what has been undone. */
+.history-list { max-height: 260px; overflow: auto; }
+.history-row {
+  padding: 2px 8px; font: 11px Tahoma, sans-serif; color: #DDD;
+  cursor: pointer; border-bottom: 1px solid #3A3A3A;
+}
+.history-row:hover { background: var(--select); color: #fff; }
+.history-row.undone { color: #777; font-style: italic; }
+.history-here {
+  padding: 2px 8px; font: bold 10px Tahoma, sans-serif;
+  color: var(--accent); background: #2E2E2E;
+  border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent);
+}
+
+/* ── Movie Explorer ──
+   A structural list, indented by depth. Filters first, because the question
+   is almost always "show me all the X" rather than a search. */
+.explorer-bar {
+  display: flex; align-items: center; gap: 2px;
+  padding: 3px 4px; background: #333; border-bottom: 1px solid #444;
+}
+.explorer-filter {
+  min-width: 20px; height: 18px; padding: 0 4px;
+  background: linear-gradient(to bottom, #4A4A4A, #3E3E3E);
+  border: 1px solid #585858; border-bottom-color: #2E2E2E;
+  color: #AAA; cursor: pointer; font: 10px Consolas, monospace;
+  border-radius: 2px;
+}
+.explorer-filter.active {
+  background: linear-gradient(to bottom, #4A7FB5, #39638F);
+  border-color: #6CA6DC; color: #fff;
+}
+.explorer-search {
+  flex: 1; min-width: 40px; height: 18px;
+  background: #222; border: 1px solid #555; color: #DDD;
+  font: 10px Tahoma, sans-serif; padding: 0 4px; border-radius: 2px;
+}
+.explorer-list { max-height: 320px; overflow: auto; }
+.explorer-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 1px 6px; font: 11px Tahoma, sans-serif; color: #CCC;
+  cursor: pointer; white-space: nowrap;
+}
+.explorer-row:hover { background: var(--select); color: #fff; }
+.explorer-row.head { color: #EEE; font-weight: bold; background: #333; cursor: default; }
+.explorer-row.head:hover { background: #3A3A3A; }
+.explorer-row.depth1 { padding-left: 16px; }
+.explorer-row.depth2 { padding-left: 30px; }
+.explorer-icon { width: 14px; text-align: center; color: var(--text-dim); flex: 0 0 auto; }
+.explorer-row:hover .explorer-icon { color: #fff; }
+.explorer-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Behaviors ──
+   The handlers already on the object, under the form that adds another. */
+.behavior-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 6px; border-bottom: 1px solid #3A3A3A;
+  font: 11px Tahoma, sans-serif;
+}
+.behavior-event {
+  flex: 0 0 auto; color: #6CC0FF;
+  font: 10px Consolas, monospace;
+}
+.behavior-body {
+  flex: 1; color: #AAA; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font: 10px Consolas, monospace;
+}
