@@ -1531,3 +1531,24 @@ input[type="range"].props-input {
   border-radius: 2px; cursor: crosshair;
   touch-action: none;
 }
+
+/* ── Size Report ──
+   A share bar next to each line: the question is never "how many bytes" but
+   "what is most of this file". */
+.size-report { font: 11px Tahoma, sans-serif; max-height: 300px; overflow: auto; }
+.size-head {
+  margin-top: 6px; padding: 2px 4px;
+  font-weight: bold; color: #EEE; background: #333;
+  border-top: 1px solid #4A4A4A;
+}
+.size-row { display: flex; align-items: center; gap: 6px; padding: 1px 4px; }
+.size-label { flex: 1; color: #CCC; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.size-bar {
+  flex: 0 0 70px; height: 7px;
+  background: #222; border: 1px solid #111; border-radius: 2px; overflow: hidden;
+}
+.size-bar > span { display: block; height: 100%; background: var(--accent); }
+.size-value {
+  flex: 0 0 64px; text-align: right;
+  color: #DDD; font-family: Consolas, monospace; font-variant-numeric: tabular-nums;
+}

@@ -502,6 +502,9 @@ var menus=[
     {label:"Export as JS Module...",action:"exportModule"},
     {type:"sep"},
     {label:"Document Settings...",action:"docSettings"},
+    {label:"Publish Settings...",action:"publishSettings"},
+    {label:"Publish",action:"publish",shortcut:"Ctrl+F12"},
+    {label:"Size Report...",action:"sizeReport"},
     {type:"sep"},
     // No accelerator: Ctrl+R and Ctrl+Shift+R are the browser's reload, which
     // a page cannot reliably intercept. (The Ctrl+R on Import Sound below has
@@ -10003,6 +10006,15 @@ function doActionInner(a){
   case "exportModule":
     exportAsModule();
     break;
+  case "publishSettings":
+    showPublishSettingsDialog();
+    break;
+  case "publish":
+    publishAll();
+    break;
+  case "sizeReport":
+    showSizeReportDialog();
+    break;
   case "docSettings":
     showDialog({
       title:"Document Settings",
@@ -14251,6 +14263,7 @@ function initKeys(){
     if(e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winScene");return;}
     if(!ctrl&&!e.shiftKey&&e.key==="F2"){e.preventDefault();doAction("winOutput");return;}
     if(ctrl&&e.key==="F10"){e.preventDefault();doAction("winHistory");return;}
+    if(ctrl&&e.key==="F12"){e.preventDefault();doAction("publish");return;}
     if(e.altKey&&e.key==="F3"){e.preventDefault();doAction("winExplorer");return;}
     if(e.shiftKey&&e.key==="F3"){e.preventDefault();doAction("winBehaviors");return;}
     if(ctrl&&e.key==="PageUp"){e.preventDefault();doAction("prevScene");return;}
@@ -14480,7 +14493,11 @@ function serializeDoc(){
         totalFrames:(sc.layers===doc.layers?doc.totalFrames:sc.totalFrames)||60
       };
     }),
-    sceneIndex:doc.sceneIndex||0
+    sceneIndex:doc.sceneIndex||0,
+    /* Publish settings: what this document produces, remembered with it.
+       Publishing the same movie twice should not mean making the same
+       decisions twice. */
+    publish:JSON.parse(JSON.stringify(docPublish()))
   };
 }
 
@@ -14637,6 +14654,9 @@ function deserializeDoc(d){
     v:(d.guides&&Array.isArray(d.guides.v)?d.guides.v:[]).map(Number).filter(isFinite),
     h:(d.guides&&Array.isArray(d.guides.h)?d.guides.h:[]).map(Number).filter(isFinite)
   };
+  doc.publish=(d.publish&&typeof d.publish==="object")
+    ? JSON.parse(JSON.stringify(d.publish)) : null;
+  docPublish();
   doc.layers=reviveLayers(d.layers);
   /* Scenes. A document without them gets one made from its layers, so every
      file written before scenes existed opens as a one-scene movie. */
@@ -15967,6 +15987,299 @@ function exportRuntime(data, canvas, options) {
   return stage;
 }
 
+/* ================================================================== *
+ * Publish Settings, and the Size Report
+ *
+ * Publishing was six separate menu items, each with its own hard-coded
+ * choices and none of them remembered. Export the same movie twice and you
+ * made the same decisions twice; a project with a fixed set of outputs had no
+ * way to say so.
+ *
+ * And there was no way at all to see what made a movie heavy. A 3MB export is
+ * almost always one photograph or one music track, and without a breakdown the
+ * only way to find it is to delete things until the number moves.
+ * ================================================================== */
+
+/** The publish settings, with the defaults the separate commands used. */
+function docPublish(){
+  if(!doc.publish)doc.publish={};
+  var p=doc.publish;
+  if(!p.targets)p.targets={html:true,sprite:false,video:false,svg:false,module:false};
+  if(p.title==null)p.title="Flashy Animation";
+  if(p.loop==null)p.loop=true;
+  if(p.showAll==null)p.showAll=true;        // hidden layers publish, as in Flash
+  if(p.scaleMode==null)p.scaleMode="movie"; // movie | fit | fill | percent
+  if(p.scalePercent==null)p.scalePercent=100;
+  if(p.background==null)p.background="";    // "" = the document's own colour
+  if(p.spriteColumns==null)p.spriteColumns=8;
+  if(p.videoFps==null)p.videoFps=doc.fps||24;
+  return p;
+}
+
+var PUBLISH_TARGETS=[
+  ["html","HTML page","export"],
+  ["sprite","Sprite sheet","exportGIF"],
+  ["video","Video (WebM/MP4)","exportMP4"],
+  ["svg","SVG (current frame)","exportSVG"],
+  ["module","JS module","exportModule"]
+];
+
+function showPublishSettingsDialog(){
+  var p=docPublish();
+  showDialog({
+    title:"Publish Settings",
+    message:"What this document publishes, remembered with it. Publish (Ctrl+F12) "+
+            "produces everything ticked here in one go.",
+    fields:[
+      {name:"html",label:"HTML page",type:"checkbox",value:!!p.targets.html},
+      {name:"sprite",label:"Sprite sheet",type:"checkbox",value:!!p.targets.sprite},
+      {name:"video",label:"Video (WebM/MP4)",type:"checkbox",value:!!p.targets.video},
+      {name:"svg",label:"SVG (current frame)",type:"checkbox",value:!!p.targets.svg},
+      {name:"module",label:"JS module",type:"checkbox",value:!!p.targets.module},
+      {name:"title",label:"Page title",value:p.title},
+      {name:"loop",label:"Loop playback",type:"checkbox",value:!!p.loop},
+      {name:"scaleMode",label:"Scale",type:"select",value:p.scaleMode,
+       options:[["movie","Match movie size"],["fit","Fit in window"],
+                ["fill","Fill window"],["percent","Percent"]]},
+      {name:"scalePercent",label:"Percent",type:"number",value:p.scalePercent,
+       min:10,max:400},
+      {name:"background",label:"Page background",value:p.background,
+       placeholder:"blank = the document's own colour"},
+      // "Sheet columns", not "Sprite sheet columns": a label that contains
+      // another control's label is ambiguous to read and to target.
+      {name:"spriteColumns",label:"Sheet columns",type:"number",
+       value:p.spriteColumns,min:1,max:32},
+      {name:"videoFps",label:"Video fps",type:"number",value:p.videoFps,min:1,max:60}
+    ],
+    footnote:"Hidden layers are published, as they are in Flash: the eye is "+
+             "about what you can see while working.",
+    onOk:function(v){
+      pushUndo();
+      p.targets={
+        html:!!v.html,sprite:!!v.sprite,video:!!v.video,
+        svg:!!v.svg,module:!!v.module
+      };
+      p.title=String(v.title||"Flashy Animation");
+      p.loop=!!v.loop;
+      p.scaleMode=v.scaleMode;
+      p.scalePercent=Math.max(10,Math.min(400,parseInt(v.scalePercent,10)||100));
+      p.background=String(v.background||"").trim();
+      p.spriteColumns=Math.max(1,Math.min(32,parseInt(v.spriteColumns,10)||8));
+      p.videoFps=Math.max(1,Math.min(60,parseInt(v.videoFps,10)||24));
+      touchDoc();
+      outputLog("Publish settings saved.");
+    }
+  });
+}
+
+/**
+ * Run every ticked target.
+ *
+ * In sequence rather than all at once: each one ends in a browser download,
+ * and firing five at the same instant is how a browser decides to block four
+ * of them.
+ */
+function publishAll(){
+  var p=docPublish();
+  var queue=PUBLISH_TARGETS.filter(function(t){return p.targets[t[0]];});
+  if(!queue.length){
+    showMessage("Publish",
+      "Nothing is ticked in Publish Settings, so there is nothing to produce.");
+    return {ok:false,count:0};
+  }
+  var i=0;
+  var step=function(){
+    if(i>=queue.length){
+      outputLog("Published "+queue.length+" file"+(queue.length===1?"":"s")+".");
+      return;
+    }
+    var t=queue[i++];
+    doAction(t[2]);
+    // A gap between downloads, for the reason above.
+    setTimeout(step,400);
+  };
+  step();
+  return {ok:true,count:queue.length};
+}
+
+/* ------------------------------------------------------------------ *
+ * The Size Report
+ *
+ * What makes the movie heavy, by asset and by frame. A 3MB export is almost
+ * always one photograph or one music track, and without a breakdown the only
+ * way to find it is to delete things until the number moves.
+ * ------------------------------------------------------------------ */
+
+/** Bytes a base64 payload decodes to. */
+function base64Bytes(data){
+  if(!data)return 0;
+  var s=String(data);
+  var pad=(s.charAt(s.length-1)==="=")?((s.charAt(s.length-2)==="=")?2:1):0;
+  return Math.max(0,Math.floor(s.length*3/4)-pad);
+}
+
+function formatBytes(n){
+  if(n<1024)return n+" B";
+  if(n<1024*1024)return (n/1024).toFixed(1)+" KB";
+  return (n/(1024*1024)).toFixed(2)+" MB";
+}
+
+/**
+ * A breakdown of what the published movie weighs.
+ *
+ * Measured from the EXPORT document, not the editing one: guides, scene
+ * structure and undo history are not published, and reporting them would
+ * mislead about what a viewer downloads.
+ */
+function sizeReport(){
+  var data=exportDocData();
+  var sounds=[],bitmaps=[];
+  Object.keys(data.sounds||{}).forEach(function(n){
+    sounds.push({name:n,bytes:base64Bytes(data.sounds[n].data),
+                 duration:data.sounds[n].duration||0});
+  });
+  Object.keys(data.bitmaps||{}).forEach(function(n){
+    var b=data.bitmaps[n];
+    bitmaps.push({name:n,bytes:base64Bytes(b.data),
+                  size:(b.width||0)+"×"+(b.height||0)});
+  });
+  sounds.sort(function(a,b){return b.bytes-a.bytes;});
+  bitmaps.sort(function(a,b){return b.bytes-a.bytes;});
+
+  // The document without its assets: the vectors, the timeline, the scripts.
+  var stripped=JSON.parse(JSON.stringify(data));
+  stripped.sounds={};stripped.bitmaps={};
+  var vectorBytes=JSON.stringify(stripped).length;
+
+  var soundBytes=sounds.reduce(function(a,s){return a+s.bytes;},0);
+  var bitmapBytes=bitmaps.reduce(function(a,b){return a+b.bytes;},0);
+
+  /* Per frame, so a heavy stretch can be found. Objects are counted through
+     the real interpolator, which is what the player actually builds. */
+  var frames=[];
+  var total=data.totalFrames||1;
+  var layers=reviveLayers(data.layers);
+  for(var f=1;f<=total;f++){
+    var objs=frameObjects(layers,f);
+    var nodes=0;
+    var count=function(list){
+      (list||[]).forEach(function(o){
+        nodes++;
+        if(o.children)count(o.children);
+      });
+    };
+    count(objs);
+    frames.push({frame:f,objects:objs.length,nodes:nodes});
+  }
+  var heaviest=frames.slice().sort(function(a,b){return b.nodes-a.nodes;})[0]||
+    {frame:1,objects:0,nodes:0};
+
+  return {
+    vectorBytes:vectorBytes,
+    soundBytes:soundBytes,
+    bitmapBytes:bitmapBytes,
+    totalBytes:vectorBytes+soundBytes+bitmapBytes,
+    sounds:sounds,bitmaps:bitmaps,
+    frames:frames,heaviest:heaviest,
+    fps:data.fps||24,totalFrames:total
+  };
+}
+
+/** How long the movie takes to arrive, at the speeds people actually have. */
+var BANDWIDTHS=[
+  ["3G",400*1024/8],
+  ["4G",12*1024*1024/8],
+  ["Broadband",25*1024*1024/8]
+];
+
+function showSizeReportDialog(){
+  var r=sizeReport();
+  showDialog({
+    title:"Size Report",
+    message:"What the published movie weighs. Measured from the EXPORT "+
+            "document, so guides, scene structure and undo history are not in "+
+            "it — they are not published either.",
+    build:function(body){
+      var table=document.createElement("div");
+      table.className="size-report";
+
+      var section=function(label){
+        var h=document.createElement("div");
+        h.className="size-head";
+        h.textContent=label;
+        table.appendChild(h);
+      };
+      var line=function(label,value,share){
+        var row=document.createElement("div");
+        row.className="size-row";
+        var l=document.createElement("span");
+        l.className="size-label";l.textContent=label;
+        var v=document.createElement("span");
+        v.className="size-value";v.textContent=value;
+        row.appendChild(l);
+        if(share!=null){
+          var barWrap=document.createElement("span");
+          barWrap.className="size-bar";
+          var bar=document.createElement("span");
+          bar.style.width=Math.max(1,Math.round(share*100))+"%";
+          barWrap.appendChild(bar);
+          row.appendChild(barWrap);
+        }
+        row.appendChild(v);
+        table.appendChild(row);
+      };
+
+      var total=Math.max(1,r.totalBytes);
+      section("Total — "+formatBytes(r.totalBytes));
+      line("Vectors, timeline and scripts",formatBytes(r.vectorBytes),
+           r.vectorBytes/total);
+      line("Sounds",formatBytes(r.soundBytes),r.soundBytes/total);
+      line("Bitmaps",formatBytes(r.bitmapBytes),r.bitmapBytes/total);
+
+      if(r.sounds.length){
+        section("Sounds, heaviest first");
+        r.sounds.forEach(function(s){
+          line(s.name+(s.duration?("  "+s.duration.toFixed(1)+"s"):""),
+               formatBytes(s.bytes),s.bytes/total);
+        });
+      }
+      if(r.bitmaps.length){
+        section("Bitmaps, heaviest first");
+        r.bitmaps.forEach(function(b){
+          line(b.name+"  "+b.size,formatBytes(b.bytes),b.bytes/total);
+        });
+      }
+
+      section("Download time");
+      BANDWIDTHS.forEach(function(b){
+        var secs=r.totalBytes/b[1];
+        line(b[0],secs<1?"under a second":(secs.toFixed(1)+" s"));
+      });
+
+      section("Frames");
+      line("Length",r.totalFrames+" frames at "+r.fps+" fps  ("+
+           (r.totalFrames/r.fps).toFixed(1)+"s)");
+      line("Busiest frame","frame "+r.heaviest.frame+" — "+
+           r.heaviest.nodes+" object"+(r.heaviest.nodes===1?"":"s"));
+
+      body.appendChild(table);
+
+      var note=document.createElement("div");
+      note.className="fy-dialog-hint";
+      note.textContent=r.bitmapBytes>r.vectorBytes*4
+        ? "Bitmaps are most of this file. Trace Bitmap turns one into vectors, "+
+          "which is usually far smaller — and scales."
+        : (r.soundBytes>r.totalBytes*0.6
+          ? "Audio is most of this file. A shorter or more compressed track is "+
+            "the single biggest saving available."
+          : "Nothing here dominates; the weight is spread across the movie.");
+      body.appendChild(note);
+    },
+    okLabel:"Close",
+    onOk:function(){}
+  });
+}
+
 function genHTML(callback){
   getEngineSource(function(engineSrc){
     // The whole movie, scenes laid end to end — not just the one on screen.
@@ -15975,11 +16288,31 @@ function genHTML(callback){
     if(as2Src)engineSrc=engineSrc+"\n"+as2Src;
     var sc="<"+"script>",sce="</"+"script>";
     var s="<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n";
-    s+="<title>Flashy Animation</title>\n";
+    /* The publish settings, where they land in the output: the page title, its
+       background, how the canvas is scaled and whether the movie loops. Six
+       separate export commands each had these hard-coded, and none of them
+       remembered a choice. */
+    var pub=docPublish();
+    s+="<title>"+xmlText(pub.title||"Flashy Animation")+"</title>\n";
     s+="<style>\n";
     s+="*{margin:0;padding:0;box-sizing:border-box;}\n";
-    s+="body{background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;overflow:hidden;}\n";
-    s+="canvas{display:block;}\n";
+    s+="body{background:"+(pub.background||"#111")+
+       ";display:flex;align-items:center;justify-content:center;min-height:100vh;overflow:hidden;}\n";
+    /* Scale. "Match movie" is the historic behaviour and stays the default;
+       Fit keeps the aspect ratio inside the window, Fill crops to cover it,
+       and Percent is a flat multiplier. All of it in CSS, so the canvas keeps
+       its own pixel size and the drawing stays sharp. */
+    if(pub.scaleMode==="fit"){
+      s+="canvas{display:block;max-width:100vw;max-height:100vh;object-fit:contain;}\n";
+    }else if(pub.scaleMode==="fill"){
+      s+="canvas{display:block;width:100vw;height:100vh;object-fit:cover;}\n";
+    }else if(pub.scaleMode==="percent"){
+      var pc=Math.max(10,Math.min(400,pub.scalePercent||100))/100;
+      s+="canvas{display:block;width:"+Math.round(doc.width*pc)+"px;height:"+
+         Math.round(doc.height*pc)+"px;}\n";
+    }else{
+      s+="canvas{display:block;}\n";
+    }
     s+="#flashy-start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);cursor:pointer;}\n";
     s+="#flashy-start button{width:88px;height:88px;border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,0.35);color:#fff;font-size:34px;line-height:1;cursor:pointer;padding-left:6px;}\n";
     s+="#flashy-start button:hover{background:rgba(255,255,255,0.18);}\n";
@@ -16009,13 +16342,15 @@ function genHTML(callback){
       // Hold the first frame until the viewer presses play, then unlock audio
       // and start — so the soundtrack is actually audible from frame one.
       s+="var __gate = document.getElementById('flashy-start');\n";
-      s+="window.__stage = __run(__data, __canvas, {autoplay:false});\n";
+      s+="window.__stage = __run(__data, __canvas, {autoplay:false, loop:"+
+         (pub.loop?"true":"false")+"});\n";
       s+="__gate.addEventListener('click', function(){\n";
       s+="  __gate.remove();\n";
       s+="  Promise.resolve(Flashy.Sound.unlock()).then(function(){ window.__stage.start(); });\n";
       s+="});\n";
     }else{
-      s+="window.__stage = __run(__data, __canvas);\n";
+      s+="window.__stage = __run(__data, __canvas, {loop:"+
+         (pub.loop?"true":"false")+"});\n";
     }
     s+=sce+"\n</body>\n</html>";
     callback(s);
@@ -18057,6 +18392,14 @@ function init(){
     soundEnvelopeFor: soundEnvelopeFor,
     setSoundEffect: setSoundEffect,
     soundItems: soundItems,
+    /* Publishing. */
+    publishSettings: function(v){
+      var p=docPublish();
+      if(v)Object.keys(v).forEach(function(k){p[k]=v[k];});
+      return p;
+    },
+    publishAll: publishAll,
+    sizeReport: sizeReport,
     showSoundEnvelope: showSoundEnvelopeDialog,
     /* Library management. */
     libUseCount: libUseCount,

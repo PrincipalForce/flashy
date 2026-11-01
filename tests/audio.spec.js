@@ -210,7 +210,9 @@ test("the HTML export carries the audio and gates playback behind a click", asyn
   // Autoplay is blocked without a gesture, so an export with sound opens
   // behind a play button rather than starting silently.
   expect(html).toContain('id="flashy-start"');
-  expect(html).toContain("{autoplay:false}");
+  /* The option object now also carries the publish settings' loop flag, so
+     the assertion is on the autoplay field rather than on the whole literal. */
+  expect(html).toContain("autoplay:false");
 
   const out = await context.newPage();
   const outErrors = [];

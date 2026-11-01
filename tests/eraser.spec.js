@@ -554,6 +554,15 @@ test("an erased bitmap and an erased shape both export", async ({ page, context 
   // counting animation frames.
   await out.waitForFunction(() => window.__read(70, 70) === "#2277dd", null, { timeout: 10000 });
 
+  /* Stop the movie before reading. The artwork is on frame 1 only, so a
+     playhead that advances between the wait above and the reads below leaves a
+     blank stage — which showed up as a rare failure under parallel load. */
+  await out.evaluate(() => {
+    window.__stage.stop();
+    window.__stage.root.gotoAndStop(1);
+    window.__stage._render();
+  });
+
   const px = await out.evaluate(() => ({
     bitmapKept: window.__read(70, 70),
     bitmapErased: window.__read(120, 110),

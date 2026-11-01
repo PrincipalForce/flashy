@@ -195,9 +195,9 @@ name — an entire class of Flash content is unreachable.
 | Feature | Flashy | Gap |
 | --- | --- | --- |
 | Export HTML, sprite sheet, video, SVG, JS module, embed snippet | ✅ | — |
-| **Publish Settings** (one dialog, multiple targets, remembered per document) | ⬜ | Six separate menu items, no persisted settings. |
-| HTML template, dimensions, playback, quality, scale, alignment | ⬜ | Missing. |
-| **Bandwidth Profiler / Size Report** | ⬜ | No way to see what is making a movie heavy. |
+| **Publish Settings** (one dialog, multiple targets, remembered per document) | ✅ | One dialog, saved with the document, and a Publish command (Ctrl+F12) that produces every ticked target in sequence — sequentially because five downloads fired at one instant is how a browser decides to block four of them. |
+| HTML template, dimensions, playback, scale | ◐ | Page title, background, loop, and four scale modes (match movie, fit, fill, percent) — all in CSS, so the canvas keeps its pixel size and the drawing stays sharp. A user-supplied HTML template and alignment remain. |
+| **Bandwidth Profiler / Size Report** | ✅ | Weight by kind and by asset, heaviest first, with a share bar per line; the busiest frame; and download times at 3G, 4G and broadband. Measured from the EXPORT document, so guides and scene structure are not counted — they are not published either. |
 | Protect from import, omit trace actions | ⬜ | Missing. |
 | SWF export | ⬜ | Flashy *reads* `.swf` and `.fla` but cannot write either. |
 
