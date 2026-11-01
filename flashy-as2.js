@@ -266,6 +266,26 @@
       getTimer: function () { return Math.round((ctx.now() - ctx.started)); },
       getBytesLoaded: function () { return 1000; },
       getBytesTotal: function () { return 1000; },
+      /**
+       * Flash's attachMovie: create an instance of a symbol marked "export
+       * for ActionScript" and add it to the calling clip.
+       *
+       * It was a stub that logged a warning, which meant every movie that
+       * spawns anything — a bullet, a particle, a row of a list — did nothing
+       * at all. The stage registers linked symbols and builds them; here it
+       * is just routed through.
+       */
+      attachMovie: function (linkName, instanceName, depth) {
+        var stage = ctx.stage;
+        if (!stage || typeof stage.attachSymbol !== 'function') {
+          if (global.Flashy && global.Flashy.Output) {
+            global.Flashy.Output.write('attachMovie is only available in a published movie.');
+          }
+          return null;
+        }
+        // Into the calling clip, as in Flash — not always the root.
+        return stage.attachSymbol(linkName, instanceName, depth, ctx.__currentNode || null);
+      },
       trace: function () {
         /* To the Output sink first — the console is where a trace used to go
            and is nowhere a user of the editor would look. Still logged as
@@ -329,7 +349,7 @@
 
   /* Calls with no equivalent here. Reported once each, because a clip that
      calls attachMovie every frame would otherwise fill the console. */
-  var STUBS = ['attachMovie', 'duplicateMovieClip', 'swapDepths', 'tellTarget',
+  var STUBS = ['duplicateMovieClip', 'swapDepths', 'tellTarget',
     'loadMovie', 'loadVariables', 'startDrag', 'stopDrag',
     'createEmptyMovieClip', 'createTextField', 'beginFill',
     'lineTo', 'moveTo', 'endFill'];
@@ -656,11 +676,18 @@
       var dead = false;
       var exec = function () {
         if (dead) return;
+        /* Which clip is running, so attachMovie() adds to the calling clip
+           rather than always to the root — which is what Flash did, and what
+           makes `this.attachMovie(...)` inside a container work. Restored
+           afterwards because a handler can trigger another. */
+        var prevNode = ctx.__currentNode;
+        ctx.__currentNode = node;
         try { fn.call(scopeFor(block.kind)); }
         catch (e) {
           dead = true;                        // one report, then stop
           report(block, e, 'failed and was switched off');
         }
+        finally { ctx.__currentNode = prevNode; }
       };
       /* An event-driven run needs the clip to still be in the display list.
          A rebuilt or removed one keeps its stage listeners otherwise, and

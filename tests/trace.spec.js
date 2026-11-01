@@ -747,7 +747,10 @@ test("the Library lists bitmaps, and browsing one does not place it", async ({ p
   await page.evaluate((d) => window.__importImage(40, 40, d, "Pic", { place: false }), HALVES);
   await page.evaluate(() => window._flashyWorkspace.show("library"));
   const lib = page.locator("#libPanel");
-  await expect(lib.locator(".lib-subtitle")).toHaveText("Bitmaps");
+  /* The Library groups by FOLDER now, with kind available as a sort — the
+     fixed "Symbols" / "Bitmaps" headings are gone, so the row itself is what
+     identifies the item. */
+  await expect(lib.locator('.lib-item[data-lib-kind="bitmap"]')).toHaveCount(1);
   const item = lib.locator(".lib-item", { hasText: "Pic" });
   await expect(item).toHaveCount(1);
   await expect(item.locator(".lib-dim")).toHaveText("40×40");

@@ -228,7 +228,7 @@ test("a group is drawn by every export path, not just the stage", async ({ page,
       if (!d) return;
       if (d.graphics) n++;
       (d.children || []).forEach(walk);
-    })(window.__fyStage ? window.__fyStage.root : null);
+    })(window.__stage ? window.__stage.root : null);
     return n;
   });
   // Either the export exposes its stage (then every shape is there) or it does

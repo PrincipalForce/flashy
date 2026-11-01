@@ -602,6 +602,9 @@ var menus=[
     {type:"sep"},
     {label:"Trace Bitmap...",action:"traceBitmap"},
     {label:"Swap Bitmap...",action:"swapBitmap"},
+    {label:"Swap Symbol...",action:"swapSymbol"},
+    {label:"Duplicate Symbol...",action:"duplicateSymbol"},
+    {label:"Select Unused Items...",action:"libUnused"},
     {type:"sep"},
     {label:"Set Up Mouth Shapes...",action:"mouthSetup"},
     {label:"Auto Lip Sync...",action:"lipSync"},
@@ -8778,6 +8781,309 @@ function libSelected(){
   return libSel;
 }
 
+/* ------------------------------------------------------------------ *
+ * Library management
+ *
+ * The Library was a flat, unsorted, unsearchable list with Rename and Delete
+ * on it. A document with thirty symbols — which is a short cartoon — was
+ * unusable: no folders, no search, no way to duplicate a symbol to make a
+ * variant, no way to swap an instance for another symbol, and no way to find
+ * the ones nothing uses.
+ *
+ * Folders use the same idea the rest of the document uses for hierarchy: a
+ * path on the item rather than a tree beside it. `sym.folder` is "Hands/Left"
+ * or "", which cannot get out of step with the item it describes and needs no
+ * migration for a document written before folders existed.
+ * ------------------------------------------------------------------ */
+
+var librarySort="name";        // name | kind | use | folder
+var librarySearch="";
+var libraryOpenFolders={};     // path -> false when collapsed
+
+/** The folder an item is in: "" for the top level. */
+function libFolderOf(kind,name){
+  var item=kind==="symbol"?(doc.library||{})[name]:(doc.bitmaps||{})[name];
+  var f=item&&item.folder;
+  return typeof f==="string"?f.replace(/^\/+|\/+$/g,""):"";
+}
+
+function setLibFolder(kind,name,folder){
+  var item=kind==="symbol"?(doc.library||{})[name]:(doc.bitmaps||{})[name];
+  if(!item)return false;
+  item.folder=String(folder||"").replace(/^\/+|\/+$/g,"");
+  return true;
+}
+
+/** How many times a library item is used anywhere in the document. */
+function libUseCount(kind,name){
+  var n=0;
+  var visit=function(objs){
+    (objs||[]).forEach(function(o){
+      if(kind==="symbol"&&o.type==="symbol"&&o.symbolName===name)n++;
+      if(kind==="bitmap"&&o.type==="bitmap"&&o.bitmapAsset===name)n++;
+      if(o.children)visit(o.children);
+    });
+  };
+  docScenes().forEach(function(scene,si){
+    var layers=(si===doc.sceneIndex)?doc.layers:scene.layers;
+    (layers||[]).forEach(function(l){
+      (l.keyframes||[]).forEach(function(kf){
+        visit(kf.objects);
+        if(kind==="sound"&&kf.sound&&kf.sound.asset===name)n++;
+      });
+    });
+  });
+  // Instances INSIDE other symbols count too: a symbol used only by another
+  // symbol is still used, and reporting it as unused would invite deleting it.
+  Object.keys(doc.library||{}).forEach(function(sn){
+    var sym=doc.library[sn];
+    if(!sym)return;
+    visit(sym.objects);
+    (sym.layers||[]).forEach(function(l){
+      (l.keyframes||[]).forEach(function(kf){visit(kf.objects);});
+    });
+  });
+  return n;
+}
+
+/** Library items nothing refers to. */
+function unusedLibraryItems(){
+  var out=[];
+  Object.keys(doc.library||{}).forEach(function(n){
+    if(!libUseCount("symbol",n))out.push({kind:"symbol",name:n});
+  });
+  Object.keys(doc.bitmaps||{}).forEach(function(n){
+    if(!libUseCount("bitmap",n))out.push({kind:"bitmap",name:n});
+  });
+  Object.keys(doc.sounds||{}).forEach(function(n){
+    if(!libUseCount("sound",n))out.push({kind:"sound",name:n});
+  });
+  return out;
+}
+
+/**
+ * Duplicate a symbol.
+ *
+ * A deep copy through the serializer rather than a hand-written clone: a
+ * symbol's layers hold keyframes which hold objects which may hold children
+ * and filters, and anything shallower would leave the duplicate sharing
+ * structure with the original — which is the bug group children and filter
+ * stacks both had.
+ */
+function duplicateSymbol(name,newName){
+  var sym=(doc.library||{})[name];
+  if(!sym)return {ok:false,reason:"missing"};
+  var target=uniqueSymbolName(newName||(name+" copy"));
+  var plain=serializeLibrary({x:sym}).x;
+  var copy=reviveLibrary({x:plain}).x;
+  copy.folder=sym.folder||"";
+  doc.library[target]=copy;
+  return {ok:true,name:target};
+}
+
+/** Swap every selected instance for another symbol, keeping its box. */
+function swapSymbolOnSelection(toName){
+  if(!doc.library[toName])return {ok:false,reason:"missing"};
+  var targets=selection.filter(function(o){return o.type==="symbol";});
+  if(!targets.length)return {ok:false,reason:"selection"};
+  pushUndo();
+  targets.forEach(function(o){
+    o.symbolName=toName;
+    /* The instance keeps its position, size and transform — swapping a symbol
+       is replacing what is drawn, not where it is. That is the whole point of
+       the command: a walk cycle becomes a run cycle without re-placing it. */
+    o.firstFrame=1;
+  });
+  return {ok:true,count:targets.length};
+}
+
+/** The rows the Library panel shows, grouped by folder and sorted. */
+function libraryRows(){
+  var q=librarySearch.trim().toLowerCase();
+  var rows=[];
+  var push=function(kind,name){
+    if(q&&name.toLowerCase().indexOf(q)<0)return;
+    rows.push({
+      kind:kind,name:name,
+      folder:libFolderOf(kind,name),
+      uses:libUseCount(kind,name)
+    });
+  };
+  Object.keys(doc.library||{}).forEach(function(n){push("symbol",n);});
+  Object.keys(doc.bitmaps||{}).forEach(function(n){push("bitmap",n);});
+
+  rows.sort(function(a,b){
+    if(librarySort==="kind"&&a.kind!==b.kind)return a.kind<b.kind?-1:1;
+    if(librarySort==="use"&&a.uses!==b.uses)return b.uses-a.uses;
+    if(librarySort==="folder"&&a.folder!==b.folder)return a.folder<b.folder?-1:1;
+    return a.name.toLowerCase()<b.name.toLowerCase()?-1:1;
+  });
+
+  /* Grouped by folder, with the top level first. A search flattens the
+     grouping: when you are looking for one thing, which folder it is in is
+     the answer rather than an obstacle. */
+  if(q)return {flat:true,rows:rows,folders:[]};
+  var byFolder={};
+  rows.forEach(function(r){
+    (byFolder[r.folder]||(byFolder[r.folder]=[])).push(r);
+  });
+  var folders=Object.keys(byFolder).sort();
+  return {flat:false,rows:rows,folders:folders,byFolder:byFolder};
+}
+
+/** Every folder path in use, for the move-to dialog. */
+function libraryFolders(){
+  var set={};
+  Object.keys(doc.library||{}).forEach(function(n){
+    var f=libFolderOf("symbol",n);
+    if(f)set[f]=true;
+  });
+  Object.keys(doc.bitmaps||{}).forEach(function(n){
+    var f=libFolderOf("bitmap",n);
+    if(f)set[f]=true;
+  });
+  return Object.keys(set).sort();
+}
+
+function showLibraryFolderDialog(kind,name){
+  var current=libFolderOf(kind,name);
+  var existing=libraryFolders();
+  showDialog({
+    title:"Move to Folder — "+name,
+    message:"A folder is just a path on the item, so renaming or emptying one "+
+            "cannot leave anything orphaned. Leave it blank for the top level.",
+    fields:[
+      {name:"folder",label:"Folder",value:current,
+       placeholder:existing.length?existing[0]:"Hands/Left"},
+      existing.length?{name:"pick",label:"Existing",type:"select",value:"",
+        options:[["",""]].concat(existing.map(function(f){return [f,f];}))}:null
+    ].filter(Boolean),
+    onOk:function(v){
+      pushUndo();
+      setLibFolder(kind,name,v.pick||v.folder);
+      fullRefresh();
+    }
+  });
+}
+
+/**
+ * Symbol linkage — "export for ActionScript".
+ *
+ * A linkage name is what lets a script create an instance of a symbol that is
+ * nowhere on any timeline: a bullet, a particle, a row of a list. Without it
+ * everything that appears has to have been placed by hand first, which rules
+ * out anything generated.
+ *
+ * The name has to DO something or it is just a field, so the exported player
+ * registers linked symbols and `attachMovie(name, instance, depth)` — Flash's
+ * own call, and until now a stub that logged a warning — builds one.
+ */
+function showLinkageDialog(name){
+  var sym=(doc.library||{})[name];
+  if(!sym){showMessage("Linkage","That symbol is no longer in the library.");return;}
+  showDialog({
+    title:"Linkage — "+name,
+    message:"Give the symbol a name a script can use, then call "+
+            "attachMovie(\"name\", \"instance\", depth) to create one at runtime. "+
+            "This is how anything generated gets on screen: a bullet, a "+
+            "particle, a row of a list.",
+    fields:[
+      {name:"exportForAS",label:"Export for ActionScript",type:"checkbox",
+       value:!!sym.exportForAS},
+      {name:"linkageName",label:"Identifier",
+       value:sym.linkageName||name.replace(/[^\w$]/g,"")||"Symbol"}
+    ],
+    footnote:"Unexported symbols are still placed from the Library as usual; "+
+             "linkage only adds the runtime route.",
+    onOk:function(v){
+      pushUndo();
+      sym.exportForAS=!!v.exportForAS;
+      sym.linkageName=String(v.linkageName||"").trim();
+      if(sym.exportForAS&&!sym.linkageName){
+        // An exported symbol with no identifier cannot be reached, which is
+        // the one combination that means nothing.
+        sym.linkageName=name.replace(/[^\w$]/g,"")||"Symbol";
+      }
+      fullRefresh();
+      outputLog(sym.exportForAS
+        ? ("Linkage: attachMovie(\""+sym.linkageName+"\", \"instance\", 1)")
+        : ("Linkage removed from "+name));
+    }
+  });
+}
+
+function showDuplicateSymbolDialog(name){
+  showDialog({
+    title:"Duplicate Symbol",
+    message:"A copy with its own timeline — edit one without changing the other. "+
+            "This is how a variant is made: duplicate, then change the copy.",
+    fields:[{name:"name",label:"Name",value:uniqueSymbolName(name+" copy")}],
+    onOk:function(v){
+      pushUndo();
+      var r=duplicateSymbol(name,v.name);
+      if(r.ok){
+        selectLibItem("symbol",r.name);
+        fullRefresh();
+      }
+    }
+  });
+}
+
+function showSwapSymbolDialog(){
+  var names=Object.keys(doc.library||{});
+  var targets=selection.filter(function(o){return o.type==="symbol";});
+  if(!targets.length){
+    showMessage("Swap Symbol","Select one or more symbol instances on the stage first.");
+    return;
+  }
+  var others=names.filter(function(n){return n!==targets[0].symbolName;});
+  if(!others.length){
+    showMessage("Swap Symbol","There is only one symbol in the library to swap to.");
+    return;
+  }
+  showDialog({
+    title:"Swap Symbol",
+    message:"The instance keeps its position, size and transform — swapping is "+
+            "replacing what is drawn, not where it is.",
+    fields:[{name:"symbol",label:"Swap for",type:"select",value:others[0],
+             options:others.map(function(n){return [n,n];})}],
+    onOk:function(v){
+      var r=swapSymbolOnSelection(v.symbol);
+      if(r.ok)fullRefresh();
+    }
+  });
+}
+
+function showUnusedItemsDialog(){
+  var unused=unusedLibraryItems();
+  if(!unused.length){
+    showMessage("Unused Library Items",
+      "Everything in the library is used somewhere — including items used only "+
+      "inside another symbol, which still count.");
+    return;
+  }
+  var list=unused.map(function(u){return u.kind+": "+u.name;}).join("\n");
+  showDialog({
+    title:"Unused Library Items",
+    message:unused.length+" item"+(unused.length===1?"":"s")+
+            " nothing refers to:\n\n"+list+
+            "\n\nDeleting them makes the document smaller. Nothing on any "+
+            "timeline, in any scene or inside any other symbol uses them.",
+    okLabel:"Delete them",
+    onOk:function(){
+      pushUndo();
+      unused.forEach(function(u){
+        if(u.kind==="symbol")delete doc.library[u.name];
+        else if(u.kind==="bitmap")delete doc.bitmaps[u.name];
+        else if(u.kind==="sound")delete doc.sounds[u.name];
+      });
+      outputLog("Deleted "+unused.length+" unused library item"+
+                (unused.length===1?"":"s")+".");
+      fullRefresh();
+    }
+  });
+}
+
 function updateLib(){
   var lp=document.getElementById("libPanel");
   if(!lp)return;
@@ -8797,42 +9103,112 @@ function updateLib(){
 
   lp.appendChild(libPreviewBox());
 
-  if(keys.length){
-    var st=document.createElement("div");
-    st.className="lib-title lib-subtitle";
-    st.textContent="Symbols";
-    lp.appendChild(st);
-    keys.forEach(function(k){
-      var sym=doc.library[k];
-      lp.appendChild(libRow("symbol",k,{
+  /* Search and sort. A flat unsorted list is unusable at thirty symbols, and
+     thirty is a short cartoon \u2014 the previous panel had no way to find
+     anything, order anything, or see what was unused. */
+  var bar=document.createElement("div");
+  bar.className="lib-bar";
+  var q=document.createElement("input");
+  q.type="text";
+  q.className="lib-search";
+  q.placeholder="Find\u2026";
+  q.value=librarySearch;
+  q.addEventListener("input",function(){
+    librarySearch=q.value;
+    updateLib();
+    /* The panel is rebuilt, so the field is a new element: focus has to be put
+       back or the second keystroke goes nowhere. */
+    var again=document.querySelector(".lib-search");
+    if(again){again.focus();again.setSelectionRange(again.value.length,again.value.length);}
+  });
+  bar.appendChild(q);
+  var sortSel=document.createElement("select");
+  sortSel.className="lib-sort";
+  [["name","Name"],["kind","Kind"],["use","Most used"],["folder","Folder"]]
+    .forEach(function(p){
+      var op=document.createElement("option");
+      op.value=p[0];op.textContent=p[1];
+      if(librarySort===p[0])op.selected=true;
+      sortSel.appendChild(op);
+    });
+  sortSel.title="Sort the library";
+  sortSel.addEventListener("change",function(){
+    librarySort=sortSel.value;updateLib();
+  });
+  bar.appendChild(sortSel);
+  lp.appendChild(bar);
+
+  /* Bitmaps share the Library, because that is what they are: reusable assets
+     referenced by name. The use count is on every row \u2014 "unused" is the one
+     piece of information that decides whether an item can go. */
+  var rowFor=function(r){
+    if(r.kind==="symbol"){
+      var sym=doc.library[r.name];
+      return libRow("symbol",r.name,{
         icon:"\u25A3",
         dim:(sym&&sym.behavior&&sym.behavior!=="movieclip")?sym.behavior:"",
-        title:k+"\nDrag onto the stage to place it. Double-click to open it."
-      }));
+        use:r.uses,
+        title:r.name+"\n"+
+          (r.uses?(r.uses+" instance"+(r.uses===1?"":"s")):"Not used anywhere")+
+          ((sym&&sym.exportForAS&&sym.linkageName)
+            ? ("\nExported for ActionScript as \u201C"+sym.linkageName+"\u201D") : "")+
+          "\nDrag onto the stage to place it. Double-click to open it."
+      });
+    }
+    var a=doc.bitmaps[r.name];
+    return libRow("bitmap",r.name,{
+      icon:"\u25A6",
+      dim:a&&a.width?a.width+"\u00D7"+a.height:"",
+      use:r.uses,
+      title:r.name+(a&&a.width?" \u2014 "+a.width+"\u00D7"+a.height+" px":"")+
+        "\n"+(r.uses?(r.uses+" use"+(r.uses===1?"":"s")):"Not used anywhere")+
+        "\nDrag onto the stage to place it. Double-click to open it."
+    });
+  };
+
+  var listing=libraryRows();
+  if(!listing.rows.length){
+    var none=document.createElement("div");
+    none.className="lib-empty";
+    none.textContent="Nothing matches \u201C"+librarySearch+"\u201D";
+    lp.appendChild(none);
+  }else if(listing.flat){
+    listing.rows.forEach(function(r){lp.appendChild(rowFor(r));});
+  }else{
+    listing.folders.forEach(function(folder){
+      if(folder){
+        var open=libraryOpenFolders[folder]!==false;
+        var head=document.createElement("div");
+        head.className="lib-folder"+(open?" open":"");
+        head.textContent=(open?"\u25BE ":"\u25B8 ")+folder;
+        head.title="Click to collapse or expand";
+        head.addEventListener("click",function(){
+          libraryOpenFolders[folder]=!open;
+          updateLib();
+        });
+        lp.appendChild(head);
+        if(!open)return;
+      }
+      listing.byFolder[folder].forEach(function(r){lp.appendChild(rowFor(r));});
     });
   }
 
-  /* Bitmaps share the Library, because that is what they are: reusable assets
-     referenced by name. */
-  if(bkeys.length){
-    var bt=document.createElement("div");
-    bt.className="lib-title lib-subtitle";
-    bt.textContent="Bitmaps";
-    lp.appendChild(bt);
-    bkeys.forEach(function(k){
-      var a=doc.bitmaps[k];
-      lp.appendChild(libRow("bitmap",k,{
-        icon:"\u25A6",
-        dim:a&&a.width?a.width+"\u00D7"+a.height:"",
-        title:k+(a&&a.width?" \u2014 "+a.width+"\u00D7"+a.height+" px":"")+
-          "\nDrag onto the stage to place it. Double-click to open it."
-      }));
-    });
-  }
+  var acts=document.createElement("div");
+  acts.className="props-row";
+  acts.style.cssText="gap:2px;flex-wrap:wrap";
+  [["Unused\u2026","libUnused"],["Swap\u2026","swapSymbol"]].forEach(function(p){
+    var b=document.createElement("button");
+    b.className="props-btn-action";
+    b.textContent=p[0];
+    b.addEventListener("click",function(){doAction(p[1]);});
+    acts.appendChild(b);
+  });
+  lp.appendChild(acts);
 
   var hint=document.createElement("div");
   hint.className="lib-hint";
-  hint.textContent="Drag an item onto the stage, or select it and press Place.";
+  hint.textContent="Drag an item onto the stage, or select it and press Place. "+
+    "Right-click for folders, duplicate and linkage.";
   lp.appendChild(hint);
 
   paintLibPreview();
@@ -8855,6 +9231,19 @@ function libRow(kind,name,opts){
     var dim=document.createElement("span");
     dim.className="lib-dim";dim.textContent=opts.dim;
     row.appendChild(dim);
+  }
+  /* The use count is its own element rather than part of `dim`: "unused" is
+     the one piece of information that decides whether an item can go, and the
+     dimensions are the one that says what it is. Crowding either out of the
+     other's slot loses one of them. */
+  if(opts.use!=null){
+    var use=document.createElement("span");
+    use.className="lib-use"+(opts.use?"":" unused");
+    use.textContent=opts.use?(opts.use+"×"):"unused";
+    use.title=opts.use
+      ? (opts.use+" use"+(opts.use===1?"":"s")+" in this document")
+      : "Nothing refers to this";
+    row.appendChild(use);
   }
   row.title=opts.title;
 
@@ -9158,7 +9547,11 @@ function showLibMenu(e,kind,name){
   }
   if(kind==="symbol"){
     items.push({label:"Symbol Properties...",onClick:function(){showSymbolPropsDialog(name);}});
+    items.push({label:"Duplicate Symbol...",onClick:function(){showDuplicateSymbolDialog(name);}});
+    items.push({label:"Linkage...",onClick:function(){showLinkageDialog(name);}});
   }
+  items.push({label:"Move to Folder...",onClick:function(){showLibraryFolderDialog(kind,name);}});
+  items.push({label:"Select Unused Items...",onClick:function(){showUnusedItemsDialog();}});
   items.push({type:"sep"});
   items.push({label:"Rename...",onClick:function(){renameLibItem(kind,name);}});
   items.push({label:"Delete",onClick:function(){confirmDeleteLibItem(kind,name);}});
@@ -10207,6 +10600,17 @@ function doActionInner(a){
     break;
   case "traceBitmap":
     showTraceBitmapDialog();
+    break;
+  case "swapSymbol":
+    showSwapSymbolDialog();
+    break;
+  case "libUnused":
+    showUnusedItemsDialog();
+    break;
+  case "duplicateSymbol":
+    var dsSel=libSelected();
+    if(dsSel&&dsSel.kind==="symbol")showDuplicateSymbolDialog(dsSel.name);
+    else showMessage("Duplicate Symbol","Select a symbol in the Library first.");
     break;
   case "swapBitmap":
     showSwapBitmapDialog();
@@ -13684,6 +14088,12 @@ function serializeLibrary(lib){
       /* 9-slice guides, in the symbol's own pixels: distances in from each
          edge, which is how Flash specified them. Null when the symbol scales
          uniformly, which is almost all of them. */
+      /* Folder path, and linkage. A folder is a path on the item rather than
+         a tree beside it, so it cannot get out of step with what it describes
+         and needs no migration for an older document. */
+      folder:sym.folder||"",
+      exportForAS:!!sym.exportForAS,
+      linkageName:sym.linkageName||"",
       scale9:sym.scale9?{
         left:sym.scale9.left||0,right:sym.scale9.right||0,
         top:sym.scale9.top||0,bottom:sym.scale9.bottom||0
@@ -13726,7 +14136,9 @@ function serializeBitmaps(bitmaps){
     var a=bitmaps[name];
     if(!a||!a.data)return;
     out[name]={name:name,mediaType:a.mediaType||"image/png",data:a.data,
-               width:a.width||0,height:a.height||0};
+               width:a.width||0,height:a.height||0,
+               // Bitmaps live in the same Library and go in the same folders.
+               folder:typeof a.folder==="string"?a.folder:""};
   });
   return out;
 }
@@ -13886,6 +14298,9 @@ function reviveLibrary(lib){
       totalFrames:sd.totalFrames||60,
       behavior:sd.behavior||"movieclip",
       mouthChart:sd.mouthChart||null,
+      folder:typeof sd.folder==="string"?sd.folder:"",
+      exportForAS:!!sd.exportForAS,
+      linkageName:typeof sd.linkageName==="string"?sd.linkageName:"",
       scale9:sd.scale9?{
         left:Number(sd.scale9.left)||0,right:Number(sd.scale9.right)||0,
         top:Number(sd.scale9.top)||0,bottom:Number(sd.scale9.bottom)||0
@@ -15002,6 +15417,11 @@ function exportRuntime(data, canvas, options) {
   for (var f = 1; f <= maxF; f++) {
     (function (fr) {
       root.timeline.addFrameScript(fr, function () {
+        /* Clips a script attached are not in the document, so the rebuild
+           cannot put them back — they are lifted out, the display list is
+           rebuilt from the timeline, and they go back on top. Without this
+           every attachMovie() vanished on the next frame. */
+        var attached = this.children.filter(function (c) { return c.__attached; });
         this.removeAllChildren();
         for (var gi = groups.length - 1; gi >= 0; gi--) {
           var group = groups[gi];
@@ -15014,6 +15434,7 @@ function exportRuntime(data, canvas, options) {
           }
           buildLayerRun(host, group.layers, fr, gi);
         }
+        for (var ai = 0; ai < attached.length; ai++) this.addChild(attached[ai]);
         runFrameScripts(fr);
         refreshButtons();
         if (track) track.update(fr, false);
@@ -15187,6 +15608,51 @@ function exportRuntime(data, canvas, options) {
 
   if (options.autoplay !== false) stage.start();
   stage.soundtrack = track;
+
+  /* ---- symbol linkage -------------------------------------------- *
+   * Symbols marked "export for ActionScript" are registered under their
+   * identifier so a script can create one that is nowhere on any timeline —
+   * a bullet, a particle, a row of a list. Without this, everything that
+   * appears has to have been placed by hand first, which rules out anything
+   * generated, and `attachMovie` was a stub that logged a warning.
+   * ---------------------------------------------------------------- */
+  var linkage = {};
+  Object.keys(data.library || {}).forEach(function (sn) {
+    var sym = data.library[sn];
+    if (sym && sym.exportForAS && sym.linkageName) linkage[sym.linkageName] = sn;
+  });
+  stage.linkage = linkage;
+  /**
+   * Flash's attachMovie: build an instance of a linked symbol and add it.
+   *
+   * Returns the new clip, or null when the identifier is not registered —
+   * null rather than throwing, because a movie that spawns a missing symbol
+   * should carry on without it rather than stop dead.
+   */
+  stage.attachSymbol = function (linkName, instanceName, depth, parent) {
+    var symbolName = linkage[linkName];
+    var sym = symbolName && data.library[symbolName];
+    if (!sym) {
+      Flashy.Output.write('attachMovie: no symbol exported as "' + linkName + '"');
+      return null;
+    }
+    var host = parent || root;
+    var clip = buildMovieClip(sym, { width: 0, height: 0 }, 0);
+    if (instanceName) {
+      clip.name = instanceName;
+      host[instanceName] = clip;
+    }
+    if (depth != null && host.addChildAt) {
+      host.addChildAt(clip, Math.max(0, Math.min(depth | 0, host.numChildren)));
+    } else {
+      host.addChild(clip);
+    }
+    /* Marked so the root's display-list rebuild leaves it alone: the rebuild
+       clears every child each tick, and a clip a script created is not in the
+       document for it to put back. */
+    clip.__attached = true;
+    return clip;
+  };
   return stage;
 }
 
@@ -17276,6 +17742,22 @@ function init(){
       return addBehavior(spec,event,values||{});
     },
     behaviorsOn: behaviorsOn,
+    /* Library management. */
+    libUseCount: libUseCount,
+    unusedLibraryItems: unusedLibraryItems,
+    duplicateSymbol: duplicateSymbol,
+    swapSymbolOnSelection: swapSymbolOnSelection,
+    libraryRows: libraryRows,
+    libraryFolders: libraryFolders,
+    setLibFolder: setLibFolder,
+    librarySearch: function(q){
+      if(q!=null){librarySearch=String(q);updateLib();}
+      return librarySearch;
+    },
+    librarySort: function(k){
+      if(k){librarySort=k;updateLib();}
+      return librarySort;
+    },
     /* Wave-2 shape editing. The specs drive these directly as well as through
        the pointer, because several are pure geometry and testing the geometry
        separately from the gesture is the only way to pin down what the

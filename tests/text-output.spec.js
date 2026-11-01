@@ -258,7 +258,7 @@ test("a script can write to a dynamic field in the exported player", async ({ pa
       }
       return null;
     };
-    const stage = window.__fyStage || null;
+    const stage = window.__stage || null;
     const node = stage ? walk(stage.root, "score") : null;
     return {
       found: !!node,

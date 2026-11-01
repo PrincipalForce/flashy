@@ -88,11 +88,11 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Movie Clip / Graphic / Button behaviours | ✅ | `symbolBehaviorOf`, `BUTTON_STATES`. |
 | Button Up/Over/Down/Hit authoring | ◐ | The frames are interpreted, but there is no state-labelled editing view and no interactive preview. |
 | Convert to Symbol, Convert Frames to Symbol | ✅ | — |
-| Duplicate Symbol | ⬜ | Missing. |
-| Swap Symbol (instance → another symbol) | ⬜ | Swap Bitmap exists; the symbol equivalent does not. |
-| Library folders, sort, search/filter | ⬜ | Flat list. |
-| Unused items / Select Unused | ⬜ | Missing. |
-| Symbol linkage (export for ActionScript / class name) | ⬜ | Missing. |
+| Duplicate Symbol | ✅ | A deep copy through the serializer — anything shallower leaves the duplicate sharing structure with the original, which is the bug group children and filter stacks both had. |
+| Swap Symbol (instance → another symbol) | ✅ | The instance keeps its position, size and transform: swapping is replacing what is drawn, not where it is. |
+| Library folders, sort, search/filter | ✅ | A folder is a path on the item rather than a tree beside it, so it cannot get out of step with what it describes and needs no migration. Sort by name, kind, use or folder; a search flattens the grouping. |
+| Unused items / Select Unused | ✅ | Every row shows its use count; the dialog lists what nothing refers to and deletes it in one undo step. Items used only INSIDE another symbol count as used. |
+| Symbol linkage (export for ActionScript / class name) | ✅ | And it does something: the exported player registers linked symbols and `attachMovie(name, instance, depth)` — until now a stub that logged a warning — builds one. A clip a script attached survives the root's display-list rebuild. |
 | Shared libraries, runtime sharing | ⬜ | Missing (low value). |
 | 9-slice scaling | ✅ | `Flashy.Slice9` — the cell maths once, shared by the stage, the SVG export and the `NineSlice` container the exported player uses. Guides are set in Symbol Properties. |
 | Edit in Place / Edit in New Window | ◐ | `enterSymbol`/`exitSymbol` is Edit in Place; no new-window edit. |
