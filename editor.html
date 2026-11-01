@@ -109,7 +109,22 @@
            object's handlers. Flash showed one Actions panel for both, and
            which one you were looking at was never obvious — so it says. -->
       <div id="actions-target" class="actions-target">Frame script</div>
-      <textarea id="frame-script" placeholder="// Frame script (JavaScript)"></textarea>
+      <!-- A code editor, not a bare textarea: line numbers, highlighting and
+           an error line. The textarea keeps its id and stays the thing that
+           holds the text — editor-app.js reads it and workspace.js moves this
+           whole node between docks, so neither may be rebuilt. The highlight
+           layer sits UNDER a transparent-text textarea, which is what keeps
+           the caret, selection, undo and IME behaviour native. -->
+      <div class="code-hints" id="code-hints"></div>
+      <div class="code-wrap" id="code-wrap">
+        <div class="code-gutter" id="code-gutter"></div>
+        <div class="code-scroll">
+          <pre class="code-highlight" id="code-highlight" aria-hidden="true"></pre>
+          <textarea id="frame-script" class="code-input" spellcheck="false"
+                    placeholder="// Frame script (JavaScript)"></textarea>
+        </div>
+      </div>
+      <div class="code-status" id="code-status"></div>
     </div>
   </div>
   <div class="panel-content" data-panel="ai">

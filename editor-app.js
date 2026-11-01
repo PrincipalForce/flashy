@@ -15859,9 +15859,228 @@ function inlinePreviewWindow(){
  * Flash, where you had to Test Movie. The editor stays a document editor; the
  * export and Test Movie runtimes are where scripts run (see exportRuntime).
  * ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * The Actions panel's code editor
+ *
+ * It was a bare <textarea>: no line numbers, no highlighting, nothing to say
+ * where a syntax error was. A frame script is code, and writing code in a box
+ * that cannot tell a string from a keyword is why people stop.
+ *
+ * The textarea is still the thing that HOLDS the text — the caret, selection,
+ * undo, autoscroll and IME behaviour are the browser's own, which no
+ * re-implemented editor gets right. A highlighted <pre> sits underneath it and
+ * the textarea's own text is transparent. The two must share font, size,
+ * padding and line-height exactly, which is why the CSS sets them together.
+ * ------------------------------------------------------------------ */
+
+/* The frame-script vocabulary. Listed here rather than discovered, so the
+   chips, the highlighting and the hint text cannot drift apart. */
+var SCRIPT_API=["stop","play","gotoAndPlay","gotoAndStop","trace","root","stage","Flashy"];
+var SCRIPT_KEYWORDS=("var let const function return if else for while do break continue "+
+  "new this typeof instanceof switch case default true false null undefined "+
+  "try catch finally throw delete in of void").split(" ");
+
+var SCRIPT_KEYWORD_SET={},SCRIPT_API_SET={};
+SCRIPT_KEYWORDS.forEach(function(k){SCRIPT_KEYWORD_SET[k]=true;});
+SCRIPT_API.forEach(function(k){SCRIPT_API_SET[k]=true;});
+
+function escapeHtmlText(t){
+  return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+/**
+ * Highlight a script as HTML.
+ *
+ * One pass, with comments and strings matched FIRST: they have to win over
+ * everything inside them, or a `//` in a URL turns the rest of the line into a
+ * comment and an apostrophe in a comment opens a string that never closes.
+ * An unterminated string or comment still matches to the end of the line (or
+ * the text), because a half-typed one is the normal state of a line being
+ * written and it must not make the rest of the script flicker.
+ */
+/*
+ * Written as a regex LITERAL, not assembled from strings.
+ *
+ * The first version joined an array of source fragments, and two of them began
+ * with "|" so that the join inserted a second one — which created an empty
+ * alternative. An empty alternative matches at every position, so nothing else
+ * was ever tokenised and only strings came out highlighted. A literal cannot
+ * develop that fault, and the escaping is readable rather than doubled.
+ *
+ * Group order matters: comments and strings are matched FIRST because they
+ * have to win over everything inside them. Otherwise a "//" in a URL comments
+ * out the rest of the line, and an apostrophe in a comment opens a string that
+ * never closes.
+ *
+ *   1 comment      block (terminated or not) and line
+ *   2 string       all three quotes; each may run unterminated to end of line,
+ *                  because a half-typed string is the normal state of a line
+ *                  being written and must not make the script flicker
+ *   3 number
+ *   4 word         keyword / API / plain identifier, decided below
+ *   5 punctuation
+ */
+var SCRIPT_TOKEN_RE =
+  /(\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\n]*)|("(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?|`(?:\\.|[^`\\])*`?)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)|([{}()[\];,.=+\-*/<>!&|?:%])/g;
+
+function highlightScript(src){
+  var out="";
+  var re=SCRIPT_TOKEN_RE;
+  re.lastIndex=0;
+  var last=0,m;
+  while((m=re.exec(src))){
+    if(m.index>last)out+=escapeHtmlText(src.slice(last,m.index));
+    var text=escapeHtmlText(m[0]);
+    if(m[1])out+='<span class="tok-com">'+text+"</span>";
+    else if(m[2])out+='<span class="tok-str">'+text+"</span>";
+    else if(m[3])out+='<span class="tok-num">'+text+"</span>";
+    else if(m[4]){
+      if(SCRIPT_KEYWORD_SET[m[0]])out+='<span class="tok-key">'+text+"</span>";
+      else if(SCRIPT_API_SET[m[0]])out+='<span class="tok-api">'+text+"</span>";
+      else out+=text;
+    }
+    else if(m[5])out+='<span class="tok-pun">'+text+"</span>";
+    else out+=text;
+    last=re.lastIndex;
+    // A zero-length match would spin here; nothing in the pattern can produce
+    // one, but a future edit to it could.
+    if(re.lastIndex===m.index)re.lastIndex++;
+  }
+  if(last<src.length)out+=escapeHtmlText(src.slice(last));
+  return out;
+}
+
+/**
+ * Check a script and report where it is broken.
+ *
+ * `new Function` is the same compiler the exported player uses, so a script
+ * that passes here is a script that will run there. The line number comes out
+ * of the error's stack, where V8 reports it as `<anonymous>:LINE:COL` — one
+ * line is added for the function wrapper, so it is subtracted back off.
+ */
+function checkScript(src,dialect){
+  if(!src||!src.trim())return {ok:true};
+  /* ActionScript is compiled by flashy-as2.js, not by the JavaScript parser —
+     reporting `_root` as a syntax error would be both wrong and alarming. */
+  if(dialect==="as2")return {ok:true,skipped:true};
+  try{
+    new Function("stop","play","gotoAndPlay","gotoAndStop","stage","root","Flashy","trace",src);
+    return {ok:true};
+  }catch(e){
+    var line=null;
+    var m=/<anonymous>:(\d+)/.exec(String(e.stack||""));
+    if(m){
+      line=Math.max(1,parseInt(m[1],10)-1);
+      /* `new Function` wraps the body, so an error at the very end — an
+         unclosed brace, say — is reported on the line AFTER the source. Clamp
+         it: an error past the end belongs to the last line, and pointing the
+         gutter at a line that does not exist marks nothing. */
+      line=Math.min(line,src.split("\n").length);
+    }
+    return {ok:false,message:(e&&e.message)||String(e),line:line};
+  }
+}
+
+/** Repaint the gutter, the highlight layer and the status line. */
+function refreshCodeEditor(){
+  var ta=document.getElementById("frame-script");
+  var hl=document.getElementById("code-highlight");
+  var gut=document.getElementById("code-gutter");
+  var st=document.getElementById("code-status");
+  if(!ta)return;
+  var src=ta.value||"";
+  var target=actionsTarget();
+  var dialect=(target.obj||doc.scriptDialect==="as2")?"as2":"js";
+  var res=checkScript(src,dialect);
+
+  if(hl){
+    /* The trailing newline keeps the <pre> as tall as the textarea: without
+       it the two scroll out of step at the bottom by one line. */
+    hl.innerHTML=highlightScript(src)+"\n";
+  }
+  if(gut){
+    var lines=src.split("\n");
+    var rows=[];
+    for(var i=1;i<=lines.length;i++){
+      rows.push(res.line===i?('<span class="err">'+i+"</span>"):String(i));
+    }
+    gut.innerHTML=rows.join("\n");
+  }
+  if(st){
+    if(res.ok){
+      st.className="code-status";
+      st.textContent=src.trim()
+        ? (res.skipped
+            ? "ActionScript — compiled by the AS2 runtime, not checked here."
+            : src.split("\n").length+" lines, no syntax errors.")
+        : "";
+    }else{
+      st.className="code-status error";
+      st.textContent=(res.line?("Line "+res.line+": "):"Syntax error: ")+res.message;
+    }
+  }
+  syncCodeScroll();
+}
+
+/** Keep the highlight layer and the gutter aligned with the textarea. */
+function syncCodeScroll(){
+  var ta=document.getElementById("frame-script");
+  var hl=document.getElementById("code-highlight");
+  var gut=document.getElementById("code-gutter");
+  if(!ta)return;
+  if(hl){hl.scrollTop=ta.scrollTop;hl.scrollLeft=ta.scrollLeft;}
+  if(gut)gut.scrollTop=ta.scrollTop;
+}
+
+/** The API chips — Flash called this Script Assist. */
+function buildCodeHints(){
+  var host=document.getElementById("code-hints");
+  if(!host||host.childNodes.length)return;
+  var ta=document.getElementById("frame-script");
+  [["stop()","stop();"],["play()","play();"],
+   ["gotoAndPlay()","gotoAndPlay(1);"],["gotoAndStop()","gotoAndStop(1);"],
+   ["trace()","trace(\"\");"],["root","root"],["stage","stage"]].forEach(function(p){
+    var b=document.createElement("button");
+    b.type="button";
+    b.className="code-chip";
+    b.textContent=p[0];
+    b.title="Insert "+p[1];
+    b.addEventListener("click",function(){
+      if(!ta||ta.disabled)return;
+      /* At the caret, not appended: a chip that always writes to the end is
+         no quicker than typing. */
+      var at=ta.selectionStart==null?ta.value.length:ta.selectionStart;
+      var end=ta.selectionEnd==null?at:ta.selectionEnd;
+      ta.value=ta.value.slice(0,at)+p[1]+ta.value.slice(end);
+      ta.selectionStart=ta.selectionEnd=at+p[1].length;
+      ta.focus();
+      /* A textarea's own `change` only fires on blur, and the point of a chip
+         is that it takes effect now. */
+      ta.dispatchEvent(new Event("change"));
+      refreshCodeEditor();
+    });
+    host.appendChild(b);
+  });
+}
+
 function initActionsPanel(){
   var ta=document.getElementById("frame-script");
   if(!ta)return;
+  buildCodeHints();
+  refreshCodeEditor();
+  ta.addEventListener("input",refreshCodeEditor);
+  ta.addEventListener("scroll",syncCodeScroll);
+  /* Tab indents instead of leaving the field. In a code editor the field IS
+     the thing you are in, and losing your place to the next focusable element
+     mid-script is the most irritating thing a plain textarea does. */
+  ta.addEventListener("keydown",function(e){
+    if(e.key!=="Tab"||e.ctrlKey||e.metaKey||e.altKey)return;
+    e.preventDefault();
+    var at=ta.selectionStart,end=ta.selectionEnd;
+    ta.value=ta.value.slice(0,at)+"  "+ta.value.slice(end);
+    ta.selectionStart=ta.selectionEnd=at+2;
+    refreshCodeEditor();
+  });
   ta.addEventListener("change",function(){
     var target=actionsTarget();
     if(!target.kf&&!target.obj){ta.value="";return;}
@@ -15920,6 +16139,7 @@ function updateActionsPanel(){
         "  —  onClipEvent / on handlers";
       label.className="actions-target object";
     }
+    refreshCodeEditor();
     return;
   }
   ta.disabled=!target.kf;
@@ -15931,6 +16151,9 @@ function updateActionsPanel(){
       "”, frame "+curFrame;
     label.className="actions-target";
   }
+  var wrap=document.getElementById("code-wrap");
+  if(wrap)wrap.className="code-wrap"+(ta.disabled?" disabled":"");
+  refreshCodeEditor();
 }
 
 /**
@@ -16287,6 +16510,11 @@ function init(){
     outputLayers: outputLayers,
     /** The Output panel's sink, so a spec can see what a script traced. */
     outputLog: outputLog,
+    /* The Actions panel's code editor. Exposed so the specs can drive the
+       highlighter and the syntax check without screen-scraping spans. */
+    highlightScript: highlightScript,
+    checkScript: checkScript,
+    refreshCodeEditor: refreshCodeEditor,
     /* Wave-2 shape editing. The specs drive these directly as well as through
        the pointer, because several are pure geometry and testing the geometry
        separately from the gesture is the only way to pin down what the

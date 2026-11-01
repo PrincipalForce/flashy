@@ -339,6 +339,7 @@ body.dock-dragging .dock-zone { outline: 1px dashed #5a5a5a; outline-offset: -2p
   overflow: hidden; text-overflow: ellipsis; }
 .actions-target.object { color: #FC8; }
 .panel-body.actions-body > textarea { flex: 1; min-height: 0; }
+.panel-body.actions-body > .code-wrap { flex: 1; min-height: 0; }
 .panel-body.ai-body > #aiPanel { flex: 1; min-height: 0; }
 
 /* ─── Properties rows ─── */
@@ -704,14 +705,84 @@ input[type="range"].props-input {
    The frame-script editor. It fills its dock body rather than being a fixed
    60px box, so docking it to the right column gives you a full-height code
    pane — which is the point of the workspace being rearrangeable. */
-#frame-script, #actions-panel textarea {
-  width: 100%; min-height: 60px;
-  background: var(--chrome-xdk); color: #88CC88;
-  border: none; font: 11px Consolas, Monaco, monospace;
-  padding: 6px; resize: none;
+/* ── The code editor ──
+   A transparent-text textarea over a highlighted <pre>. The textarea is still
+   the thing that holds the text, so the caret, selection, undo, autoscroll and
+   IME behaviour are all the browser's own — which no re-implemented editor
+   gets right. The two layers MUST share font, size, padding and line-height
+   exactly, or the highlighting drifts away from the characters. */
+.code-wrap {
+  flex: 1; min-height: 60px; display: flex;
+  background: var(--chrome-xdk); overflow: hidden;
 }
-#frame-script:focus, #actions-panel textarea:focus { outline: 1px solid var(--accent); }
-#frame-script:disabled { color: #666; font-style: italic; }
+.code-gutter {
+  flex: 0 0 auto; min-width: 26px;
+  padding: 6px 4px 6px 0;
+  text-align: right;
+  background: #191919; border-right: 1px solid #2E2E2E;
+  color: #5A5A5A; font: 11px/15px Consolas, Monaco, monospace;
+  user-select: none; overflow: hidden;
+  white-space: pre;
+}
+.code-gutter .err { color: #FF6B6B; font-weight: bold; }
+.code-scroll { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+#frame-script, #actions-panel textarea, .code-highlight {
+  font: 11px/15px Consolas, Monaco, monospace;
+  padding: 6px;
+  border: 0;
+  tab-size: 2;
+  white-space: pre;
+  word-wrap: normal;
+}
+.code-highlight {
+  position: absolute; inset: 0;
+  margin: 0; overflow: auto;
+  color: #88CC88; background: var(--chrome-xdk);
+  pointer-events: none;
+}
+#frame-script, #actions-panel textarea {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  background: transparent;
+  /* Transparent text, visible caret: the <pre> underneath draws the glyphs. */
+  color: transparent;
+  caret-color: #DDD;
+  resize: none; overflow: auto;
+}
+#frame-script::selection { background: rgba(68,136,204,0.45); }
+#frame-script:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
+#frame-script:disabled { color: transparent; }
+#frame-script:disabled + .code-highlight, .code-wrap.disabled .code-highlight { color: #666; font-style: italic; }
+
+/* Syntax colours, in the MX2004 palette the rest of the chrome uses. */
+.code-highlight .tok-com { color: #6A9955; font-style: italic; }
+.code-highlight .tok-str { color: #CE9178; }
+.code-highlight .tok-num { color: #B5CEA8; }
+.code-highlight .tok-key { color: #569CD6; }
+.code-highlight .tok-api { color: #DCDCAA; }
+.code-highlight .tok-pun { color: #9A9A9A; }
+
+/* Clickable API chips: Flash called this Script Assist, and the point of it
+   is that you do not have to remember the vocabulary. */
+.code-hints {
+  display: flex; flex-wrap: wrap; gap: 2px;
+  padding: 3px 5px; background: #333;
+  border-bottom: 1px solid #444; flex: 0 0 auto;
+}
+.code-chip {
+  background: linear-gradient(to bottom, #4A4A4A, #3E3E3E);
+  border: 1px solid #585858; border-bottom-color: #2E2E2E;
+  color: #CFCFCF; cursor: pointer;
+  font: 10px Consolas, monospace; padding: 1px 5px; border-radius: 2px;
+}
+.code-chip:hover { background: linear-gradient(to bottom, #5A5A5A, #4A4A4A); color: #fff; }
+
+.code-status {
+  flex: 0 0 auto; padding: 2px 6px; min-height: 16px;
+  background: #2A2A2A; border-top: 1px solid #3A3A3A;
+  font: 10px Tahoma, sans-serif; color: var(--text-dim);
+}
+.code-status.error { color: #FF8080; background: #3A2020; }
 
 /* ─── Context Menu ─── */
 .ctx-menu {

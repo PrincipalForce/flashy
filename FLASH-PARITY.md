@@ -149,13 +149,13 @@ name — an entire class of Flash content is unreachable.
 | --- | --- | --- |
 | Frame scripts (run on frame entry in export) | ✅ | `exportRuntime`. |
 | Object handlers (`on` / `onClipEvent`) | ✅ | `flashy-as2.js`, `clipScript`. |
-| Actions panel | ◐ | A bare `<textarea>`: no syntax highlighting, no line numbers, no code hints, no Script Assist, no error marking. |
+| Actions panel | ✅ | Line numbers, syntax highlighting, a live syntax check through the same `new Function` the player compiles with, the broken line marked in the gutter, API chips (Flash's Script Assist), and Tab that indents instead of leaving the field. The textarea still holds the text, so the caret, selection, undo and IME behaviour stay the browser's own. |
 | `trace()` + **Output panel** | ✅ | `Flashy.Output` is the sink; the panel lists it, clears and copies. `trace()` is now in scope for a JavaScript frame script too — it was in scope for an imported movie's ActionScript and not for a script written here, which was backwards. Test Movie runs in its own window and forwards its lines back. |
 | Movie Explorer | ⬜ | No structural view — no way to find every instance of a symbol, every script, every text block. |
 | Debugger (breakpoints, watch, variable inspector) | ⬜ | Missing. |
 | Behaviors panel (scriptless interactivity) | ⬜ | Missing. |
 | Components (Button, CheckBox, ComboBox, …) | ⬜ | Missing. |
-| Code snippets library | ⬜ | Missing. |
+| Code snippets library | ◐ | The API chips insert working calls at the caret. A saved, user-editable snippet library is still missing. |
 | Button event wiring without code | ⬜ | Missing. |
 
 ## 8. Panels
@@ -165,7 +165,7 @@ name — an entire class of Flash content is unreachable.
 | Properties / Property inspector | ✅ | — |
 | Color Mixer | ✅ | — |
 | Library | ✅ | — |
-| Actions | ◐ | §7. |
+| Actions | ✅ | §7. |
 | **Align** | ✅ | — |
 | **Info** (x/y/w/h readout, cursor position) | ✅ | Selection box, pointer position, whether the pointer is on the stage. Colour under cursor is still missing. |
 | **Transform** (numeric scale/rotate/skew) | ✅ | Applies to a whole selection, which Properties does not. Copy-and-apply is still missing. |
