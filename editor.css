@@ -1274,3 +1274,13 @@ input[type="range"].props-input {
 /* A planted joint reads as locked at a glance, matching the red handle the
    stage overlay draws for it. */
 .ch-locked { color: #FF7A7A; }
+
+/* ── Filter stack, in the Property inspector ──
+   Each filter is a header row (enable, name, reorder, remove) followed by its
+   own sliders, so a stack of three stays readable in a 240px column. */
+.props-row.filter-head {
+  gap: 3px; align-items: center;
+  background: #333; border-top: 1px solid #4A4A4A;
+  padding: 3px 6px; margin-top: 4px;
+}
+.props-row.filter-head .props-label { font-weight: bold; color: #DDD; }

@@ -94,7 +94,7 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Unused items / Select Unused | ⬜ | Missing. |
 | Symbol linkage (export for ActionScript / class name) | ⬜ | Missing. |
 | Shared libraries, runtime sharing | ⬜ | Missing (low value). |
-| 9-slice scaling | ⬜ | A scaled button symbol distorts its corners. |
+| 9-slice scaling | ✅ | `Flashy.Slice9` — the cell maths once, shared by the stage, the SVG export and the `NineSlice` container the exported player uses. Guides are set in Symbol Properties. |
 | Edit in Place / Edit in New Window | ◐ | `enterSymbol`/`exitSymbol` is Edit in Place; no new-window edit. |
 | Registration / transformation point editing | ⬜ | Missing. |
 
@@ -103,20 +103,26 @@ Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
 | Feature | Flashy | Gap |
 | --- | --- | --- |
 | Blend modes | ✅ | `blendMode`. |
-| Colour effect ▸ Brightness | ⬜ | Missing. |
-| Colour effect ▸ Tint | ⬜ | Missing. |
+| Colour effect ▸ Brightness | ✅ | A multiply AND an offset, as Flash defined it — CSS `brightness()` is a plain multiply and leaves black black. |
+| Colour effect ▸ Tint | ✅ | Interpolates the artwork towards a colour by an amount. |
 | Colour effect ▸ Alpha | ✅ | `alpha`. |
-| Colour effect ▸ Advanced (per-channel multiply + offset) | ⬜ | Missing — the real Flash colour transform. |
-| Filters ▸ Drop Shadow | ⬜ | Missing. |
-| Filters ▸ Blur | ⬜ | Missing. |
-| Filters ▸ Glow | ⬜ | Missing. |
-| Filters ▸ Bevel | ⬜ | Missing. |
-| Filters ▸ Gradient Glow / Gradient Bevel | ⬜ | Missing. |
-| Filters ▸ Adjust Color | ⬜ | Missing. |
-| Filter presets, per-filter enable/disable | ⬜ | Missing. |
+| Colour effect ▸ Advanced (per-channel multiply + offset) | ✅ | All three modes reduce to one channel transform, run as a real pixel pass. |
+| Filters ▸ Drop Shadow | ✅ | — |
+| Filters ▸ Blur | ✅ | Isotropic on canvas (the `filter` property has no anisotropic blur, so the two radii are averaged); exact in the SVG export, which can express both. |
+| Filters ▸ Glow | ✅ | `strength` is how many times the glow is laid over itself, as in Flash. |
+| Filters ▸ Bevel | ✅ | A highlight and a shadow on opposite sides. |
+| Filters ▸ Gradient Glow / Gradient Bevel | ⬜ | Still missing — the only two of the seven not covered. |
+| Filters ▸ Adjust Color | ✅ | Brightness, contrast, saturation, hue. |
+| Filter presets, per-filter enable/disable | ◐ | Enable, disable, reorder and remove per filter. Saved presets are still missing. |
 
-Flash 8's filter stack is what made late-era Flash look like late-era Flash.
-Nothing in Flashy produces a soft shadow or a glow.
+**Two mechanisms, deliberately.** Filters are geometric — a blur has to see the
+shape's neighbourhood — so they go through the canvas `filter` property applied
+to a whole composite, never per drawing operation (a stroked shape would
+otherwise get two drop shadows, one printed over the fill). Colour transforms
+are per-pixel and exact, because CSS filter functions cannot express a
+per-channel multiply plus offset at all. `Flashy.Filters` is the one
+implementation of both, shared by the authoring stage, the raster exports and
+the exported player.
 
 ## 6. Text
 
@@ -253,10 +259,26 @@ know, and when the two collide the migrating hands win.
 
 Covered by `tests/shape-tools.spec.js` (30 specs).
 
-### Wave 3 — the Flash look
-14. **Filters** — drop shadow, blur, glow, bevel, gradient glow/bevel, adjust colour; per-filter enable; honoured in every export path.
-15. **Colour effect** — brightness, tint, advanced per-channel transform.
-16. **9-slice scaling**.
+### ✅ Wave 3 — the Flash look (shipped)
+14. ✅ **Filters** — drop shadow, blur, glow, bevel, adjust colour; per-filter
+    enable, reorder and remove; honoured on the stage, in the raster exports,
+    in the SVG export and in the exported player. Gradient glow and gradient
+    bevel remain.
+15. ✅ **Colour effect** — brightness, tint, advanced per-channel transform.
+16. ✅ **9-slice scaling** — `Flashy.Slice9`, with the guides in a new Symbol
+    Properties dialog.
+
+Filters and the colour effect tween between keyframes, which is how a glow
+pulses and a tint fades. Only when the two keyframes agree about the shape of
+the stack, because there is no sensible interpolation between "blur" and "drop
+shadow" and guessing one gives a frame that is neither.
+
+Found on the way: `filters` is an array of OBJECTS, which is the same trap
+group children fell into in Wave 1 — `clone()` copies arrays with a shallow
+slice, so two copies of an object would have shared their filter specs.
+
+Covered by `tests/filters.spec.js` (17 specs) and `tests/nine-slice.spec.js`
+(12 specs).
 
 ### Wave 4 — timeline depth
 17. **Layer folders**, **guide layers**, layer tint/outline view, layer height.

@@ -14,9 +14,9 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;}
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});/* `children` (a group's contents) holds OBJECTS, so the shallow slice above would hand the copy the originals and every edit to one group would show up in the other. Deep-clone it, the way KeyFrame.clone deep-clones its own object list. */
-if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});c.id=uid();return c;};
+if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});/* `filters` is an array of OBJECTS, so the shallow slice above would hand the copy the same filter specs and editing one object's blur would change the other's. Same bug class as `children`. */if(Array.isArray(s.filters))c.filters=s.filters.map(function(f){return f?JSON.parse(JSON.stringify(f)):f;});if(s.colorEffect)c.colorEffect=JSON.parse(JSON.stringify(s.colorEffect));c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
 function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.sound=null;}
@@ -3469,7 +3469,132 @@ function applyMaskClip(cx,objects){
   cx.clip();
 }
 
+/**
+ * Does this object have anything a filter pass would change?
+ *
+ * Checked before the wrapper does any work, because every object in a document
+ * that uses no filters must cost nothing — the pass allocates a stage-sized
+ * scratch buffer.
+ */
+function objHasEffects(o){
+  if(o.colorEffect&&o.colorEffect.mode&&o.colorEffect.mode!=="none")return true;
+  if(!o.filters||!o.filters.length)return false;
+  for(var i=0;i<o.filters.length;i++){
+    if(o.filters[i]&&o.filters[i].enabled!==false)return true;
+  }
+  return false;
+}
+
+/** An object's Colour Effect as a channel transform, or null. */
+function colorTransformOf(o){
+  if(!window.Flashy||!Flashy.Filters)return null;
+  return Flashy.Filters.colorEffect(o.colorEffect);
+}
+
+/**
+ * paintObj — the one canvas painter, now with the filter stack wrapped round
+ * it.
+ *
+ * The wrapper is separate from the painting because a filter has to see the
+ * object's whole composite: a blur needs the shape's neighbourhood, and a
+ * drop-shadow applied per drawing operation gives a stroked shape two shadows
+ * with one of them printed over the fill. Flashy.Filters is the same module
+ * the engine uses, so a glow on the stage is the glow in the export.
+ */
 function paintObj(cx,o,opts){
+  if(objHasEffects(o)&&window.Flashy&&Flashy.Filters){
+    Flashy.Filters.render(cx,o.filters,colorTransformOf(o),function(c){
+      paintObj9(c,o,opts);
+    });
+    return;
+  }
+  paintObj9(cx,o,opts);
+}
+
+/**
+ * The 9-slice fork.
+ *
+ * A symbol whose library entry carries guides stretches by cell rather than
+ * uniformly, which means its scale has to be applied INSIDE the instance
+ * instead of by the usual outer transform — so it cannot go through
+ * paintObjRaw at all.
+ */
+function paintObj9(cx,o,opts){
+  if(o.type==="symbol"&&window.Flashy&&Flashy.Slice9){
+    var sym=doc.library[o.symbolName];
+    var grid=sym&&sym.scale9;
+    var sx=o.scaleX||1,sy=o.scaleY||1;
+    if(Flashy.Slice9.active(grid)&&(Math.abs(sx)!==1||Math.abs(sy)!==1)){
+      paintSymbolSliced(cx,o,sym,opts);
+      return;
+    }
+  }
+  paintObjRaw(cx,o,opts);
+}
+
+/** A symbol's content at its own frame, at natural size, origin at (0,0). */
+function paintSymbolGroups(cx,symGroups,depth){
+  // Through the rig plan, so a character rig nested inside a symbol composes
+  // its hierarchy here exactly as addPlanned() does in the export. Painting
+  // the flat list would drop every ancestor transform.
+  for(var gp=0;gp<symGroups.length;gp++){
+    var grp=symGroups[gp];
+    if(grp.mask){
+      cx.save();
+      applyMaskClip(cx,grp.mask);
+    }
+    var gplan=rigDrawPlan(grp.objects);
+    for(var gq=0;gq<gplan.length;gq++){
+      paintPlanned(cx,gplan[gq],{chrome:false,depth:depth+1});
+    }
+    if(grp.mask)cx.restore();
+  }
+}
+
+/** A 9-sliced symbol instance: nine clipped cells instead of one scale. */
+function paintSymbolSliced(cx,o,sym,opts){
+  opts=opts||{};
+  var depth=opts.depth||0;
+  if(depth>=SYMBOL_MAX_DEPTH)return;
+  var natW=Math.abs(o.width)||1,natH=Math.abs(o.height)||1;
+  var sx=o.scaleX||1,sy=o.scaleY||1;
+  var dstW=natW*Math.abs(sx),dstH=natH*Math.abs(sy);
+  var alpha=o.alpha!=null?o.alpha:1;
+  var symGroups=symbolFrameGroups(sym,
+    symbolDisplayFrame(o,sym,o._parentFrame||1,o._startFrame||1));
+
+  cx.save();
+  cx.translate((o.x||0)+natW/2,(o.y||0)+natH/2);
+  if(o.rotation)cx.rotate(o.rotation*Math.PI/180);
+  if(o.skewX||o.skewY){
+    cx.transform(1,Math.tan((o.skewY||0)*Math.PI/180),
+                   Math.tan((o.skewX||0)*Math.PI/180),1,0,0);
+  }
+  // A negative scale still mirrors; only its MAGNITUDE goes into the cells.
+  cx.scale(sx<0?-1:1,sy<0?-1:1);
+  if(o.blendMode&&o.blendMode!=="source-over")cx.globalCompositeOperation=o.blendMode;
+  cx.globalAlpha*=alpha;
+  // The instance grows from its centre, as every other transform here does.
+  cx.translate(-dstW/2,-dstH/2);
+  Flashy.Slice9.render(cx,sym.scale9,natW,natH,dstW,dstH,function(c){
+    paintSymbolGroups(c,symGroups,depth);
+  });
+  cx.restore();
+
+  if(opts.chrome){
+    // The same label the ordinary symbol branch draws, so a 9-sliced instance
+    // is still identifiable on the stage.
+    cx.save();
+    cx.globalAlpha=alpha*0.4;
+    cx.fillStyle="#88f";cx.font="9px Arial";
+    cx.textBaseline="top";cx.textAlign="center";
+    cx.fillText(o.symbolName||"Symbol",
+                (o.x||0)+dstW/2,(o.y||0)+dstH+2);
+    cx.restore();
+  }
+}
+
+function paintObjRaw(cx,o,opts){
   opts=opts||{};
   var chrome=!!opts.chrome;
   var depth=opts.depth||0;
@@ -3651,21 +3776,7 @@ function paintObj(cx,o,opts){
         // instance's top-left — shift there from the centre.
         cx.save();
         cx.translate(-hw,-hh);
-        // Through the rig plan, so a character rig nested inside a symbol
-        // composes its hierarchy here exactly as addPlanned() does in the
-        // export. Painting the flat list would drop every ancestor transform.
-        for(var gp=0;gp<symGroups.length;gp++){
-          var grp=symGroups[gp];
-          if(grp.mask){
-            cx.save();
-            applyMaskClip(cx,grp.mask);
-          }
-          var gplan=rigDrawPlan(grp.objects);
-          for(var gq2=0;gq2<gplan.length;gq2++){
-            paintPlanned(cx,gplan[gq2],{chrome:false,depth:depth+1});
-          }
-          if(grp.mask)cx.restore();
-        }
+        paintSymbolGroups(cx,symGroups,depth);
         cx.restore();
       }
       if(!symObjs.length&&chrome){
@@ -3768,7 +3879,113 @@ function interpObj(a,b,t,easing){
   // motion tween between two differently skewed keyframes snapped at the end.
   tmp.skewX=lerp("skewX",0);tmp.skewY=lerp("skewY",0);
   tmp.alpha=lerp("alpha",1);
+  /* Filters and the Colour Effect tween too, which is how a glow pulses and
+     a tint fades. Only when the two keyframes agree about the SHAPE of the
+     stack — same filters, in the same order — because there is no sensible
+     interpolation between "blur" and "drop shadow", and guessing one would
+     produce a frame that is neither. */
+  tmp.filters=lerpFilters(a.filters,b.filters,e);
+  tmp.colorEffect=lerpColorEffect(a.colorEffect,b.colorEffect,e);
   return tmp;
+}
+
+/** Blend two numbers, or keep the first when the second is not a number. */
+function lerpNum(a,b,t,dflt){
+  var av=typeof a==="number"?a:dflt,bv=typeof b==="number"?b:dflt;
+  return av+(bv-av)*t;
+}
+
+/** Blend two 0xRRGGBB colours channel by channel. */
+function lerpColor(a,b,t){
+  var an=typeof a==="string"?parseInt(String(a).replace("#",""),16):(a|0);
+  var bn=typeof b==="string"?parseInt(String(b).replace("#",""),16):(b|0);
+  var mix=function(sh){
+    var av=(an>>sh)&0xff,bv=(bn>>sh)&0xff;
+    return Math.max(0,Math.min(255,Math.round(av+(bv-av)*t)))<<sh;
+  };
+  return mix(16)|mix(8)|mix(0);
+}
+
+/* Numeric fields of each filter type that a tween interpolates, and the colour
+   fields it blends. Listed rather than discovered, so a field added later has
+   to be considered rather than silently tweened to nonsense. */
+var FILTER_NUMS={
+  blur:["blurX","blurY","quality"],
+  dropShadow:["distance","angle","blur","alpha","strength"],
+  glow:["blur","alpha","strength"],
+  bevel:["distance","angle","blur","strength"],
+  adjustColor:["brightness","contrast","saturation","hue"]
+};
+var FILTER_COLORS={
+  dropShadow:["color"],
+  glow:["color"],
+  bevel:["highlightColor","shadowColor"]
+};
+
+function lerpFilters(a,b,t){
+  if(!a||!a.length)return b&&b.length?JSON.parse(JSON.stringify(b)):null;
+  if(!b||!b.length)return JSON.parse(JSON.stringify(a));
+  // Different stacks: hold the start frame's, rather than invent a hybrid.
+  if(a.length!==b.length)return JSON.parse(JSON.stringify(a));
+  var out=[];
+  for(var i=0;i<a.length;i++){
+    if(!a[i]||!b[i]||a[i].type!==b[i].type){
+      out.push(JSON.parse(JSON.stringify(a[i]||b[i])));
+      continue;
+    }
+    var f=JSON.parse(JSON.stringify(a[i]));
+    (FILTER_NUMS[f.type]||[]).forEach(function(k){
+      if(a[i][k]!=null||b[i][k]!=null)f[k]=lerpNum(a[i][k],b[i][k],t,0);
+    });
+    (FILTER_COLORS[f.type]||[]).forEach(function(k){
+      if(a[i][k]!=null&&b[i][k]!=null)f[k]=lerpColor(a[i][k],b[i][k],t);
+    });
+    out.push(f);
+  }
+  return out;
+}
+
+function lerpColorEffect(a,b,t){
+  var am=a&&a.mode?a.mode:"none",bm=b&&b.mode?b.mode:"none";
+  if(am==="none"&&bm==="none")return null;
+  /* Fading INTO or OUT OF an effect is the common case and has an obvious
+     answer: tween the effect's strength from (or to) nothing. Tweening
+     between two DIFFERENT modes does not, so the start frame's wins. */
+  if(am==="none")return rampColorEffect(b,t);
+  if(bm==="none")return rampColorEffect(a,1-t);
+  if(am!==bm)return JSON.parse(JSON.stringify(a));
+  var out=JSON.parse(JSON.stringify(a));
+  if(am==="brightness")out.brightness=lerpNum(a.brightness,b.brightness,t,0);
+  else if(am==="tint"){
+    out.amount=lerpNum(a.amount,b.amount,t,1);
+    if(a.color!=null&&b.color!=null)out.color=lerpColor(a.color,b.color,t);
+  }else if(am==="advanced"){
+    ["rMul","gMul","bMul","aMul"].forEach(function(k){
+      out[k]=lerpNum(a[k],b[k],t,1);
+    });
+    ["rOff","gOff","bOff","aOff"].forEach(function(k){
+      out[k]=lerpNum(a[k],b[k],t,0);
+    });
+  }
+  return out;
+}
+
+/** One colour effect at `t` of its full strength, 0 being no effect at all. */
+function rampColorEffect(e,t){
+  if(!e||!e.mode||e.mode==="none")return null;
+  var out=JSON.parse(JSON.stringify(e));
+  if(e.mode==="brightness")out.brightness=(e.brightness||0)*t;
+  else if(e.mode==="tint")out.amount=(e.amount==null?1:e.amount)*t;
+  else if(e.mode==="advanced"){
+    ["rMul","gMul","bMul","aMul"].forEach(function(k){
+      var v=e[k]==null?1:e[k];
+      out[k]=1+(v-1)*t;
+    });
+    ["rOff","gOff","bOff","aOff"].forEach(function(k){
+      out[k]=(e[k]||0)*t;
+    });
+  }
+  return out;
 }
 
 /**
@@ -5409,6 +5626,21 @@ function updateProps(){
       row("Behavior",behavior,function(v){
         pushUndo();o.symbolBehavior=v;render();updateProps();
       },{type:"select",width:"90px",options:[["movieclip","Movie Clip"],["graphic","Graphic"],["button","Button"]]});
+      /* 9-slice lives on the LIBRARY entry, not the instance — it is a
+         property of the artwork, and every instance of a button wants the
+         same corners. The inspector says so and offers the way in rather than
+         repeating the four fields per instance. */
+      if(sym){
+        var sliced9=window.Flashy&&Flashy.Slice9&&Flashy.Slice9.active(sym.scale9);
+        row("9-slice",sliced9?"on":"off",function(){},{type:"readonly"});
+        actionRow([{label:"Symbol Properties…",onClick:function(){
+          showSymbolPropsDialog(o.symbolName);
+        }}]);
+        if(sliced9){
+          note("Corners keep their size when this instance is scaled; only the "+
+               "middles stretch. The guides are shared by every instance.");
+        }
+      }
 
       if(behavior==="graphic"){
         /* A Graphic is driven by the parent timeline, which is exactly why
@@ -5585,6 +5817,12 @@ function updateProps(){
       tr.appendChild(ta);pp.appendChild(tr);
     }
 
+    /* Colour Effect and Filters, at the bottom of the inspector where Flash 8
+       put them — below everything that describes what the object IS, because
+       these describe how it is PRESENTED. They apply to any object type,
+       including a group or a symbol instance. */
+    buildColorEffectSection(pp,o,sect,row,sliderRow,colorRow,note);
+    buildFiltersSection(pp,o,sect,note);
 
   // ═══════════════════════════════════════════
   //  NOTHING SELECTED — show KF, Layer, Doc
@@ -5754,6 +5992,263 @@ function updateProps(){
     sliderRow("Alpha",selection[0].alpha,0,1,0.01,function(v){pushUndo();selection.forEach(function(o){o.alpha=v;});render();},{percent:true,unit:"%"});
     colorRow("Fill",selection[0].fillColor,function(nc){pushUndo();selection.forEach(function(o){o.fillColor=nc;});render();});
     colorRow("Stroke",selection[0].strokeColor,function(nc){pushUndo();selection.forEach(function(o){o.strokeColor=nc;});render();});
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Colour Effect and Filters, in the Property inspector
+ *
+ * Flash 8's two presentation controls. They apply to any object — a shape, a
+ * group, a symbol instance — and they are what made late-era Flash content
+ * look the way it did.
+ *
+ * Both sections are rebuilt from the object on every refresh, like the rest of
+ * the inspector, and every control takes its own undo snapshot, so dragging a
+ * blur radius is one undoable change rather than forty.
+ * ------------------------------------------------------------------ */
+
+/** The filters a user can add, with the defaults Flash shipped. */
+var FILTER_TYPES=[
+  {type:"dropShadow",label:"Drop Shadow",
+   make:function(){return {type:"dropShadow",enabled:true,distance:5,angle:45,
+     blur:5,color:0x000000,alpha:0.5,strength:1};}},
+  {type:"blur",label:"Blur",
+   make:function(){return {type:"blur",enabled:true,blurX:5,blurY:5};}},
+  {type:"glow",label:"Glow",
+   make:function(){return {type:"glow",enabled:true,blur:6,color:0xFF3366,
+     alpha:1,strength:2};}},
+  {type:"bevel",label:"Bevel",
+   make:function(){return {type:"bevel",enabled:true,distance:4,angle:45,blur:4,
+     highlightColor:0xFFFFFF,shadowColor:0x000000,strength:1};}},
+  {type:"adjustColor",label:"Adjust Color",
+   make:function(){return {type:"adjustColor",enabled:true,brightness:0,
+     contrast:0,saturation:0,hue:0};}}
+];
+
+/** The editable fields of one filter: [key, label, min, max, step, kind]. */
+var FILTER_FIELDS={
+  dropShadow:[["distance","Distance",-100,100,1,"num"],["angle","Angle",0,360,1,"num"],
+              ["blur","Blur",0,100,1,"num"],["alpha","Alpha",0,1,0.01,"pct"],
+              ["color","Color",0,0,0,"color"]],
+  blur:[["blurX","Blur X",0,100,1,"num"],["blurY","Blur Y",0,100,1,"num"]],
+  glow:[["blur","Blur",0,100,1,"num"],["strength","Strength",1,4,1,"num"],
+        ["alpha","Alpha",0,1,0.01,"pct"],["color","Color",0,0,0,"color"]],
+  bevel:[["distance","Distance",-100,100,1,"num"],["angle","Angle",0,360,1,"num"],
+         ["blur","Blur",0,100,1,"num"],
+         ["highlightColor","Highlight",0,0,0,"color"],
+         ["shadowColor","Shadow",0,0,0,"color"]],
+  adjustColor:[["brightness","Brightness",-100,100,1,"num"],
+               ["contrast","Contrast",-100,100,1,"num"],
+               ["saturation","Saturation",-100,100,1,"num"],
+               ["hue","Hue",-180,180,1,"num"]]
+};
+
+function hexFromFilterColor(v,dflt){
+  if(typeof v==="string")return v;
+  var n=v==null?dflt:(v|0);
+  return "#"+("000000"+((n|0)&0xffffff).toString(16)).slice(-6).toUpperCase();
+}
+function filterColorFromHex(h){
+  return parseInt(String(h).replace("#",""),16)|0;
+}
+
+function buildFiltersSection(pp,o,sect,note){
+  sect("Filters");
+  var filters=o.filters||[];
+
+  var addRow=document.createElement("div");
+  addRow.className="props-row";
+  addRow.style.cssText="flex-wrap:wrap;gap:2px";
+  var addSel=document.createElement("select");
+  addSel.className="props-select";
+  addSel.style.width="110px";
+  var ph=document.createElement("option");
+  ph.value="";ph.textContent="Add filter…";
+  addSel.appendChild(ph);
+  FILTER_TYPES.forEach(function(ft){
+    var op=document.createElement("option");
+    op.value=ft.type;op.textContent=ft.label;
+    addSel.appendChild(op);
+  });
+  addSel.addEventListener("change",function(){
+    var ft=FILTER_TYPES.filter(function(f){return f.type===addSel.value;})[0];
+    addSel.value="";
+    if(!ft)return;
+    pushUndo();
+    if(!o.filters)o.filters=[];
+    o.filters.push(ft.make());
+    fullRefresh();
+  });
+  addRow.appendChild(addSel);
+  pp.appendChild(addRow);
+
+  if(!filters.length){
+    note("No filters. Drop Shadow, Blur, Glow, Bevel and Adjust Color apply to "+
+         "shapes, groups and symbol instances alike, and tween between keyframes.");
+    return;
+  }
+
+  filters.forEach(function(f,idx){
+    var head=document.createElement("div");
+    head.className="props-row filter-head";
+
+    var en=document.createElement("input");
+    en.type="checkbox";
+    en.checked=f.enabled!==false;
+    en.title="Turn this filter off without losing its settings";
+    en.style.cssText="accent-color:#4488CC";
+    en.addEventListener("change",function(){
+      pushUndo();f.enabled=en.checked;fullRefresh();
+    });
+    head.appendChild(en);
+
+    var name=document.createElement("span");
+    name.className="props-label";
+    name.style.cssText="flex:1;text-align:left";
+    var label=FILTER_TYPES.filter(function(t){return t.type===f.type;})[0];
+    name.textContent=label?label.label:f.type;
+    head.appendChild(name);
+
+    // Order matters for a filter stack — a glow on a blurred shape is not a
+    // blurred glow — so it has to be reorderable.
+    [["▲","Move up",-1],["▼","Move down",1]].forEach(function(b){
+      var btn=document.createElement("button");
+      btn.className="props-btn-action";
+      btn.style.cssText="min-width:18px;padding:0 4px";
+      btn.textContent=b[0];btn.title=b[1];
+      btn.addEventListener("click",function(){
+        var to=idx+b[2];
+        if(to<0||to>=o.filters.length)return;
+        pushUndo();
+        var tmp=o.filters[idx];o.filters[idx]=o.filters[to];o.filters[to]=tmp;
+        fullRefresh();
+      });
+      head.appendChild(btn);
+    });
+    var del=document.createElement("button");
+    del.className="props-btn-action";
+    del.style.cssText="min-width:18px;padding:0 4px";
+    del.textContent="✕";del.title="Remove this filter";
+    del.addEventListener("click",function(){
+      pushUndo();
+      o.filters.splice(idx,1);
+      if(!o.filters.length)o.filters=null;
+      fullRefresh();
+    });
+    head.appendChild(del);
+    pp.appendChild(head);
+
+    (FILTER_FIELDS[f.type]||[]).forEach(function(fd){
+      var key=fd[0];
+      if(fd[5]==="color"){
+        var cr=document.createElement("div");
+        cr.className="props-color-row";
+        var cl=document.createElement("span");
+        cl.className="props-label";cl.textContent=fd[1]+":";
+        cr.appendChild(cl);
+        var sw=document.createElement("span");
+        sw.className="props-swatch";
+        var hex=hexFromFilterColor(f[key],0);
+        sw.style.backgroundColor=hex;
+        sw.addEventListener("click",function(e){
+          e.stopPropagation();
+          showCP(hex,function(nc){
+            pushUndo();f[key]=filterColorFromHex(nc);fullRefresh();
+          });
+        });
+        cr.appendChild(sw);
+        pp.appendChild(cr);
+        return;
+      }
+      var r=document.createElement("div");
+      r.className="props-slider-row";
+      var lb=document.createElement("label");
+      lb.className="props-label";lb.textContent=fd[1]+":";
+      r.appendChild(lb);
+      var sl=document.createElement("input");
+      sl.type="range";sl.className="props-slider";
+      sl.min=fd[2];sl.max=fd[3];sl.step=fd[4];
+      sl.value=f[key]==null?0:f[key];
+      r.appendChild(sl);
+      var ni=document.createElement("input");
+      ni.className="props-input";ni.type="text";
+      var show=function(v){
+        return fd[5]==="pct"?Math.round(v*100):Math.round(v*100)/100;
+      };
+      ni.value=show(f[key]==null?0:f[key]);
+      r.appendChild(ni);
+      /* One undo snapshot per DRAG, not per pointer move: a slider fires on
+         every pixel, and forty undo steps for one blur adjustment makes undo
+         useless. The snapshot is taken when the drag starts. */
+      var pre=null;
+      sl.addEventListener("pointerdown",function(){pre=snap();});
+      sl.addEventListener("input",function(){
+        f[key]=parseFloat(sl.value);
+        ni.value=show(f[key]);
+        render();
+      });
+      sl.addEventListener("change",function(){
+        if(pre){pushUndoSnap(pre);pre=null;}
+        else touchDoc();
+        updateProps();
+      });
+      ni.addEventListener("change",function(){
+        var v=parseFloat(ni.value);
+        if(isNaN(v))return;
+        if(fd[5]==="pct")v=v/100;
+        pushUndo();
+        f[key]=Math.max(fd[2],Math.min(fd[3],v));
+        fullRefresh();
+      });
+      pp.appendChild(r);
+    });
+  });
+}
+
+function buildColorEffectSection(pp,o,sect,row,sliderRow,colorRow,note){
+  sect("Color Effect");
+  var ce=o.colorEffect||{mode:"none"};
+  row("Style",ce.mode||"none",function(v){
+    pushUndo();
+    if(v==="none"){o.colorEffect=null;}
+    else{
+      // Each mode gets a sensible starting point, so picking Tint shows a
+      // tint rather than an invisible no-op at zero strength.
+      o.colorEffect=v==="brightness"?{mode:"brightness",brightness:0.2}
+        :v==="tint"?{mode:"tint",color:0xFF3366,amount:0.5}
+        :{mode:"advanced",rMul:1,gMul:1,bMul:1,aMul:1,rOff:0,gOff:0,bOff:0,aOff:0};
+    }
+    fullRefresh();
+  },{type:"select",width:"100px",options:[
+    ["none","None"],["brightness","Brightness"],["tint","Tint"],["advanced","Advanced"]
+  ]});
+
+  if(!o.colorEffect)return;
+  var e=o.colorEffect;
+  if(e.mode==="brightness"){
+    sliderRow("Brightness",e.brightness||0,-1,1,0.01,function(v){
+      e.brightness=v;touchDoc();render();
+    },{percent:true,unit:"%"});
+    note("Positive fades towards white, negative towards black — the same "+
+         "multiply-and-offset Flash used, not a plain multiply.");
+  }else if(e.mode==="tint"){
+    colorRow("Tint",hexFromFilterColor(e.color,0xFF3366),function(nc){
+      pushUndo();e.color=filterColorFromHex(nc);fullRefresh();
+    });
+    sliderRow("Amount",e.amount==null?1:e.amount,0,1,0.01,function(v){
+      e.amount=v;touchDoc();render();
+    },{percent:true,unit:"%"});
+  }else if(e.mode==="advanced"){
+    note("Per channel: the artwork's value times the multiplier, plus the offset. "+
+         "This is Flash's real colour transform.");
+    [["r","Red"],["g","Green"],["b","Blue"],["a","Alpha"]].forEach(function(ch){
+      sliderRow(ch[1]+" ×",e[ch[0]+"Mul"]==null?1:e[ch[0]+"Mul"],-1,2,0.01,function(v){
+        e[ch[0]+"Mul"]=v;touchDoc();render();
+      });
+      sliderRow(ch[1]+" +",e[ch[0]+"Off"]||0,-255,255,1,function(v){
+        e[ch[0]+"Off"]=v;touchDoc();render();
+      });
+    });
   }
 }
 
@@ -6511,10 +7006,68 @@ function showLibMenu(e,kind,name){
   if(kind==="bitmap"){
     items.push({label:"Trace Bitmap...",onClick:function(){traceLibBitmap(name);}});
   }
+  if(kind==="symbol"){
+    items.push({label:"Symbol Properties...",onClick:function(){showSymbolPropsDialog(name);}});
+  }
   items.push({type:"sep"});
   items.push({label:"Rename...",onClick:function(){renameLibItem(kind,name);}});
   items.push({label:"Delete",onClick:function(){confirmDeleteLibItem(kind,name);}});
   showMenuAt(e.clientX,e.clientY,items);
+}
+
+/**
+ * Symbol Properties — behaviour and 9-slice guides.
+ *
+ * The guides are the reason this dialog exists. Without them, a button symbol
+ * widened to fit a longer label has its rounded corners smeared; with them,
+ * only the middles stretch. Flash drew the guides as dashed lines over the
+ * symbol's own editing stage; here they are four numbers, which is the same
+ * information and much less machinery.
+ */
+function showSymbolPropsDialog(name){
+  var sym=doc.library[name];
+  if(!sym){showMessage("Symbol Properties","That symbol is no longer in the library.");return;}
+  var box=symbolContentBox(sym);
+  // symbolContentBox reports {w,h}, not {width,height} — reading the wrong
+  // pair gave a 1x1 symbol, and a 1x1 symbol's default guides round to zero,
+  // which is a grid that does nothing.
+  var natW=Math.max(1,Math.round(box.w||1)),natH=Math.max(1,Math.round(box.h||1));
+  var g=sym.scale9||{left:0,right:0,top:0,bottom:0};
+  showDialog({
+    title:"Symbol Properties — "+name,
+    message:"Content is "+natW+" × "+natH+" px. 9-slice guides are distances in "+
+            "from each edge; leave them at 0 to scale uniformly.",
+    fields:[
+      {name:"behavior",label:"Behavior",type:"select",value:sym.behavior||"movieclip",
+       options:[["movieclip","Movie Clip"],["graphic","Graphic"],["button","Button"]]},
+      {name:"slice",label:"9-slice scaling",type:"checkbox",
+       value:!!(window.Flashy&&Flashy.Slice9&&Flashy.Slice9.active(sym.scale9))},
+      {name:"left",label:"Guide left (px)",type:"number",value:g.left||0,min:0,max:natW},
+      {name:"right",label:"Guide right (px)",type:"number",value:g.right||0,min:0,max:natW},
+      {name:"top",label:"Guide top (px)",type:"number",value:g.top||0,min:0,max:natH},
+      {name:"bottom",label:"Guide bottom (px)",type:"number",value:g.bottom||0,min:0,max:natH}
+    ],
+    footnote:"Guides wider than the symbol are scaled down together rather than "+
+             "overlapping, so a badly set guide degrades instead of breaking.",
+    onOk:function(v){
+      pushUndo();
+      sym.behavior=v.behavior;
+      if(v.slice){
+        var l=Math.max(0,parseFloat(v.left)||0),r=Math.max(0,parseFloat(v.right)||0);
+        var t=Math.max(0,parseFloat(v.top)||0),b=Math.max(0,parseFloat(v.bottom)||0);
+        // All four at zero with the box ticked would be a grid that does
+        // nothing; a sensible default beats a silent no-op.
+        if(!l&&!r&&!t&&!b){
+          l=r=Math.max(1,Math.round(natW/3));
+          t=b=Math.max(1,Math.round(natH/3));
+        }
+        sym.scale9={left:l,right:r,top:t,bottom:b};
+      }else{
+        sym.scale9=null;
+      }
+      fullRefresh();
+    }
+  });
 }
 
 function renameLibItem(kind,name){
@@ -10765,6 +11318,10 @@ function plainObj(o){
   // A group's children are objects, not numbers: they go down the same
   // serializer so a nested group survives a save/open round trip.
   if(Array.isArray(o.children))r.children=o.children.map(plainObj);
+  // Filters and the colour effect are plain data, but nested — a shallow copy
+  // would share them between the document and its serialized form.
+  if(Array.isArray(o.filters))r.filters=JSON.parse(JSON.stringify(o.filters));
+  if(o.colorEffect)r.colorEffect=JSON.parse(JSON.stringify(o.colorEffect));
   return r;
 }
 function serializeLayers(layers){
@@ -10798,7 +11355,14 @@ function serializeLibrary(lib){
       totalFrames:sym.totalFrames||60,
       behavior:sym.behavior||"movieclip",
       // Set once per character and reused for every line they speak.
-      mouthChart:sym.mouthChart||null
+      mouthChart:sym.mouthChart||null,
+      /* 9-slice guides, in the symbol's own pixels: distances in from each
+         edge, which is how Flash specified them. Null when the symbol scales
+         uniformly, which is almost all of them. */
+      scale9:sym.scale9?{
+        left:sym.scale9.left||0,right:sym.scale9.right||0,
+        top:sym.scale9.top||0,bottom:sym.scale9.bottom||0
+      }:null
     };
   });
   return out;
@@ -10902,6 +11466,8 @@ function reviveObject(od){
   // all; when they did not go through here, a reopened group's children had no
   // prototype and `clone()` threw on the next undo.
   if(Array.isArray(od.children))o.children=od.children.map(reviveObject);
+  if(Array.isArray(od.filters))o.filters=JSON.parse(JSON.stringify(od.filters));
+  if(od.colorEffect)o.colorEffect=JSON.parse(JSON.stringify(od.colorEffect));
   normalizeObjPoints(o);
   return o;
 }
@@ -10941,7 +11507,11 @@ function reviveLibrary(lib){
       layers:sd.layers?reviveLayers(sd.layers):null,
       totalFrames:sd.totalFrames||60,
       behavior:sd.behavior||"movieclip",
-      mouthChart:sd.mouthChart||null
+      mouthChart:sd.mouthChart||null,
+      scale9:sd.scale9?{
+        left:Number(sd.scale9.left)||0,right:Number(sd.scale9.right)||0,
+        top:Number(sd.scale9.top)||0,bottom:Number(sd.scale9.bottom)||0
+      }:null
     };
   });
   return out;
@@ -11497,6 +12067,10 @@ function exportRuntime(data, canvas, options) {
        later. A tween is the timeline driving the object on purpose, so it
        always wins. */
     var sticky = false;
+    /* Whether this instance stretches by 9-slice cells. Declared out here
+       because the transform block at the bottom has to know, and it is a long
+       way from where the symbol branch works it out. */
+    var sliced = false;
 
     if (o.type === "symbol") {
       var sym = data.library && data.library[o.symbolName];
@@ -11514,6 +12088,12 @@ function exportRuntime(data, canvas, options) {
         if (node.__inner) { node.__inner.x = -hw; node.__inner.y = -hh; }
       }
       if (!node) node = new Flashy.MovieClip();
+      /* 9-slice: the guides live on the library entry, and the instance's
+         scale has to be applied cell by cell INSIDE the node rather than by
+         the outer transform — a parent's scale is already in the context by
+         the time render() runs and would stretch every cell alike. */
+      sliced = Flashy.Slice9 && Flashy.Slice9.active(sym && sym.scale9) &&
+               (Math.abs(o.scaleX || 1) !== 1 || Math.abs(o.scaleY || 1) !== 1);
       if (!hit && sym && depth < SYM_MAX_DEPTH) {
         // Symbol space has its origin at the instance's top-left corner.
         var inner;
@@ -11531,8 +12111,22 @@ function exportRuntime(data, canvas, options) {
           addSymbolFrame(inner, sym, gf, depth + 1, 1, (key || "g" + (++clipSeq)) + ":f" + gf);
         }
         inner.x = -hw; inner.y = -hh;
-        node.__inner = inner;
-        node.addChild(inner);
+        if (sliced) {
+          // A NineSlice wrapper between the instance and its contents, sized
+          // to where the scale WOULD have put it.
+          var ns = new Flashy.NineSlice(sym.scale9, Math.abs(o.width) || 1, Math.abs(o.height) || 1);
+          ns.targetWidth = (Math.abs(o.width) || 1) * Math.abs(o.scaleX || 1);
+          ns.targetHeight = (Math.abs(o.height) || 1) * Math.abs(o.scaleY || 1);
+          ns.x = -ns.targetWidth / 2;
+          ns.y = -ns.targetHeight / 2;
+          inner.x = 0; inner.y = 0;
+          ns.addChild(inner);
+          node.__inner = ns;
+          node.addChild(ns);
+        } else {
+          node.__inner = inner;
+          node.addChild(inner);
+        }
       }
     } else if (o.type === "group") {
       /* A group: a transform plus children, in group space. Built like a
@@ -11668,11 +12262,25 @@ function exportRuntime(data, canvas, options) {
       // The engine takes skew in radians, in the same rotate-skew-scale order.
       node.skewX = (o.skewX || 0) * Math.PI / 180;
       node.skewY = (o.skewY || 0) * Math.PI / 180;
-      node.scaleX = o.scaleX || 1;
-      node.scaleY = o.scaleY || 1;
+      if (sliced) {
+        // The magnitude is already inside the NineSlice; only the mirror is
+        // left, or the stretch would be applied twice.
+        node.scaleX = (o.scaleX || 1) < 0 ? -1 : 1;
+        node.scaleY = (o.scaleY || 1) < 0 ? -1 : 1;
+      } else {
+        node.scaleX = o.scaleX || 1;
+        node.scaleY = o.scaleY || 1;
+      }
     }
     node.alpha = o.alpha != null ? o.alpha : 1;
     if (o.blendMode && o.blendMode !== "source-over") node.blendMode = o.blendMode;
+    /* Filters and the Colour Effect, handed to the engine's own
+       Flashy.Filters — the same module the authoring stage paints through, so
+       an exported glow is the glow that was on screen. Assigned every rebuild
+       rather than only when present, so clearing a filter in the document
+       clears it on a cached node too. */
+    node.filters = (o.filters && o.filters.length) ? o.filters : null;
+    node.colorTransform = Flashy.Filters ? Flashy.Filters.colorEffect(o.colorEffect) : null;
     if (o.instanceName) node.name = o.instanceName;
     /* Object handlers — `onClipEvent(load) { … }` and `on(release) { … }`,
        which is where Flash kept a clip's own behaviour and where an import
@@ -12286,7 +12894,187 @@ function _svgGradient(o) {
   return { defs: '<defs>' + body + '</defs>', ref: 'url(#' + id + ')' };
 }
 
+/* ------------------------------------------------------------------ *
+ * Filters in the SVG export
+ *
+ * SVG can express the whole stack exactly — more exactly than the canvas path
+ * can, in fact: `feGaussianBlur` takes separate x and y deviations, so an
+ * anisotropic blur that the canvas `filter` property has to average survives
+ * here intact.
+ *
+ * Order matches the canvas path: the colour transform runs first (it is a
+ * per-pixel recolour of the artwork), then the geometric filters, so a glow
+ * takes its colour from the recoloured shape and not the original.
+ * ------------------------------------------------------------------ */
+var _svgFilterSeq = 0;
+function _svgFilterFor(o) {
+  if (!objHasEffects(o)) return null;
+  var id = "fy-fx-" + (++_svgFilterSeq);
+  var body = "";
+  var src = "SourceGraphic";
+  var hexOf = function (c, dflt) {
+    var n = c == null ? dflt : c;
+    if (typeof n === "string") return n;
+    return "#" + ("000000" + ((n | 0) & 0xffffff).toString(16)).slice(-6);
+  };
+
+  var ct = colorTransformOf(o);
+  if (ct && window.Flashy && Flashy.Filters.hasColor(ct)) {
+    // A per-channel multiply + offset is exactly feComponentTransfer's linear
+    // function, with the multiply as the slope and the offset as the
+    // intercept. SVG's intercept is 0..1, so a 0..255 offset is scaled.
+    var fn = function (tag, mul, off) {
+      return '<' + tag + ' type="linear" slope="' + mul +
+             '" intercept="' + (off / 255) + '"/>';
+    };
+    body += '<feComponentTransfer in="' + src + '" result="fyct">' +
+            fn("feFuncR", ct.rMul, ct.rOff) +
+            fn("feFuncG", ct.gMul, ct.gOff) +
+            fn("feFuncB", ct.bMul, ct.bOff) +
+            fn("feFuncA", ct.aMul, ct.aOff) +
+            '</feComponentTransfer>';
+    src = "fyct";
+  }
+
+  var step = 0;
+  (o.filters || []).forEach(function (f) {
+    if (!f || f.enabled === false) return;
+    var out = "fyf" + (++step);
+    if (f.type === "blur") {
+      body += '<feGaussianBlur in="' + src + '" stdDeviation="' +
+              (Math.abs(f.blurX == null ? 4 : f.blurX) / 2) + ' ' +
+              (Math.abs(f.blurY == null ? 4 : f.blurY) / 2) +
+              '" result="' + out + '"/>';
+      src = out;
+    } else if (f.type === "dropShadow" || f.type === "glow" || f.type === "bevel") {
+      var d = f.type === "glow" ? 0 : (f.distance == null ? 4 : f.distance);
+      var ang = ((f.angle == null ? 45 : f.angle) * Math.PI) / 180;
+      var bl = Math.abs((f.blur == null ? (f.type === "glow" ? 6 : 4) : f.blur)) / 2;
+      var col = f.type === "glow" ? hexOf(f.color, 0xff0000)
+              : f.type === "bevel" ? hexOf(f.shadowColor, 0x000000)
+              : hexOf(f.color, 0x000000);
+      var al = f.alpha == null ? (f.type === "glow" ? 1 : 0.6) : f.alpha;
+      var reps = f.type === "glow"
+        ? Math.max(1, Math.min(4, Math.round(f.strength == null ? 2 : f.strength))) : 1;
+      for (var r = 0; r < reps; r++) {
+        var o2 = out + "_" + r;
+        body += '<feDropShadow in="' + src + '" dx="' + (Math.cos(ang) * d) +
+                '" dy="' + (Math.sin(ang) * d) + '" stdDeviation="' + bl +
+                '" flood-color="' + xmlAttr(col) + '" flood-opacity="' + al +
+                '" result="' + o2 + '"/>';
+        src = o2;
+      }
+      if (f.type === "bevel") {
+        // The highlight, on the opposite side — the second of the two offset
+        // shadows Flash's bevel came down to.
+        var hi = out + "_hi";
+        body += '<feDropShadow in="' + src + '" dx="' + (-Math.cos(ang) * d) +
+                '" dy="' + (-Math.sin(ang) * d) + '" stdDeviation="' + bl +
+                '" flood-color="' + xmlAttr(hexOf(f.highlightColor, 0xffffff)) +
+                '" flood-opacity="0.6" result="' + hi + '"/>';
+        src = hi;
+      }
+    } else if (f.type === "adjustColor") {
+      var sa = 1 + (f.saturation || 0) / 100;
+      var hu = f.hue || 0;
+      var br = 1 + (f.brightness || 0) / 100;
+      var co = (f.contrast || 0) / 100;
+      if (sa !== 1) {
+        body += '<feColorMatrix in="' + src + '" type="saturate" values="' +
+                sa + '" result="' + out + 's"/>';
+        src = out + "s";
+      }
+      if (hu) {
+        body += '<feColorMatrix in="' + src + '" type="hueRotate" values="' +
+                hu + '" result="' + out + 'h"/>';
+        src = out + "h";
+      }
+      if (br !== 1 || co) {
+        // Contrast about the midpoint, as CSS defines it, so the two paths
+        // agree: slope = 1 + c, intercept = -c/2.
+        var slope = br * (1 + co), inter = -co / 2;
+        var lin = function (tag) {
+          return '<' + tag + ' type="linear" slope="' + slope +
+                 '" intercept="' + inter + '"/>';
+        };
+        body += '<feComponentTransfer in="' + src + '" result="' + out + 'b">' +
+                lin("feFuncR") + lin("feFuncG") + lin("feFuncB") +
+                '</feComponentTransfer>';
+        src = out + "b";
+      }
+    }
+  });
+
+  if (!body) return null;
+  // Filters reach outside the box, so the region has to be enlarged or a glow
+  // is clipped to the shape's own bounds and reads as a hard edge.
+  var pad = Flashy.Filters ? Flashy.Filters.extent(o.filters) : 0;
+  var ext = Math.max(20, pad * 2 + 20);
+  var w = Math.abs(o.width || 1) || 1, h = Math.abs(o.height || 1) || 1;
+  var fx = -(ext / w), fy = -(ext / h);
+  return {
+    defs: '<defs><filter id="' + id + '" x="' + fx + '" y="' + fy +
+          '" width="' + (1 - 2 * fx) + '" height="' + (1 - 2 * fy) +
+          '" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse">' +
+          body + '</filter></defs>',
+    ref: 'url(#' + id + ')'
+  };
+}
+
+/**
+ * A 9-sliced symbol instance, as nine clipped groups.
+ *
+ * One `<clipPath>` and one `<g>` per cell, with the cell's own scale — the
+ * same nine rectangles Flashy.Slice9 hands the canvas painter and the engine,
+ * so all three agree to the pixel.
+ */
+var _svgSliceSeq = 0;
+function _symbolSlicedSVG(o, sym, depth) {
+  var natW = Math.abs(o.width) || 1, natH = Math.abs(o.height) || 1;
+  var sx = o.scaleX || 1, sy = o.scaleY || 1;
+  var dstW = natW * Math.abs(sx), dstH = natH * Math.abs(sy);
+  var kids = symbolFrameObjects(sym,
+    symbolDisplayFrame(o, sym, o._parentFrame || 1, o._startFrame || 1));
+  if (!kids.length) return '';
+  var content = '';
+  for (var k = 0; k < kids.length; k++) content += _objToSVG(kids[k], depth + 1);
+
+  // Outer transform: everything except the magnitude of the scale, which the
+  // cells carry.
+  var tf = 'translate(' + ((o.x || 0) + natW / 2) + ',' + ((o.y || 0) + natH / 2) + ')';
+  if (o.rotation) tf += ' rotate(' + o.rotation + ')';
+  if (o.skewX || o.skewY) {
+    tf += ' matrix(1,' + Math.tan((o.skewY || 0) * Math.PI / 180) + ',' +
+          Math.tan((o.skewX || 0) * Math.PI / 180) + ',1,0,0)';
+  }
+  if (sx < 0 || sy < 0) tf += ' scale(' + (sx < 0 ? -1 : 1) + ',' + (sy < 0 ? -1 : 1) + ')';
+  tf += ' translate(' + (-dstW / 2) + ',' + (-dstH / 2) + ')';
+
+  var out = '<g transform="' + xmlAttr(tf) + '"' +
+            (o.alpha != null && o.alpha < 1 ? ' opacity="' + o.alpha + '"' : '') + '>\n';
+  var cells = Flashy.Slice9.cells(sym.scale9, natW, natH, dstW, dstH);
+  var seq = ++_svgSliceSeq;
+  for (var i = 0; i < cells.length; i++) {
+    var c = cells[i];
+    var id = 'fy-s9-' + seq + '-' + i;
+    out += '<clipPath id="' + id + '"><rect x="' + c.dx + '" y="' + c.dy +
+           '" width="' + c.dw + '" height="' + c.dh + '"/></clipPath>';
+    out += '<g clip-path="url(#' + id + ')"><g transform="translate(' + c.dx + ',' + c.dy +
+           ') scale(' + (c.dw / c.sw) + ',' + (c.dh / c.sh) + ') translate(' +
+           (-c.sx) + ',' + (-c.sy) + ')">\n' + content + '</g></g>\n';
+  }
+  return out + '</g>\n';
+}
+
+/** _objToSVGRaw, wrapped in this object's filter group. Mirrors paintObj. */
 function _objToSVG(o, depth) {
+  var fx = _svgFilterFor(o);
+  if (!fx) return _objToSVGRaw(o, depth);
+  return fx.defs + '<g filter="' + fx.ref + '">' +
+         _objToSVGRaw(o, depth) + '</g>\n';
+}
+
+function _objToSVGRaw(o, depth) {
   depth = depth || 0;
   var hw = (o.width||0)/2, hh = (o.height||0)/2;
   // Same centre-origin convention as the stage and the canvas painter: move to
@@ -12390,6 +13178,14 @@ function _objToSVG(o, depth) {
       for (var gi2 = 0; gi2 < gkids.length; gi2++) gout += _objToSVG(gkids[gi2], depth+1);
       return gout+'</g></g>\n';
     case "symbol":
+      // 9-slice first: the instance's scale goes into the cells rather than
+      // into the group transform, so it cannot share the branch below.
+      var sym9 = doc.library[o.symbolName];
+      if (sym9 && window.Flashy && Flashy.Slice9 && Flashy.Slice9.active(sym9.scale9) &&
+          (Math.abs(o.scaleX || 1) !== 1 || Math.abs(o.scaleY || 1) !== 1) &&
+          depth < SYMBOL_MAX_DEPTH) {
+        return _symbolSlicedSVG(o, sym9, depth);
+      }
       // Symbols used to fall through to `default` and vanish from the SVG
       // without a word.
       var sym = doc.library[o.symbolName];
@@ -13554,6 +14350,8 @@ function init(){
     /* The current fill and stroke, which every drawing tool reads when it
        commits. The Color Mixer owns these; this is the seam for driving them
        without clicking through the colour picker. */
+    /** The Symbol Properties dialog, where the 9-slice guides are set. */
+    showSymbolProps: showSymbolPropsDialog,
     setStrokeStyle: function(v){
       if(v.color!=null)strokeColor=v.color;
       if(v.alpha!=null)strokeAlpha=v.alpha;

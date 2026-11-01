@@ -250,6 +250,345 @@
     }
   }
 
+  /* -------------------- Filters and colour transforms --------------------
+   *
+   * Flash 8's filter stack — drop shadow, blur, glow, bevel, adjust colour —
+   * and its Color Effect — brightness, tint, advanced — are what made late-era
+   * Flash content look the way it did. This module is the one implementation
+   * of both, shared by the engine and by the editor's own stage painter, so a
+   * glow on the authoring stage is the same glow in every export.
+   *
+   * TWO MECHANISMS, because the two things need different ones:
+   *
+   *   Filters are geometric: a blur has to see the shape's neighbourhood. They
+   *   go through the canvas `filter` property, which takes CSS filter
+   *   functions and is applied to a whole composited image rather than to each
+   *   fill and stroke separately — which matters, because applying
+   *   `drop-shadow` per drawing operation gives a shape with a stroke two
+   *   shadows, one of them printed over the fill.
+   *
+   *   Colour transforms are per-pixel and exact: every one of Flash's three
+   *   colour effects reduces to a per-channel multiply plus offset, and that
+   *   cannot be expressed in CSS filter functions at all. `brightness()` is
+   *   multiplicative; Flash's Brightness interpolates towards white, which is
+   *   a multiply AND an offset. So they run as a real pixel pass.
+   *
+   * Both therefore need the object rendered off-screen first. The scratch
+   * buffer is the full canvas size and pooled: filtered objects are normally
+   * few, and sizing to an object's bounds would mean every caller — including
+   * a MovieClip that does not know its own extent — having to supply them.
+   * -------------------------------------------------------------------- */
+  const Filters = {
+    /** Identity colour transform: multiply by one, add nothing. */
+    IDENTITY: { rMul: 1, gMul: 1, bMul: 1, aMul: 1, rOff: 0, gOff: 0, bOff: 0, aOff: 0 },
+
+    /** True when a colour transform would actually change anything. */
+    hasColor(ct) {
+      if (!ct) return false;
+      return ct.rMul !== 1 || ct.gMul !== 1 || ct.bMul !== 1 || ct.aMul !== 1 ||
+             !!ct.rOff || !!ct.gOff || !!ct.bOff || !!ct.aOff;
+    },
+
+    /**
+     * Flash's three Colour Effects, each reduced to one channel transform.
+     *
+     *   brightness  b in -1..1. Positive interpolates towards white, so it is
+     *               c*(1-b) + 255b; negative scales towards black.
+     *   tint        amount t towards a colour, so c*(1-t) + tc*t.
+     *   advanced    the channel transform written out directly, which is what
+     *               Flash's Advanced panel always was.
+     */
+    colorEffect(e) {
+      if (!e || !e.mode || e.mode === 'none') return null;
+      const id = Object.assign({}, this.IDENTITY);
+      if (e.mode === 'brightness') {
+        const b = Math.max(-1, Math.min(1, e.brightness || 0));
+        if (!b) return null;
+        if (b > 0) { const m = 1 - b, o = 255 * b;
+          return { rMul: m, gMul: m, bMul: m, aMul: 1, rOff: o, gOff: o, bOff: o, aOff: 0 }; }
+        const m2 = 1 + b;
+        return { rMul: m2, gMul: m2, bMul: m2, aMul: 1, rOff: 0, gOff: 0, bOff: 0, aOff: 0 };
+      }
+      if (e.mode === 'tint') {
+        const t = Math.max(0, Math.min(1, e.amount == null ? 1 : e.amount));
+        const n = typeof e.color === 'string'
+          ? parseInt(String(e.color).replace('#', ''), 16) : (e.color | 0);
+        const m = 1 - t;
+        return {
+          rMul: m, gMul: m, bMul: m, aMul: 1,
+          rOff: ((n >> 16) & 0xff) * t,
+          gOff: ((n >> 8) & 0xff) * t,
+          bOff: (n & 0xff) * t,
+          aOff: 0
+        };
+      }
+      if (e.mode === 'advanced') {
+        return {
+          rMul: e.rMul == null ? 1 : e.rMul, gMul: e.gMul == null ? 1 : e.gMul,
+          bMul: e.bMul == null ? 1 : e.bMul, aMul: e.aMul == null ? 1 : e.aMul,
+          rOff: e.rOff || 0, gOff: e.gOff || 0, bOff: e.bOff || 0, aOff: e.aOff || 0
+        };
+      }
+      return id;
+    },
+
+    /**
+     * A filter stack as a CSS filter string.
+     *
+     * `blurX`/`blurY` collapse to one radius: the canvas filter property has
+     * no anisotropic blur, and a shape blurred 20 across and 2 down is rare
+     * enough that an averaged radius beats not having blur at all. The SVG
+     * export, which CAN express it, does.
+     */
+    css(filters) {
+      if (!filters || !filters.length) return '';
+      const parts = [];
+      for (let i = 0; i < filters.length; i++) {
+        const f = filters[i];
+        if (!f || f.enabled === false) continue;
+        const rgba = (c, a) => toRGBA(c == null ? 0 : c, a == null ? 1 : a);
+        if (f.type === 'blur') {
+          const r = (Math.abs(f.blurX == null ? 4 : f.blurX) +
+                     Math.abs(f.blurY == null ? 4 : f.blurY)) / 4;
+          if (r > 0) parts.push('blur(' + r.toFixed(2) + 'px)');
+        } else if (f.type === 'dropShadow') {
+          const d = f.distance == null ? 4 : f.distance;
+          const a = ((f.angle == null ? 45 : f.angle) * Math.PI) / 180;
+          const bl = Math.abs(f.blur == null ? 4 : f.blur) / 2;
+          parts.push('drop-shadow(' + (Math.cos(a) * d).toFixed(2) + 'px ' +
+                     (Math.sin(a) * d).toFixed(2) + 'px ' + bl.toFixed(2) + 'px ' +
+                     rgba(f.color == null ? 0x000000 : f.color, f.alpha == null ? 0.6 : f.alpha) + ')');
+        } else if (f.type === 'glow') {
+          const bl2 = Math.abs(f.blur == null ? 6 : f.blur) / 2;
+          const col = rgba(f.color == null ? 0xff0000 : f.color, f.alpha == null ? 1 : f.alpha);
+          // Strength is how many times the glow is laid over itself, which is
+          // what Flash's `strength` did — one pass reads as a faint halo.
+          const reps = Math.max(1, Math.min(4, Math.round(f.strength == null ? 2 : f.strength)));
+          for (let k = 0; k < reps; k++) parts.push('drop-shadow(0 0 ' + bl2.toFixed(2) + 'px ' + col + ')');
+        } else if (f.type === 'bevel') {
+          // A highlight on one side and a shadow on the other: the two
+          // offset shadows Flash's bevel came down to.
+          const d2 = f.distance == null ? 4 : f.distance;
+          const a2 = ((f.angle == null ? 45 : f.angle) * Math.PI) / 180;
+          const bl3 = Math.abs(f.blur == null ? 4 : f.blur) / 2;
+          parts.push('drop-shadow(' + (Math.cos(a2) * d2).toFixed(2) + 'px ' +
+                     (Math.sin(a2) * d2).toFixed(2) + 'px ' + bl3.toFixed(2) + 'px ' +
+                     rgba(f.shadowColor == null ? 0x000000 : f.shadowColor, 0.6) + ')');
+          parts.push('drop-shadow(' + (-Math.cos(a2) * d2).toFixed(2) + 'px ' +
+                     (-Math.sin(a2) * d2).toFixed(2) + 'px ' + bl3.toFixed(2) + 'px ' +
+                     rgba(f.highlightColor == null ? 0xffffff : f.highlightColor, 0.6) + ')');
+        } else if (f.type === 'adjustColor') {
+          // These four ARE expressible in CSS filter functions, and doing them
+          // here keeps them off the pixel pass.
+          const br = (f.brightness || 0) / 100, co = (f.contrast || 0) / 100;
+          const sa = (f.saturation || 0) / 100, hu = f.hue || 0;
+          if (br) parts.push('brightness(' + (1 + br).toFixed(3) + ')');
+          if (co) parts.push('contrast(' + (1 + co).toFixed(3) + ')');
+          if (sa) parts.push('saturate(' + (1 + sa).toFixed(3) + ')');
+          if (hu) parts.push('hue-rotate(' + hu + 'deg)');
+        }
+      }
+      return parts.join(' ');
+    },
+
+    /** How far outside its box a filter stack can reach, in pixels. */
+    extent(filters) {
+      let pad = 0;
+      if (!filters) return 0;
+      for (let i = 0; i < filters.length; i++) {
+        const f = filters[i];
+        if (!f || f.enabled === false) continue;
+        if (f.type === 'blur') {
+          pad = Math.max(pad, Math.abs(f.blurX || 0), Math.abs(f.blurY || 0));
+        } else if (f.type === 'dropShadow' || f.type === 'bevel') {
+          pad = Math.max(pad, Math.abs(f.distance || 0) + Math.abs(f.blur || 0));
+        } else if (f.type === 'glow') {
+          pad = Math.max(pad, Math.abs(f.blur || 0));
+        }
+      }
+      return pad;
+    },
+
+    /* A pool of full-canvas scratch buffers. Filters nest (a glowing symbol
+       containing a blurred shape), so one shared buffer would be overwritten
+       mid-composite; the pool hands out a fresh one per nesting level and
+       takes it back afterwards. */
+    _pool: [],
+    _acquire(w, h) {
+      for (let i = 0; i < this._pool.length; i++) {
+        const e = this._pool[i];
+        if (!e.busy && e.canvas.width === w && e.canvas.height === h) {
+          e.busy = true;
+          e.ctx.setTransform(1, 0, 0, 1, 0, 0);
+          e.ctx.clearRect(0, 0, w, h);
+          return e;
+        }
+      }
+      const canvas = typeof document !== 'undefined'
+        ? document.createElement('canvas') : null;
+      if (!canvas) return null;
+      canvas.width = w; canvas.height = h;
+      const e = { canvas, ctx: canvas.getContext('2d'), busy: true };
+      // Bounded, so a long session cannot accumulate buffers. Four levels of
+      // nested filters is already more than any real document uses.
+      if (this._pool.length < 6) this._pool.push(e);
+      return e;
+    },
+    _release(e) { if (e) e.busy = false; },
+
+    /** Per-channel multiply and offset, over a whole scratch buffer. */
+    applyColor(ctx, w, h, ct) {
+      if (!this.hasColor(ct) || !w || !h) return;
+      let img;
+      try {
+        img = ctx.getImageData(0, 0, w, h);
+      } catch (e) {
+        return;   // a tainted canvas: leave the pixels alone rather than throw
+      }
+      const d = img.data;
+      const rm = ct.rMul, gm = ct.gMul, bm = ct.bMul, am = ct.aMul;
+      const ro = ct.rOff, go = ct.gOff, bo = ct.bOff, ao = ct.aOff;
+      for (let i = 0; i < d.length; i += 4) {
+        const a = d[i + 3];
+        // Fully transparent pixels must stay transparent: a positive offset
+        // applied to them would paint the whole scratch buffer, and the buffer
+        // is the size of the stage.
+        if (a === 0) continue;
+        d[i]     = d[i]     * rm + ro;
+        d[i + 1] = d[i + 1] * gm + go;
+        d[i + 2] = d[i + 2] * bm + bo;
+        d[i + 3] = a * am + ao;
+      }
+      ctx.putImageData(img, 0, 0);
+    },
+
+    /**
+     * Run `draw` through a filter stack and a colour transform.
+     *
+     * With neither, `draw` is called straight on `ctx` and nothing is
+     * allocated — which is the case for almost every object in a document.
+     */
+    render(ctx, filters, colorTransform, draw) {
+      const css = this.css(filters);
+      const needsColor = this.hasColor(colorTransform);
+      if (!css && !needsColor) { draw(ctx); return; }
+      const target = ctx.canvas;
+      const slot = this._acquire(target.width, target.height);
+      if (!slot) { draw(ctx); return; }     // no DOM: render unfiltered
+      const octx = slot.ctx;
+      // Same transform, so the object lands in the same device pixels; the
+      // composite is then a straight 1:1 blit.
+      octx.setTransform(ctx.getTransform());
+      octx.globalAlpha = ctx.globalAlpha;
+      try {
+        draw(octx);
+        if (needsColor) {
+          octx.setTransform(1, 0, 0, 1, 0, 0);
+          this.applyColor(octx, target.width, target.height, colorTransform);
+        }
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        // Alpha is already baked into the buffer; applying it again would
+        // square it.
+        ctx.globalAlpha = 1;
+        ctx.filter = css || 'none';
+        ctx.drawImage(slot.canvas, 0, 0);
+        ctx.filter = 'none';
+        ctx.restore();
+      } finally {
+        this._release(slot);
+      }
+    }
+  };
+
+  /* -------------------- 9-slice scaling --------------------
+   *
+   * Four guides cut a symbol into nine pieces. Scaling it then stretches only
+   * the middles: the corners keep their size, the top and bottom edges stretch
+   * horizontally, the left and right edges vertically. It is the difference
+   * between a button that can be any width and a button whose rounded corners
+   * smear when you widen it.
+   *
+   * The cell maths is here, in one place, because three renderers need it and
+   * they must agree to the pixel: the authoring stage, the SVG export, and the
+   * NineSlice display object below that the exported player uses.
+   * -------------------------------------------------------------------- */
+  const Slice9 = {
+    /**
+     * The nine source→destination rectangles.
+     *
+     * `grid` is {left, right, top, bottom} in the symbol's own pixels —
+     * distances in from each edge, which is how Flash's guides were specified.
+     * Guides that do not fit the destination are scaled down together, so a
+     * button narrower than its own two corners degrades instead of overlapping
+     * them.
+     */
+    cells(grid, natW, natH, dstW, dstH) {
+      natW = Math.abs(natW) || 1; natH = Math.abs(natH) || 1;
+      dstW = Math.abs(dstW) || 1; dstH = Math.abs(dstH) || 1;
+      let l = Math.max(0, grid && grid.left || 0);
+      let r = Math.max(0, grid && grid.right || 0);
+      let t = Math.max(0, grid && grid.top || 0);
+      let b = Math.max(0, grid && grid.bottom || 0);
+      // Clamp in source space first: guides wider than the symbol are a
+      // document error, not a reason to produce negative-width cells.
+      if (l + r > natW) { const k = natW / (l + r); l *= k; r *= k; }
+      if (t + b > natH) { const k = natH / (t + b); t *= k; b *= k; }
+      // Then in destination space, so the corners never overlap.
+      let dl = l, dr = r, dt = t, db = b;
+      if (dl + dr > dstW) { const k = dstW / (dl + dr); dl *= k; dr *= k; }
+      if (dt + db > dstH) { const k = dstH / (dt + db); dt *= k; db *= k; }
+
+      const sxs = [0, l, natW - r, natW];
+      const dxs = [0, dl, dstW - dr, dstW];
+      const sys = [0, t, natH - b, natH];
+      const dys = [0, dt, dstH - db, dstH];
+      const out = [];
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 3; col++) {
+          const sw = sxs[col + 1] - sxs[col], sh = sys[row + 1] - sys[row];
+          const dw = dxs[col + 1] - dxs[col], dh = dys[row + 1] - dys[row];
+          // A zero-width cell is what you get when a guide sits on an edge;
+          // emitting it would mean a divide by zero in the scale below.
+          if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) continue;
+          out.push({
+            sx: sxs[col], sy: sys[row], sw, sh,
+            dx: dxs[col], dy: dys[row], dw, dh
+          });
+        }
+      }
+      return out;
+    },
+
+    /** True when a grid would actually change anything. */
+    active(grid) {
+      return !!(grid && (grid.left || grid.right || grid.top || grid.bottom));
+    },
+
+    /**
+     * Draw `content` nine times, each piece clipped and scaled into place.
+     *
+     * `draw(ctx)` paints the content at its natural size with its origin at
+     * (0,0) — which is the convention the editor's symbol painter and the
+     * engine's container both already use.
+     */
+    render(ctx, grid, natW, natH, dstW, dstH, draw) {
+      const cells = this.cells(grid, natW, natH, dstW, dstH);
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i];
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(c.dx, c.dy, c.dw, c.dh);
+        ctx.clip();
+        ctx.translate(c.dx, c.dy);
+        ctx.scale(c.dw / c.sw, c.dh / c.sh);
+        ctx.translate(-c.sx, -c.sy);
+        draw(ctx);
+        ctx.restore();
+      }
+    }
+  };
+
   // -------------------- DisplayObject --------------------
   class DisplayObject {
     constructor() {
@@ -264,6 +603,11 @@
       this.blendMode = null;
       this.shadowBlur = 0;
       this.shadowColor = 0x000000;
+      /* Flash 8 filters and the Colour Effect. Both default to nothing, and
+         when they are nothing the render path below allocates nothing — which
+         is every object in a document that does not use them. */
+      this.filters = null;
+      this.colorTransform = null;
       this.parent = null;
       this._listeners = {};
     }
@@ -305,6 +649,20 @@
 
     _tick(dt) { /* override */ }
     render(ctx) { /* override */ }
+
+    /**
+     * render(), through this object's filters and colour transform.
+     *
+     * Containers and the Stage call THIS, never render() directly: a filter
+     * has to see the object's whole composite, children included, so it has
+     * to wrap the subtree rather than each drawing operation.
+     */
+    _renderFiltered(ctx) {
+      const hasF = this.filters && this.filters.length &&
+                   this.filters.some(f => f && f.enabled !== false);
+      if (!hasF && !Filters.hasColor(this.colorTransform)) { this.render(ctx); return; }
+      Filters.render(ctx, this.filters, this.colorTransform, c => this.render(c));
+    }
 
     removeFromParent() { if (this.parent) this.parent.removeChild(this); return this; }
   }
@@ -525,9 +883,42 @@
         if (!c.visible || c.alpha === 0) continue;
         ctx.save();
         c._applyTransform(ctx);
-        c.render(ctx);
+        c._renderFiltered(ctx);
         ctx.restore();
       }
+    }
+  }
+
+  /**
+   * A container that 9-slices its contents.
+   *
+   * It keeps scaleX/scaleY at 1 and stretches by `targetWidth`/`targetHeight`
+   * instead. That is the whole trick: the scale has to be applied INSIDE the
+   * node, cell by cell, because a parent's scale is already baked into the
+   * context by the time render() runs and would stretch every cell alike.
+   */
+  class NineSlice extends DisplayObjectContainer {
+    constructor(grid, naturalWidth, naturalHeight) {
+      super();
+      this.grid = grid || null;
+      this.naturalWidth = naturalWidth || 1;
+      this.naturalHeight = naturalHeight || 1;
+      this.targetWidth = this.naturalWidth;
+      this.targetHeight = this.naturalHeight;
+    }
+    render(ctx) {
+      if (!Slice9.active(this.grid)) {
+        // No guides: a plain stretch, so the node still honours its target.
+        ctx.save();
+        ctx.scale(this.targetWidth / this.naturalWidth,
+                  this.targetHeight / this.naturalHeight);
+        super.render(ctx);
+        ctx.restore();
+        return;
+      }
+      Slice9.render(ctx, this.grid, this.naturalWidth, this.naturalHeight,
+                    this.targetWidth, this.targetHeight,
+                    c => super.render(c));
     }
   }
 
@@ -749,7 +1140,7 @@
       }
       ctx.save();
       this.root._applyTransform(ctx);
-      this.root.render(ctx);
+      this.root._renderFiltered(ctx);
       ctx.restore();
     }
 
@@ -1240,7 +1631,13 @@
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
     Shape, TextField, Bitmap, MovieClip, Timeline, Tween, Stage,
+    /* 9-slice: the cell maths plus the container that uses it, shared with the
+       authoring stage and the SVG export so all three agree to the pixel. */
+    Slice9, NineSlice,
     Sound, SoundTrack, Bitmaps,
+    /* Shared with the editor's own stage painter and with the SVG exporter, so
+       a glow on the authoring stage is the same glow in every export. */
+    Filters,
     toRGBA
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Flashy;
