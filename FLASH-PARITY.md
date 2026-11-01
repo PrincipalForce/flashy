@@ -135,10 +135,10 @@ the exported player.
 | Selectable, Border/Background | ✅ | Selectable, border and background with their own colours, and Render as HTML — one markup parser (`Flashy.RichText`) feeding the stage, the raster exports, the player and the SVG’s tspan runs. |
 | Line type: single / multiline / multiline-no-wrap / password | ✅ | Multiline wraps at the box width; single collapses newlines rather than silently overflowing; password masks. |
 | Letter spacing | ✅ | Letter spacing by walking the string, auto-kern (which really is a choice between the whole-string and per-character draw paths), baseline shift, and super/subscript as a shift plus a smaller face. |
-| Device fonts vs embedded outlines, character embedding ranges | ⬜ | Missing. |
+| Device fonts vs embedded outlines, character embedding ranges | ✅ | `_sans`, `_serif` and `_typewriter` map onto the generic families every browser has. Embedding traces each glyph with the project’s own tracer — no font parser needed — into a 0..1 em path table, with five character ranges and a per-field switch. Only the faces a field asks for are exported. |
 | Break Apart text → letters → shapes | ✅ | `textToCharacters` — one object per glyph, measured with the painter's own metrics so each piece lands where its letter was. Letters to shapes needs the pen outlines the browser does not expose. |
-| Anti-alias mode (device / bitmap / animation / readability) | ◐ | Recorded on the field and said to be a record — the canvas has one text rasteriser and no way to pick another, so claiming it changes the pixels would be a lie. |
-| Spell check | ⬜ | Missing (low value). |
+| Anti-alias mode (device / bitmap / animation / readability) | ✅ | It changes the pixels now. Bitmap thresholds the field’s own alpha to on-or-off, readability snaps glyphs onto the pixel grid, device substitutes the player’s family, and animation stays smooth so sub-pixel motion does not shimmer. |
+| Spell check | ◐ | A proofreader rather than a dictionary: doubled words, a table of known misspellings, unmatched quotes and brackets, double spaces, mixed quote styles, with one-click fixes and a personal dictionary. No general English word list — one big enough to avoid false positives would be larger than the editor, and a check that flags every proper noun gets switched off. |
 
 Without dynamic and input text there is no score display, no form, no typed-in
 name — an entire class of Flash content is unreachable.
@@ -755,10 +755,8 @@ than quietly dropped:
 * **SWF text, bitmaps, sound, filters and scripts** — glyph tables, JPEG/zlib,
   MP3 framing, filter tags, an ActionScript assembler. The writer reports each
   as missing rather than silently dropping it.
-* **Device fonts and character embedding ranges** — needs font parsing.
-* **Runtime** shared libraries, **per-sound compression**, **spell check**,
-  **multiple documents in one window**, and **Edit in New Window** on the web
-  build.
+* **Runtime** shared libraries, **per-sound compression**, **multiple
+  documents in one window**, and **Edit in New Window** on the web build.
 * **A user-supplied HTML template** and publish **alignment**.
 
 Both of the small leftovers above are now done as well: the registration point
@@ -818,3 +816,60 @@ a name, inserted at the caret.
     stepping it would mean stepping a different compiler’s output.
 
     Covered by `tests/debugger.spec.js` (25 specs).
+
+### Wave 10 — text that really is what it says
+
+59. ✅ **Anti-alias modes that change the pixels.** This row read "recorded on
+    the field and said to be a record — the canvas has one text rasteriser and
+    no way to pick another". The first half was true and the conclusion was
+    not:
+
+    * **Bitmap text** is a one-bit rasteriser, and a one-bit rasteriser is
+      what you get by thresholding alpha at the midpoint. The field is drawn
+      into a scratch canvas of its own and hardened there, then blitted back —
+      hardening the live canvas in place would need the field’s box in device
+      pixels, and by then the painter has rotated and scaled, so that box is
+      not a rectangle any more.
+    * **Readability** snaps glyph positions onto the pixel grid, which is
+      where most of the blur in small text comes from. Real hinting needs the
+      font’s own instructions, which a browser will not hand over — so the
+      claim is no bigger than the snapping.
+    * **Device fonts** substitute the player’s own family. Flash’s `_sans`,
+      `_serif` and `_typewriter` map onto the generic families every browser
+      has, which is the same promise.
+    * **Animation** stays smooth, because sub-pixel motion should not shimmer.
+
+60. ✅ **Font embedding, with character ranges.** A cartoon set in anything but
+    Arial renders in a fallback on most machines, which is the single most
+    visible way Flash content aged.
+
+    The reason this was written off — "needs font parsing" — was wrong.
+    Flashy already has a tracer that turns a rendered image into outlines, and
+    a glyph is a very simple image: so a face is built by drawing each
+    character at 128px and tracing it, normalised into a 0..1 em path table.
+    No font parser, and the outlines go down the same four render paths every
+    other path object does.
+
+    Five character ranges, defaulting to the narrowest that works — only what
+    this document uses — because an embedded face is usually the heaviest
+    thing in a small movie. An embedded face measures from its OWN advances,
+    because the system font may not be installed and asking the canvas would
+    lay the line out for a fallback. A string the face cannot cover falls back
+    to the system font whole rather than dropping glyphs: a missing glyph is
+    far more visible than a substituted one. And only the faces a field
+    actually asks for are exported.
+
+61. ◐ **Spelling and proofing.** Deliberately a proofreader, not a dictionary.
+    An English word list big enough to avoid false positives would be larger
+    than the whole editor, and a spell check that flags every proper noun gets
+    switched off within a minute — at which point it has made things worse.
+
+    So it checks what is wrong regardless of language: a doubled word, a table
+    of misspellings common enough to be worth shipping, unmatched quotes and
+    brackets, a double space, straight and curly quotes mixed in one caption.
+    Every one is a real error in a caption and none needs to know the
+    language. Fixes are applied at the recorded position rather than globally,
+    keeping a leading capital, because the same word can be deliberate
+    elsewhere in the same string.
+
+    Covered by `tests/fonts-spelling.spec.js` (21 specs).

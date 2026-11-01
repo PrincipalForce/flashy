@@ -1825,6 +1825,240 @@
     }
   };
 
+  /* -------------------- Fonts --------------------
+   *
+   * Flash's text had two decisions that look like preferences and are not.
+   *
+   * ANTI-ALIAS MODE really changed the pixels. "Bitmap text" switched the
+   * rasteriser off entirely, "readability" hinted the glyphs onto the pixel
+   * grid, and "animation" left them smooth so sub-pixel motion did not
+   * shimmer. Flashy recorded the setting and drew the same thing four ways,
+   * and said so in the inspector, which was honest but not a feature.
+   *
+   * EMBEDDING decided whether the viewer needed the font installed. A device
+   * font used whatever the player had; an embedded one shipped the outlines.
+   * Without it, a cartoon set in anything but Arial renders in a fallback on
+   * most machines, which is the single most visible way Flash content aged.
+   *
+   * Both are here rather than in the editor because the authoring stage, the
+   * raster exports and the exported player all draw through TextField.
+   * ------------------------------------------------------------------ */
+  const Fonts = {
+    /* A device font is the player's own. Flash's three were _sans, _serif and
+       _typewriter, and they map onto the generic families every browser has
+       -- which is the same promise: whatever this machine has. */
+    DEVICE: {
+      _sans: 'sans-serif',
+      _serif: 'serif',
+      _typewriter: 'monospace'
+    },
+
+    /** The family to draw with, after the device-font substitution. */
+    familyFor(face, antiAlias) {
+      const f = String(face || 'Arial');
+      if (this.DEVICE[f]) return this.DEVICE[f];
+      /* "Use device fonts" means do not ship outlines and do not insist on
+         the named face: take the generic family it belongs to. Naming the
+         face as well keeps it when the viewer happens to have it. */
+      if (antiAlias === 'device') return f + ', sans-serif';
+      return f;
+    },
+
+    /**
+     * Snap a coordinate to the pixel grid for the readability mode.
+     *
+     * Hinting proper needs the font's own instructions, which a browser will
+     * not hand over. What it IS possible to do is stop a glyph straddling a
+     * pixel boundary, which is where most of the blur in small text comes
+     * from -- so that is what this does, and the claim is no bigger.
+     */
+    snap(v, antiAlias) {
+      return antiAlias === 'readability' ? Math.round(v) : v;
+    },
+
+    /**
+     * Harden a drawn region to pure on-or-off pixels.
+     *
+     * Flash's "Bitmap text (no anti-alias)" at work. Alpha above the midpoint
+     * becomes solid and the rest disappears, which is exactly what a
+     * one-bit rasteriser produces -- small text goes crisp and ugly, which is
+     * the point of choosing it.
+     */
+    threshold(ctx, x, y, w, h) {
+      w = Math.max(1, Math.ceil(w)); h = Math.max(1, Math.ceil(h));
+      x = Math.floor(x); y = Math.floor(y);
+      let img;
+      try { img = ctx.getImageData(x, y, w, h); }
+      catch (e) { return false; }          // a tainted canvas: leave it smooth
+      const d = img.data;
+      for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 127 ? 255 : 0;
+      ctx.putImageData(img, x, y);
+      return true;
+    },
+
+    /* ---- embedded outlines -------------------------------------------
+     * A glyph becomes a path the same way a bitmap does: it is drawn big and
+     * then traced. Flashy already has a tracer that turns a rendered image
+     * into outlines, and a glyph is just a very simple image -- so embedding
+     * needs no font parser, and the outlines it produces go down the same
+     * four render paths every other path object does.
+     * ------------------------------------------------------------------ */
+
+    /** The size a glyph is rasterised at before tracing. */
+    EM: 128,
+
+    /** Which characters a range means. */
+    RANGES: {
+      used: null,                                  // whatever the document uses
+      numerals: '0123456789.,-+$%',
+      basic: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ',
+      latin: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ' +
+             '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~ ¡¿‘’“”–—…',
+      punctuation: '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'
+    },
+
+    /**
+     * Trace one glyph into a path, in a 0..1 em box.
+     *
+     * Normalised to the em rather than kept at 128px, so a field can use the
+     * outlines at any size without re-tracing -- which is the difference
+     * between embedding a font once and embedding it per text block.
+     */
+    traceGlyph(ch, font, tracer) {
+      if (typeof document === 'undefined' || !tracer) return null;
+      const em = this.EM;
+      const pad = Math.ceil(em * 0.4);
+      const cv = document.createElement('canvas');
+      cv.width = em * 2; cv.height = em * 2;
+      const ctx = cv.getContext('2d', { willReadFrequently: true });
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.font = font.replace(/\d+(?:\.\d+)?px/, em + 'px');
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#000000';
+      ctx.fillText(ch, pad, em + pad * 0.5);
+      const advance = ctx.measureText(ch).width / em;
+      // A space has no ink; it is an advance and nothing else.
+      if (!String(ch).trim()) return { advance, path: null };
+
+      let traced;
+      try {
+        /* The tracer takes ImageData, not a canvas, and its thresholds are
+           named keys rather than numbers. A high colour threshold is wanted
+           here: a glyph is two colours and anything between them is the
+           rasteriser's edge, which should go with the ink. */
+        traced = tracer.trace(ctx.getImageData(0, 0, cv.width, cv.height),
+                              { colorThreshold: 200, minArea: 2,
+                                curveFit: 'normal', cornerThreshold: 'normal' });
+      } catch (e) { return null; }
+      if (!traced || !traced.shapes || !traced.shapes.length) {
+        return { advance, path: null };
+      }
+      /* The tracer returns one shape per colour region and the lightest is
+         the paper, so the glyph is everything else. Dropping the biggest
+         region by area is the reliable test: the background always is. */
+      const shapes = traced.shapes.slice().sort((a, b) => b.area - a.area);
+      const ink = shapes.slice(1);
+      if (!ink.length) return { advance, path: null };
+      const path = [];
+      ink.forEach(sh => {
+        for (let i = 0; i < sh.path.length;) {
+          const op = sh.path[i];
+          const n = op === 0 || op === 1 ? 2 : op === 2 ? 4 : 0;
+          path.push(op);
+          for (let k = 0; k < n; k += 2) {
+            // Into em units, with the pen origin at the glyph's own origin.
+            path.push((sh.path[i + 1 + k] - pad) / em);
+            path.push((sh.path[i + 2 + k] - em - pad * 0.5) / em);
+          }
+          i += 1 + n;
+        }
+      });
+      return { advance, path };
+    },
+
+    /**
+     * Build an embedded face: a glyph table for a set of characters.
+     *
+     * Slow -- one rasterise and trace per character -- which is why it is a
+     * command rather than something that happens while you type. The result
+     * goes on the document and is reused by every field that asks for it.
+     */
+    embed(face, opts, tracer) {
+      opts = opts || {};
+      const chars = Array.from(new Set(Array.from(String(opts.chars || ''))))
+        .filter(c => c !== '\n' && c !== '\r');
+      const font = (opts.italic ? 'italic ' : '') + (opts.bold ? 'bold ' : '') +
+                   this.EM + 'px ' + face;
+      const glyphs = {};
+      let traced = 0;
+      chars.forEach(ch => {
+        const g = this.traceGlyph(ch, font, tracer);
+        if (!g) return;
+        glyphs[ch] = g;
+        if (g.path) traced++;
+      });
+      return {
+        face, bold: !!opts.bold, italic: !!opts.italic,
+        glyphs, count: Object.keys(glyphs).length, traced
+      };
+    },
+
+    /** The key a document files an embedded face under. */
+    faceKey(face, bold, italic) {
+      return String(face || 'Arial') + (bold ? '|b' : '') + (italic ? '|i' : '');
+    },
+
+    /**
+     * Draw a string from an embedded face.
+     *
+     * Returns the width drawn, or null when the face cannot cover the string
+     * -- the caller then falls back to the system font rather than dropping
+     * characters, because a missing glyph is far more visible than a
+     * substituted one.
+     */
+    drawEmbedded(ctx, face, str, x, y, size, letterSpacing) {
+      if (!face || !face.glyphs) return null;
+      const text = String(str == null ? '' : str);
+      for (let i = 0; i < text.length; i++) {
+        if (!face.glyphs[text[i]]) return null;
+      }
+      let pen = x;
+      for (let i = 0; i < text.length; i++) {
+        const g = face.glyphs[text[i]];
+        if (g.path && g.path.length) {
+          ctx.beginPath();
+          for (let k = 0; k < g.path.length;) {
+            const op = g.path[k];
+            if (op === 0) { ctx.moveTo(pen + g.path[k + 1] * size, y + g.path[k + 2] * size); k += 3; }
+            else if (op === 1) { ctx.lineTo(pen + g.path[k + 1] * size, y + g.path[k + 2] * size); k += 3; }
+            else if (op === 2) {
+              ctx.quadraticCurveTo(pen + g.path[k + 1] * size, y + g.path[k + 2] * size,
+                                   pen + g.path[k + 3] * size, y + g.path[k + 4] * size);
+              k += 5;
+            } else { ctx.closePath(); k += 1; }
+          }
+          ctx.fill('evenodd');
+        }
+        pen += g.advance * size + (letterSpacing || 0);
+      }
+      return pen - x;
+    },
+
+    /** How wide a string is in an embedded face, or null if it cannot cover it. */
+    measureEmbedded(face, str, size, letterSpacing) {
+      if (!face || !face.glyphs) return null;
+      const text = String(str == null ? '' : str);
+      let w = 0;
+      for (let i = 0; i < text.length; i++) {
+        const g = face.glyphs[text[i]];
+        if (!g) return null;
+        w += g.advance * size + (letterSpacing || 0);
+      }
+      return w;
+    }
+  };
+
   class TextField extends DisplayObject {
     constructor(text, opts) {
       super();
@@ -1867,6 +2101,15 @@
          are this plus a smaller size, which is what they always were. */
       this.baselineShift = opts.baselineShift || 0;
       this.scriptStyle = opts.scriptStyle || 'normal';   // normal|super|sub
+      /* Anti-alias mode. Not a recorded preference: `bitmap` hardens the
+         rasterised pixels, `readability` snaps the glyphs onto the pixel
+         grid, `device` substitutes the player's own family, and `animation`
+         leaves it smooth because sub-pixel motion should not shimmer. */
+      this.antiAlias = opts.antiAlias || 'normal';
+      /* An embedded face: a glyph table built by tracing the font once. Null
+         means draw with whatever the machine has, which is what a device font
+         asks for and what every document did before this existed. */
+      this.embedded = opts.embedded || null;
 
       // Input state. A field only reacts when the Stage has focused it.
       this.focused = false;
@@ -1907,6 +2150,14 @@
 
     /** Measure a string, honouring letter spacing. */
     measure(ctx, str) {
+      /* An embedded face measures from its own advances. It has to: the
+         system font may not even be installed, so asking the canvas would
+         measure a fallback and lay the line out for the wrong font. */
+      if (this.embedded) {
+        const w = Fonts.measureEmbedded(this.embedded, str, this.fontSize(),
+                                        this.letterSpacing);
+        if (w != null) return w;
+      }
       if (!this.kerning && !this.letterSpacing) {
         /* Unkerned: the width is the sum of the individual advances, which is
            what the unkerned DRAW produces. Measuring the whole string here
@@ -1953,6 +2204,33 @@
 
     /** Draw one line, character by character when letter spacing is in play. */
     _drawLine(ctx, str, x, y) {
+      /* Embedded outlines first. They are real paths, so they scale, rotate
+         and export like any other artwork -- and the viewer does not need the
+         font installed, which is the whole reason to embed. */
+      if (this.embedded) {
+        const size = this.fontSize();
+        const total = Fonts.measureEmbedded(this.embedded, str, size,
+                                            this.letterSpacing);
+        if (total != null) {
+          let pen = x;
+          if (ctx.textAlign === 'center') pen = x - total / 2;
+          else if (ctx.textAlign === 'right') pen = x - total;
+          ctx.fillStyle = toRGBA(this.color, 1);
+          /* The baseline. `textBaseline` does not apply to a path, so the
+             offset the canvas would have added is added here: `top` means the
+             box's top, and a glyph sits one em-ascent below it. */
+          const base = this.baseline === 'top' ? y + size * 0.8 : y;
+          Fonts.drawEmbedded(ctx, this.embedded, str,
+                             Fonts.snap(pen, this.antiAlias),
+                             Fonts.snap(base, this.antiAlias),
+                             size, this.letterSpacing);
+          return;
+        }
+        /* The face cannot cover this string, so fall through to the system
+           font: a substituted glyph is far less visible than a missing one. */
+      }
+      x = Fonts.snap(x, this.antiAlias);
+      y = Fonts.snap(y, this.antiAlias);
       if (!this.letterSpacing && this.kerning) {
         if (this.strokeWidth > 0 && this.stroke != null) {
           ctx.lineWidth = this.strokeWidth;
@@ -1986,6 +2264,48 @@
     }
 
     render(ctx) {
+      /* Bitmap text: the field is drawn normally and then its pixels are
+         hardened to on-or-off. Done as a second pass over the region rather
+         than by a different draw, because every other feature -- wrapping,
+         markup, borders, embedded glyphs -- has to keep working underneath
+         it. */
+      if (this.antiAlias === 'bitmap' && typeof document !== 'undefined') {
+        /* Drawn into a scratch canvas of its own and thresholded there, then
+           blitted back. Hardening the live canvas in place would need the
+           field's box in DEVICE pixels -- and the painter has already
+           translated, rotated and scaled by then, so that box is not a
+           rectangle any more. A scratch sidesteps the question: the field is
+           the only thing in it. */
+        const box = this.hitBox();
+        const m = ctx.getTransform ? ctx.getTransform() : null;
+        const sx = m ? Math.max(0.05, Math.hypot(m.a, m.b)) : 1;
+        const sy = m ? Math.max(0.05, Math.hypot(m.c, m.d)) : 1;
+        const pad = 2;
+        const w = Math.ceil((box.maxX + pad * 2) * sx);
+        const h = Math.ceil((box.maxY + pad * 2) * sy);
+        // A field bigger than this is not going to be read as bitmap text,
+        // and a scratch that size costs more than the effect is worth.
+        if (w > 0 && h > 0 && w * h <= 16e6) {
+          const cv = document.createElement('canvas');
+          cv.width = w; cv.height = h;
+          const g = cv.getContext('2d', { willReadFrequently: true });
+          g.scale(sx, sy);
+          g.translate(pad, pad);
+          const was = this.antiAlias;
+          this.antiAlias = 'readability';      // snap while drawing
+          try { this._renderInner(g); } finally { this.antiAlias = was; }
+          Fonts.threshold(g, 0, 0, w, h);
+          ctx.save();
+          ctx.imageSmoothingEnabled = false;   // a hard edge must stay hard
+          ctx.drawImage(cv, -pad, -pad, w / sx, h / sy);
+          ctx.restore();
+          return;
+        }
+      }
+      this._renderInner(ctx);
+    }
+
+    _renderInner(ctx) {
       /* Markup is a different layout problem -- runs with their own fonts,
          measured and wrapped together -- so it gets its own pass rather than
          a flag threaded through this one. */
@@ -2172,8 +2492,11 @@
       opts = opts || {};
       const size = o.fontSize || 24;
       const f = new TextField(o.text == null ? '' : o.text, {
+        /* The family, after the device-font substitution: `_sans`, `_serif`
+           and `_typewriter` are Flash's three device fonts and map onto the
+           generic families every browser has, which is the same promise. */
         font: (o.fontItalic ? 'italic ' : '') + (o.fontBold ? 'bold ' : '') +
-              size + 'px ' + (o.font || 'Arial'),
+              size + 'px ' + Fonts.familyFor(o.font, o.antiAlias),
         color: o.fillColor == null ? 0x000000 : o.fillColor,
         align: o.textAlign || 'left',
         lineHeight: (o.lineHeight || 1.2) * size,
@@ -2194,6 +2517,16 @@
            added and was read by nothing at all -- a field could be marked as
            markup and would still draw its tags. */
         html: !!o.renderAsHtml,
+        /* The anti-alias mode, which now changes the pixels rather than
+           being recorded and ignored. */
+        antiAlias: o.antiAlias || 'normal',
+        /* An embedded face, when the object asks to be embedded AND the
+           document carries one for its family. `opts.fonts` is the table;
+           without it there is nothing to embed from and the system font is
+           used, which is what a device font wants anyway. */
+        embedded: (o.embedFont && o.antiAlias !== 'device' && opts.fonts)
+          ? (opts.fonts[Fonts.faceKey(o.font, o.fontBold, o.fontItalic)] || null)
+          : null,
         kerning: o.kerning !== false,
         baselineShift: o.baselineShift || 0,
         scriptStyle: o.scriptStyle || 'normal'
@@ -3340,7 +3673,7 @@
     version: '0.7.6',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
-    Shape, TextField, RichText, Bitmap, MovieClip, Timeline, Tween, Stage,
+    Shape, TextField, RichText, Fonts, Bitmap, MovieClip, Timeline, Tween, Stage,
     /* 9-slice: the cell maths plus the container that uses it, shared with the
        authoring stage and the SVG export so all three agree to the pixel. */
     Slice9, NineSlice,

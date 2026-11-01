@@ -604,6 +604,9 @@ var menus=[
     {type:"sep"},
     {label:"Timeline Effects...",action:"timelineEffect"},
     {type:"sep"},
+    {label:"Embed Font...",action:"embedFont"},
+    {label:"Check Spelling...",action:"spellCheck"},
+    {type:"sep"},
     {label:"Group",action:"group",shortcut:"Ctrl+G"},
     {label:"Ungroup",action:"ungroup",shortcut:"Ctrl+Shift+G"},
     {label:"Break Apart",action:"breakApart",shortcut:"Ctrl+B"},
@@ -4263,7 +4266,10 @@ function paintObjRaw(cx,o,opts){
        borders or the three text kinds — all of which an export would then
        have rendered differently. */
     if(window.Flashy&&Flashy.TextField&&Flashy.TextField.fromObject){
-      var tf=Flashy.TextField.fromObject(o,{chrome:chrome});
+      /* The document's embedded faces go with it: a field ticked as embedded
+         draws from the traced outlines rather than from whatever font this
+         machine happens to have. */
+      var tf=Flashy.TextField.fromObject(o,{chrome:chrome,fonts:doc.fonts||null});
       cx.save();
       cx.globalAlpha=fillA;
       // TextField draws from its box's top-left; the painter is at the centre.
@@ -7430,18 +7436,42 @@ function updateProps(){
                "rather than drawn.");
         }
       }
-      /* Anti-alias mode is a hint, not a renderer: the canvas has one text
-         rasteriser and no way to pick another, so this records the intent for
-         a future SWF export rather than pretending to change the pixels. */
+      /* Anti-alias mode, which changes the pixels. Device fonts substitute
+         the player's own family, readability snaps the glyphs onto the pixel
+         grid, bitmap hardens them to on-or-off, and animation leaves them
+         smooth so sub-pixel motion does not shimmer. */
       row("Anti-alias",o.antiAlias||"normal",function(v){
-        pushUndo();o.antiAlias=v;fullRefresh();
+        pushUndo();o.antiAlias=v;fullRefresh();updateProps();
       },{type:"select",width:"110px",options:[
         ["device","Use device fonts"],["normal","Anti-alias for animation"],
         ["readability","Anti-alias for readability"],["bitmap","Bitmap text (no anti-alias)"]
       ]});
-      if((o.antiAlias||"normal")!=="normal"){
-        note("Recorded with the field. The canvas has one text rasteriser, so "+
-             "this does not change how it draws here.");
+      if((o.antiAlias||"normal")==="device"){
+        note("The player's own font, not this one. Nothing is embedded and "+
+             "the named face is only a preference.");
+      }else if((o.antiAlias||"normal")==="bitmap"){
+        note("The rasteriser is switched off: every pixel is on or off, which "+
+             "is crisp and ugly at small sizes and is the point of choosing it.");
+      }else if((o.antiAlias||"normal")==="readability"){
+        note("Glyphs are snapped onto the pixel grid, so a stem does not "+
+             "straddle two pixels. Real hinting needs the font's own "+
+             "instructions, which a browser will not hand over.");
+      }
+      /* Embedding. A device font deliberately has nothing to embed. */
+      if((o.antiAlias||"normal")!=="device"){
+        var fkey=Flashy.Fonts.faceKey(o.font,o.fontBold,o.fontItalic);
+        var have=(doc.fonts||{})[fkey];
+        row("Embed font",!!o.embedFont,function(v){
+          pushUndo();o.embedFont=v;fullRefresh();updateProps();
+        },{type:"checkbox"});
+        if(o.embedFont&&!have){
+          note("Nothing is embedded for "+(o.font||"Arial")+" yet, so this "+
+               "field still uses the machine's own font. Text \u25b8 Embed "+
+               "Font builds the outlines.");
+        }else if(o.embedFont&&have){
+          note(have.count+" glyphs embedded for this face. The viewer does "+
+               "not need the font installed.");
+        }
       }
       row("Font",o.font||"Arial",function(v){pushUndo();o.font=v;render();},{width:"90px"});
       row("Size",o.fontSize||24,function(v){pushUndo();o.fontSize=parseFloat(v)||12;render();},{width:"45px",unit:"px"});
@@ -8764,6 +8794,8 @@ function initOutputPanel(){
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
   timelineEffect:"Timeline Effect",
+  embedFont:"Embed Font",
+  spellCheck:"Check Spelling",
   debugScript:"Debug Frame Script",
   winDebugger:"Debugger",
   strings:"Strings",
@@ -11745,6 +11777,12 @@ function doActionInner(a){
     break;
   case "timelineEffect":
     showTimelineEffectDialog();
+    break;
+  case "embedFont":
+    showFontEmbedDialog();
+    break;
+  case "spellCheck":
+    showSpellCheckDialog();
     break;
   case "findReplace":
     showFindReplaceDialog();
@@ -18314,6 +18352,459 @@ function updateDebuggerPanel() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Font embedding
+ *
+ * A cartoon set in anything but Arial renders in a fallback on most machines,
+ * which is the single most visible way Flash content aged. Flash's answer was
+ * to ship the glyph outlines, and to let you choose WHICH characters shipped,
+ * because an embedded face is the heaviest thing in a small movie.
+ *
+ * Flashy needs no font parser to do this: it already has a tracer that turns
+ * a rendered image into outlines, and a glyph is a very simple image. So a
+ * face is built by drawing each character at 128px and tracing it, and the
+ * outlines go down the same four render paths every other path object uses.
+ * ------------------------------------------------------------------ */
+
+function docFonts() {
+  if (!doc.fonts) doc.fonts = {};
+  return doc.fonts;
+}
+
+/** Every (family, bold, italic) combination the document's text actually uses. */
+function fontsInUse() {
+  var seen = {};
+  frWalk("document").forEach(function (e) {
+    var o = e.obj;
+    if (o.type !== "text") return;
+    var key = Flashy.Fonts.faceKey(o.font, o.fontBold, o.fontItalic);
+    if (!seen[key]) {
+      seen[key] = { key: key, face: o.font || "Arial", bold: !!o.fontBold,
+                    italic: !!o.fontItalic, fields: 0, chars: {} };
+    }
+    seen[key].fields++;
+    Array.from(String(o.text == null ? "" : o.text)).forEach(function (c) {
+      if (c !== "\n" && c !== "\r") seen[key].chars[c] = true;
+    });
+  });
+  return Object.keys(seen).map(function (k) {
+    var r = seen[k];
+    r.used = Object.keys(r.chars).sort().join("");
+    delete r.chars;
+    return r;
+  });
+}
+
+/** The characters a named range covers, for a given face in this document. */
+function embedCharsFor(range, inUse, extra) {
+  var R = Flashy.Fonts.RANGES;
+  var base = range === "used" ? (inUse || "") : (R[range] || "");
+  return Array.from(new Set(Array.from(base + String(extra || "")))).join("");
+}
+
+/**
+ * Build and store an embedded face.
+ *
+ * Slow by nature -- one rasterise and trace per character -- so it is a
+ * command you run rather than something that happens while you type. It
+ * returns what it managed, including how many glyphs actually produced an
+ * outline: a character the font has no glyph for traces to nothing, and
+ * saying so beats shipping an empty entry.
+ */
+function embedFontFace(face, opts) {
+  opts = opts || {};
+  if (!window.Flashy || !Flashy.Fonts) return { ok: false, why: "the engine is unavailable" };
+  if (!window.FlashyTrace) return { ok: false, why: "the tracer is unavailable" };
+  var chars = String(opts.chars || "");
+  if (!chars) return { ok: false, why: "no characters were chosen" };
+  // Bounded: 400 glyphs is already a heavier face than any cartoon needs, and
+  // each one is a rasterise and a trace.
+  if (chars.length > 400) chars = chars.slice(0, 400);
+  var built = Flashy.Fonts.embed(face, {
+    chars: chars, bold: !!opts.bold, italic: !!opts.italic
+  }, window.FlashyTrace);
+  if (!built || !built.count) return { ok: false, why: "nothing could be traced" };
+  pushUndo();
+  var key = Flashy.Fonts.faceKey(face, opts.bold, opts.italic);
+  docFonts()[key] = built;
+  touchDoc();
+  return { ok: true, key: key, count: built.count, traced: built.traced };
+}
+
+function removeEmbeddedFace(key) {
+  var fonts = docFonts();
+  if (!fonts[key]) return false;
+  pushUndo();
+  delete fonts[key];
+  touchDoc();
+  return true;
+}
+
+/** Roughly how many bytes an embedded face adds to an export. */
+function embeddedFaceSize(key) {
+  var f = docFonts()[key];
+  if (!f) return 0;
+  try { return JSON.stringify(f).length; } catch (e) { return 0; }
+}
+
+function showFontEmbedDialog() {
+  var inUse = fontsInUse();
+  if (!inUse.length) {
+    showMessage("Font Embedding",
+      "There is no text in this document yet, so there is no font to embed.");
+    return;
+  }
+  var fonts = docFonts();
+  var listEl = null;
+
+  var draw = function () {
+    if (!listEl) return;
+    listEl.textContent = "";
+    var keys = Object.keys(docFonts()).sort();
+    if (!keys.length) {
+      var hint = document.createElement("div");
+      hint.className = "fy-dialog-hint";
+      hint.textContent = "Nothing embedded. A field only uses an embedded " +
+        "face when it is ticked as embedded in the Properties panel AND the " +
+        "document carries one for its family.";
+      listEl.appendChild(hint);
+      return;
+    }
+    keys.forEach(function (k) {
+      var f = docFonts()[k];
+      var row = document.createElement("div");
+      row.className = "dbg-row";
+      var n = document.createElement("span");
+      n.className = "dbg-name";
+      n.textContent = k.replace("|b", " bold").replace("|i", " italic");
+      var v = document.createElement("span");
+      v.className = "dbg-value";
+      v.textContent = f.count + " glyphs, " +
+                      Math.round(embeddedFaceSize(k) / 1024) + " KB";
+      var rm = document.createElement("button");
+      rm.className = "props-btn-action";
+      rm.textContent = "✕";
+      rm.title = "Remove this embedded face";
+      rm.addEventListener("click", function () {
+        removeEmbeddedFace(k);
+        draw();
+        fullRefresh();
+      });
+      row.appendChild(n);
+      row.appendChild(v);
+      row.appendChild(rm);
+      listEl.appendChild(row);
+    });
+  };
+
+  showDialog({
+    title: "Font Embedding",
+    message: "Shipping the outlines means the viewer does not need the font " +
+             "installed, which is the single most visible way Flash content " +
+             "aged. The outlines are traced from the font as it is on THIS " +
+             "machine, so embed on a machine that has it.",
+    fields: [
+      { name: "which", label: "Face", type: "select", value: inUse[0].key,
+        options: inUse.map(function (f) {
+          return [f.key, f.face + (f.bold ? " bold" : "") +
+                  (f.italic ? " italic" : "") + " — " + f.fields + " field" +
+                  (f.fields === 1 ? "" : "s")];
+        }) },
+      { name: "range", label: "Characters", type: "select", value: "used",
+        options: [
+          ["used", "Only what this document uses"],
+          ["numerals", "Numerals and currency"],
+          ["basic", "Latin letters and numerals"],
+          ["latin", "Latin, numerals and punctuation"],
+          ["punctuation", "Punctuation only"]
+        ],
+        hint: "An embedded face is usually the heaviest thing in a small " +
+              "movie, so the default is the narrowest range that works." },
+      { name: "extra", label: "Also include", value: "",
+        placeholder: "any extra characters" }
+    ],
+    build: function (body) {
+      listEl = document.createElement("div");
+      listEl.className = "dbg-list";
+      body.appendChild(listEl);
+      draw();
+    },
+    okLabel: "Embed",
+    onOk: function (v) {
+      var want = inUse.filter(function (f) { return f.key === v.which; })[0];
+      if (!want) return;
+      var chars = embedCharsFor(v.range, want.used, v.extra);
+      var r = embedFontFace(want.face, {
+        bold: want.bold, italic: want.italic, chars: chars
+      });
+      if (!r.ok) { showMessage("Font Embedding", "Not embedded: " + r.why + "."); return; }
+      fullRefresh();
+      showMessage("Font Embedding",
+        "Embedded " + r.count + " glyph" + (r.count === 1 ? "" : "s") +
+        " for " + want.face + " (" + r.traced + " with outlines, the rest " +
+        "spaces or characters this font has no glyph for), about " +
+        Math.round(embeddedFaceSize(r.key) / 1024) + " KB.\n\n" +
+        "Tick “Embed font” on a text field to use it.");
+    }
+  });
+  void fonts;
+}
+
+/* ------------------------------------------------------------------ *
+ * Spell check
+ *
+ * Deliberately a proofreader rather than a dictionary. Shipping an English
+ * word list big enough to avoid false positives would be larger than the
+ * whole editor, and a spell check that flags every proper noun gets turned
+ * off within a minute -- at which point it has made things worse.
+ *
+ * So it checks the things that are wrong REGARDLESS of language: a doubled
+ * word, a known misspelling, mismatched quotes, stray double spaces, a
+ * sentence that starts lower case. Every one of those is a real error in a
+ * caption, and none of them needs to know what language it is in.
+ * ------------------------------------------------------------------ */
+
+/* The misspellings common enough to be worth a table. Short on purpose: the
+   value is in being right every time, not in coverage. */
+var SPELL_FIXES = {
+  teh: "the", adn: "and", recieve: "receive", recieved: "received",
+  seperate: "separate", definately: "definitely", occured: "occurred",
+  untill: "until", wich: "which", thier: "their", freind: "friend",
+  beleive: "believe", acheive: "achieve", wierd: "weird", neccessary: "necessary",
+  publically: "publicly", accomodate: "accommodate", occassion: "occasion",
+  tommorow: "tomorrow", calender: "calendar", concious: "conscious",
+  embarass: "embarrass", existance: "existence", goverment: "government",
+  independant: "independent", maintainance: "maintenance", occurence: "occurrence",
+  persistant: "persistent", priviledge: "privilege", refered: "referred",
+  rythm: "rhythm", succesful: "successful", tounge: "tongue",
+  truely: "truly", vaccum: "vacuum", wether: "whether", writting: "writing"
+};
+
+/** Words a user has said are fine, kept per person like the snippets. */
+var SPELL_DICT_STORE = "flashy_dictionary";
+
+function spellDictionary() {
+  try {
+    var raw = localStorage.getItem(SPELL_DICT_STORE);
+    if (!raw) return {};
+    var o = JSON.parse(raw);
+    var out = {};
+    (Array.isArray(o) ? o : Object.keys(o || {})).forEach(function (w) {
+      if (typeof w === "string" && w) out[w.toLowerCase()] = true;
+    });
+    return out;
+  } catch (e) { return {}; }
+}
+
+function addToDictionary(word) {
+  word = String(word || "").trim().toLowerCase();
+  if (!word) return false;
+  var d = spellDictionary();
+  d[word] = true;
+  try { localStorage.setItem(SPELL_DICT_STORE, JSON.stringify(Object.keys(d))); }
+  catch (e) { return false; }
+  return true;
+}
+
+/**
+ * Proofread one string.
+ *
+ * Returns a list of `{kind, word, suggestion, at}`. Each check is one a
+ * caption can fail in any language, which is what keeps the false-positive
+ * rate low enough that the feature stays switched on.
+ */
+function proofread(text) {
+  var src = String(text == null ? "" : text);
+  var dict = spellDictionary();
+  var out = [];
+
+  // A known misspelling, which is the only dictionary worth shipping.
+  var wre = /[A-Za-z][A-Za-z'’]*/g, m;
+  var words = [];
+  while ((m = wre.exec(src)) !== null) words.push({ w: m[0], at: m.index });
+  words.forEach(function (it) {
+    var low = it.w.toLowerCase();
+    if (dict[low]) return;
+    if (SPELL_FIXES[low]) {
+      out.push({ kind: "misspelling", word: it.w,
+                 suggestion: SPELL_FIXES[low], at: it.at });
+    }
+  });
+
+  // A doubled word: "the the". Wrong in every language and almost invisible
+  // to read past.
+  for (var i = 1; i < words.length; i++) {
+    if (words[i].w.toLowerCase() !== words[i - 1].w.toLowerCase()) continue;
+    // Only when they are genuinely adjacent, not across a sentence break.
+    var between = src.slice(words[i - 1].at + words[i - 1].w.length, words[i].at);
+    if (!/^\s+$/.test(between)) continue;
+    out.push({ kind: "doubled", word: words[i].w, suggestion: words[i].w,
+               at: words[i].at });
+  }
+
+  // Mismatched quotes or brackets, which a caption gets wrong often.
+  var pairs = [['"', '"'], ["(", ")"], ["[", "]"]];
+  pairs.forEach(function (p) {
+    if (p[0] === p[1]) {
+      var n = src.split(p[0]).length - 1;
+      if (n % 2) out.push({ kind: "quotes", word: p[0], suggestion: "",
+                            at: src.lastIndexOf(p[0]) });
+    } else {
+      var open = src.split(p[0]).length - 1, close = src.split(p[1]).length - 1;
+      if (open !== close) {
+        out.push({ kind: "brackets", word: p[0] + p[1], suggestion: "",
+                   at: src.indexOf(p[0]) });
+      }
+    }
+  });
+
+  // A double space between words, which shows up as a gap on the stage.
+  var dre = /\S(  +)\S/g;
+  while ((m = dre.exec(src)) !== null) {
+    out.push({ kind: "spacing", word: "  ", suggestion: " ", at: m.index + 1 });
+  }
+
+  /* Straight and curly quotes in the same string. Either is fine; mixing them
+     in one caption is a mistake every time. */
+  if (/['"]/.test(src) && /[‘’“”]/.test(src)) {
+    out.push({ kind: "mixedQuotes", word: "", suggestion: "", at: 0 });
+  }
+
+  return out;
+}
+
+/** Proofread every text field in the document. */
+function proofreadDocument() {
+  var out = [];
+  frWalk("document").forEach(function (e) {
+    var o = e.obj;
+    if (o.type !== "text" || !o.text) return;
+    var issues = proofread(o.text);
+    if (issues.length) out.push({ obj: o, where: e.where, text: String(o.text),
+                                  issues: issues });
+  });
+  return out;
+}
+
+var SPELL_LABELS = {
+  misspelling: "likely misspelling",
+  doubled: "doubled word",
+  quotes: "unmatched quote",
+  brackets: "unmatched bracket",
+  spacing: "double space",
+  mixedQuotes: "straight and curly quotes mixed"
+};
+
+function showSpellCheckDialog() {
+  var found = proofreadDocument();
+  var listEl = null;
+
+  var draw = function () {
+    if (!listEl) return;
+    listEl.textContent = "";
+    var now = proofreadDocument();
+    if (!now.length) {
+      var ok = document.createElement("div");
+      ok.className = "fy-dialog-hint";
+      ok.textContent = "Nothing to report.";
+      listEl.appendChild(ok);
+      return;
+    }
+    now.forEach(function (f) {
+      f.issues.forEach(function (it) {
+        var row = document.createElement("div");
+        row.className = "dbg-row";
+        var n = document.createElement("span");
+        n.className = "dbg-name";
+        n.textContent = it.word ? '"' + it.word + '"' : SPELL_LABELS[it.kind];
+        var v = document.createElement("span");
+        v.className = "dbg-value";
+        v.textContent = SPELL_LABELS[it.kind] +
+                        (it.suggestion && it.suggestion !== it.word
+                          ? ' → "' + it.suggestion + '"' : "") +
+                        " — " + f.where;
+        row.appendChild(n);
+        row.appendChild(v);
+        if (it.kind === "misspelling" || it.kind === "doubled" ||
+            it.kind === "spacing") {
+          var fix = document.createElement("button");
+          fix.className = "props-btn-action";
+          fix.textContent = "Fix";
+          fix.title = "Apply the suggestion to this field";
+          fix.addEventListener("click", function () {
+            pushUndo();
+            applyProofFix(f.obj, it);
+            fullRefresh();
+            draw();
+          });
+          row.appendChild(fix);
+        }
+        if (it.kind === "misspelling") {
+          var keep = document.createElement("button");
+          keep.className = "props-btn-action";
+          keep.textContent = "Keep";
+          keep.title = "Add this word to your dictionary";
+          keep.addEventListener("click", function () {
+            addToDictionary(it.word);
+            draw();
+          });
+          row.appendChild(keep);
+        }
+        listEl.appendChild(row);
+      });
+    });
+  };
+
+  showDialog({
+    title: "Spelling and Proofing",
+    message: "Deliberately a proofreader rather than a dictionary: it checks " +
+             "the things that are wrong in any language — a doubled word, a " +
+             "known misspelling, an unmatched quote, a double space, mixed " +
+             "quote styles. A spell check that flags every proper noun gets " +
+             "switched off within a minute, at which point it has made " +
+             "things worse.",
+    fields: [],
+    build: function (body) {
+      listEl = document.createElement("div");
+      listEl.className = "dbg-list";
+      body.appendChild(listEl);
+      draw();
+    },
+    footnote: found.length
+      ? found.length + " field" + (found.length === 1 ? "" : "s") + " to look at."
+      : "",
+    okLabel: "Close",
+    noCancel: true
+  });
+}
+
+/** Apply one suggestion to one field. */
+function applyProofFix(o, issue) {
+  var text = String(o.text == null ? "" : o.text);
+  if (issue.kind === "misspelling") {
+    /* Replaced at the recorded position, not globally: the same word can be
+       deliberate somewhere else in the same caption. Case is preserved when
+       the original was capitalised. */
+    var len = issue.word.length;
+    var fix = issue.suggestion;
+    if (/^[A-Z]/.test(issue.word)) fix = fix[0].toUpperCase() + fix.slice(1);
+    o.text = text.slice(0, issue.at) + fix + text.slice(issue.at + len);
+    return true;
+  }
+  if (issue.kind === "doubled") {
+    // Drop the second copy and the space before it.
+    var before = text.slice(0, issue.at).replace(/\s+$/, "");
+    o.text = before + text.slice(issue.at + issue.word.length);
+    return true;
+  }
+  if (issue.kind === "spacing") {
+    o.text = text.slice(0, issue.at) + " " +
+             text.slice(issue.at).replace(/^ +/, "");
+    return true;
+  }
+  return false;
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -19691,6 +20182,10 @@ function serializeDoc(){
     /* The strings table and the accessibility settings. Both belong to the
        document rather than to the person: a translation is part of the movie,
        and so is what it says it is. */
+    /* Embedded font outlines. Heavy, so they are only here when something
+       asked for them -- and they are traced from the font as it was on the
+       machine that embedded it, which is the whole promise. */
+    fonts:JSON.parse(JSON.stringify(docFonts())),
     strings:JSON.parse(JSON.stringify(docStrings())),
     access:JSON.parse(JSON.stringify(docAccess()))
   };
@@ -19777,6 +20272,27 @@ function exportDocData(){
   if(pub.protect)d.protect=true;
   /* The strings table travels, so an exported movie can switch language
      without being rebuilt. The player reads it on frame one. */
+  /* Only the faces a field actually asks for: an embedded face is usually
+     the heaviest thing in a small movie, and shipping one nothing uses is
+     pure weight. */
+  var wanted={};
+  var scanFonts=function(layers){
+    (layers||[]).forEach(function(l){
+      (l.keyframes||[]).forEach(function(k){
+        (k.objects||[]).forEach(function walk(o){
+          if(o.type==="text"&&o.embedFont&&o.antiAlias!=="device"){
+            wanted[Flashy.Fonts.faceKey(o.font,o.fontBold,o.fontItalic)]=true;
+          }
+          (o.children||[]).forEach(walk);
+        });
+      });
+    });
+  };
+  scanFonts(d.layers);
+  Object.keys(d.library||{}).forEach(function(n){ scanFonts(d.library[n].layers); });
+  var keep={};
+  Object.keys(d.fonts||{}).forEach(function(k){ if(wanted[k])keep[k]=d.fonts[k]; });
+  if(Object.keys(keep).length)d.fonts=keep; else delete d.fonts;
   var st=docStrings();
   if(Object.keys(st.table).length){
     d.strings={languages:st.languages.slice(),active:st.active,
@@ -19929,6 +20445,16 @@ function deserializeDoc(d){
   };
   doc.publish=(d.publish&&typeof d.publish==="object")
     ? JSON.parse(JSON.stringify(d.publish)) : null;
+  /* Embedded font outlines, the strings table and the accessibility
+     settings. All three belong to the document, so all three come back with
+     it -- and all three default lazily, so a file written before they
+     existed loads unchanged. */
+  doc.fonts=(d.fonts&&typeof d.fonts==="object"&&!Array.isArray(d.fonts))
+    ? JSON.parse(JSON.stringify(d.fonts)) : null;
+  doc.strings=(d.strings&&typeof d.strings==="object")
+    ? JSON.parse(JSON.stringify(d.strings)) : null;
+  doc.access=(d.access&&typeof d.access==="object")
+    ? JSON.parse(JSON.stringify(d.access)) : null;
   docPublish();
   doc.layers=reviveLayers(d.layers);
   /* Scenes. A document without them gets one made from its layers, so every
@@ -20593,7 +21119,7 @@ function exportRuntime(data, canvas, options) {
          letter-spaced, bordered field exports as what was on screen. The
          export passes no `chrome`, so an empty dynamic field stays empty
          instead of shipping the word "Text". */
-      var tf = Flashy.TextField.fromObject(o, {});
+      var tf = Flashy.TextField.fromObject(o, { fonts: data.fonts || null });
       /* The strings table, if the movie carries one: a field with a string ID
          takes its text from the table for the active language. A field with no
          ID keeps what it was authored with, so a document that was never
@@ -24057,6 +24583,18 @@ function init(){
     removeTimelineEffect: removeTimelineEffect,
     effectHere: effectHere,
     /* Strings and localisation, accessibility, and shared libraries. */
+    /* Font embedding and the proofreader. */
+    docFonts: docFonts,
+    fontsInUse: fontsInUse,
+    embedCharsFor: embedCharsFor,
+    embedFontFace: embedFontFace,
+    removeEmbeddedFace: removeEmbeddedFace,
+    embeddedFaceSize: embeddedFaceSize,
+    proofread: proofread,
+    proofreadDocument: proofreadDocument,
+    applyProofFix: applyProofFix,
+    spellDictionary: spellDictionary,
+    addToDictionary: addToDictionary,
     docStrings: docStrings,
     stringFields: stringFields,
     stringFor: stringFor,
