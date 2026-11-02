@@ -609,6 +609,8 @@ var menus=[
     {label:"Convert to Symbol...",action:"convertSym",shortcut:"F8"},
     {label:"Convert Frames to Symbol...",action:"framesToSymbol"},
     {type:"sep"},
+    {label:"Object Drawing",action:"toggleDrawMode",shortcut:"J"},
+    {type:"sep"},
     {label:"Timeline Effects...",action:"timelineEffect"},
     {type:"sep"},
     {label:"Gradient...",action:"gradientFill"},
@@ -949,6 +951,16 @@ var brushSize=12;
 var pencilMode="smooth";          // smooth | straighten | ink
 var lassoMode="freeform";         // freeform | polygon | wand
 
+/** Flash's Object Drawing button, which every drawing tool carried. */
+function drawModeOption(){
+  return {type:"choice",
+    title:"Object Drawing (J) \u2014 off, a new shape merges with what it lands on",
+    options:[["object","\u25a3","Object Drawing \u2014 every shape is its own"],
+             ["merge","\u25a5","Merge Drawing \u2014 same colour joins, different colour cuts"]],
+    get:function(){return drawMode;},
+    set:function(v){setDrawMode(v);}};
+}
+
 function toolOptionSpec(tool){
   if(tool==="eraser"){
     return [
@@ -977,6 +989,7 @@ function toolOptionSpec(tool){
   }
   if(tool==="brush"){
     return [
+      drawModeOption(),
       {type:"choice",title:"Brush tip",
        options:BRUSH_TIPS.map(function(t){return [t.id,t.label,t.title];}),
        get:function(){return brushTip;},
@@ -1015,6 +1028,7 @@ function toolOptionSpec(tool){
   }
   if(tool==="polystar"){
     return [
+      drawModeOption(),
       {type:"choice",title:"Polygon or star",
        options:[["polygon","⬠","Polygon"],["star","★","Star"]],
        get:function(){return polyStar.shape;},
@@ -1034,6 +1048,7 @@ function toolOptionSpec(tool){
   }
   if(tool==="rect"){
     return [
+      drawModeOption(),
       {type:"label",text:function(){
         return rectPrim.cornerRadius>0?"Corner "+rectPrim.cornerRadius+" px":"Square corners";
       }},
@@ -1044,6 +1059,7 @@ function toolOptionSpec(tool){
   }
   if(tool==="oval"){
     return [
+      drawModeOption(),
       {type:"label",text:function(){
         if(ovalPrim.start===0&&ovalPrim.end===360)
           return ovalPrim.inner>0?"Donut "+ovalPrim.inner+"%":"Full oval";
@@ -5616,6 +5632,13 @@ function onMouseUp(e){
       if(movedAny&&movePreSnap)pushUndoSnap(movePreSnap);
       moveObjStarts=[];movePreSnap=null;
       snapHints=[];
+      /* Merge on DROP too. Flash merged where a shape landed, not only where
+         it was drawn -- a mode that only worked while drawing would be half a
+         feature, and the confusing half. */
+      if(movedAny&&drawMode==="merge"){
+        var dm=mergeOnDrop(selection.slice());
+        if(dm.ok&&(dm.merged||dm.cut))fullRefresh();
+      }
     }
     updateProps();
   }else if(curTool==="subselect"){
@@ -5677,6 +5700,18 @@ function onMouseUp(e){
         }
         kf2.objects.push(obj);
         selection=[obj];
+        /* Merge drawing: a shape in the same colour joins what it lands on,
+           and one in a different colour cuts it. Flash's other drawing model,
+           and the one most Flash artwork was actually made in. */
+        if(drawMode==="merge"){
+          var mg=applyMergeDraw(obj,kf2);
+          if(mg.ok&&!kf2.objects.length){
+            showMessage("Merge Drawing",
+              "That cut away everything on this frame. Undo brings it back, "+
+              "or switch to Object Drawing in the tool options.");
+          }
+          selection=kf2.objects.length?[kf2.objects[kf2.objects.length-1]]:[];
+        }
       }
       dragPreview=null;
     }
@@ -8873,6 +8908,7 @@ function initOutputPanel(){
 /** Human names for the actions that produce an undo step. */
 var ACTION_LABELS={
   timelineEffect:"Timeline Effect",
+  toggleDrawMode:"Drawing Model",
   gradientFill:"Gradient",
   newTab:"New Tab",
   closeTab:"Close Document",
@@ -11894,6 +11930,15 @@ function doActionInner(a){
     break;
   case "shortcuts":
     showShortcutsDialog();
+    break;
+  case "toggleDrawMode":
+    setDrawMode(drawMode === "merge" ? "object" : "merge");
+    showMessage("Drawing Model", drawMode === "merge"
+      ? "Merge Drawing. A new shape in the same colour JOINS what it lands "
+        + "on; one in a different colour CUTS it. This is the model most "
+        + "Flash artwork was made in."
+      : "Object Drawing. Every shape is its own thing and they stack, which "
+        + "is what this editor has always done.");
     break;
   case "timelineEffect":
     showTimelineEffectDialog();
@@ -16268,6 +16313,13 @@ function commitBrushStroke(points, kf) {
   o.strokeWidth = 0;
   kf.objects.splice(brushInsertIndex(kf, brushMode), 0, o);
   selection = [o];
+  /* A shaped brush stroke is a filled region, so merge drawing applies to it
+     exactly as it does to a rectangle. Paint modes still decide WHERE it
+     lands in the stack; this decides what happens to what is already there. */
+  if (drawMode === "merge") {
+    applyMergeDraw(o, kf);
+    selection = kf.objects.length ? [kf.objects[kf.objects.length - 1]] : [];
+  }
   return { ok: true, region: true, obj: o };
 }
 
@@ -20271,6 +20323,174 @@ function showGradientDialog(which) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Merge drawing
+ *
+ * Flash had two drawing models and a button to switch between them. Object
+ * Drawing is what Flashy has always done: every shape is its own thing and
+ * they stack. MERGE drawing is the other one, and it is the model Flash
+ * started with -- a shape drawn on top of another in the same colour JOINS
+ * it, and one in a different colour CUTS it.
+ *
+ * It is not a nicety. It is how you draw a mouth on a face without making a
+ * mask, how you take a bite out of a circle, and how most Flash artwork was
+ * actually made. An object-only editor cannot do any of that without the
+ * Combine Objects menu and three clicks per operation.
+ *
+ * Everything here runs on FlashyGeom, which already does union and
+ * difference for Combine Objects -- so merge drawing is a policy about when
+ * to call them, not new geometry.
+ * ------------------------------------------------------------------ */
+
+/* "object" is the default and always has been. Flash defaulted the other way
+   round, but every document here was drawn under this one and switching the
+   default would change what an existing file does when you draw on it. */
+var drawMode = "object";
+
+function setDrawMode(mode) {
+  drawMode = mode === "merge" ? "merge" : "object";
+  updateToolOptions();
+  return drawMode;
+}
+
+/** Shapes merge drawing acts on: artwork with an area, not symbols or text. */
+function isMergeable(o) {
+  if (!o) return false;
+  if (o.type === "symbol" || o.type === "text" || o.type === "bitmap") return false;
+  if (isRigPart(o)) return false;
+  if (o.type === "line" || o.type === "pencil") return false;   // no area
+  return (o.fillType || "solid") !== "none";
+}
+
+/** Two fills that merge rather than cut: the same colour at the same alpha. */
+function sameFill(a, b) {
+  if (!a || !b) return false;
+  if (isGradient(a) || isGradient(b)) return false;   // two ramps are not one
+  var ca = String(a.fillColor || "").toUpperCase();
+  var cb = String(b.fillColor || "").toUpperCase();
+  if (ca !== cb) return false;
+  var aa = a.fillAlpha == null ? 1 : a.fillAlpha;
+  var ab = b.fillAlpha == null ? 1 : b.fillAlpha;
+  return Math.abs(aa - ab) < 0.01;
+}
+
+/**
+ * A region as a path object, taking everything else from a template.
+ *
+ * The one place a boolean result becomes artwork. It was written out three
+ * times -- the brush, the bucket and now this -- which is two too many for
+ * something that has to get the box, the path units and the fill right.
+ */
+function objectFromRegion(loops, template) {
+  var G = window.FlashyGeom;
+  if (!G || !loops || !loops.length) return null;
+  var b = G.bounds(loops);
+  var w = Math.max(1, b.maxX - b.minX), h = Math.max(1, b.maxY - b.minY);
+  var o = new EditorObject("path");
+  /* Everything but the geometry comes from the template, so a merged shape
+     keeps the colour, alpha, filters and effect of what it was made from. */
+  ["fillColor", "fillAlpha", "fillType", "fillStops", "fillGrad",
+   "fillOverflow", "fillFocal", "strokeColor", "strokeAlpha", "strokeWidth",
+   "strokeStyle", "strokeCap", "strokeJoin", "blendMode", "alpha"]
+    .forEach(function (k) {
+      if (template[k] !== undefined) o[k] = template[k];
+    });
+  if (Array.isArray(template.fillStops)) o.fillStops = template.fillStops.slice();
+  if (Array.isArray(template.fillGrad)) o.fillGrad = template.fillGrad.slice();
+  if (Array.isArray(template.filters)) {
+    o.filters = JSON.parse(JSON.stringify(template.filters));
+  }
+  if (template.colorEffect) {
+    o.colorEffect = JSON.parse(JSON.stringify(template.colorEffect));
+  }
+  o.path = G.loopsToPath(G.translateLoops(loops, -b.minX, -b.minY));
+  o.pathW = w; o.pathH = h;
+  o.x = b.minX; o.y = b.minY; o.width = w; o.height = h;
+  return o;
+}
+
+/**
+ * Apply merge drawing for a shape just added to a keyframe.
+ *
+ * `kf.objects` is rebuilt rather than edited in place, because an object can
+ * be cut into several pieces and one can disappear entirely -- splicing while
+ * walking the same array is how the third shape in a row gets skipped.
+ *
+ * Returns what happened, so a caller can say "that cut everything away"
+ * rather than leaving an empty stage unexplained.
+ */
+function applyMergeDraw(newObj, kf) {
+  var G = window.FlashyGeom;
+  if (!G || !kf) return { ok: false, why: "the geometry module is unavailable" };
+  if (!isMergeable(newObj)) return { ok: true, merged: 0, cut: 0, skipped: true };
+
+  var region = objectRegion(newObj);
+  if (!region || !region.length) return { ok: true, merged: 0, cut: 0 };
+
+  var out = [];
+  var joined = region;
+  var merged = 0, cut = 0, removed = 0;
+
+  for (var i = 0; i < kf.objects.length; i++) {
+    var o = kf.objects[i];
+    if (o === newObj) continue;                  // added back at the end
+    if (!isMergeable(o)) { out.push(o); continue; }
+    var reg = objectRegion(o);
+    if (!reg || !reg.length) { out.push(o); continue; }
+
+    if (sameFill(o, newObj)) {
+      /* Same colour: the two become one shape. Collected rather than merged
+         one at a time so three overlapping blobs end up as one object and
+         not as three nested unions. */
+      joined = G.union(joined, reg);
+      merged++;
+      continue;
+    }
+
+    // Different colour: the new shape takes a bite out of the old one.
+    var left = G.difference(reg, region);
+    if (!left.length) { removed++; cut++; continue; }
+    if (Math.abs(G.area(left) - G.area(reg)) < 0.01) { out.push(o); continue; }
+    var piece = objectFromRegion(left, o);
+    if (!piece) { out.push(o); continue; }
+    out.push(piece);
+    cut++;
+  }
+
+  if (merged) {
+    var one = objectFromRegion(G.normalize(joined), newObj);
+    if (one) out.push(one);
+    else out.push(newObj);
+  } else {
+    out.push(newObj);
+  }
+  kf.objects = out;
+  return { ok: true, merged: merged, cut: cut, removed: removed };
+}
+
+/**
+ * The same, for a shape that was MOVED rather than drawn.
+ *
+ * Flash merged on drop too: drag a shape onto another in merge mode and it
+ * joins or cuts where it lands. Without it the mode would only work while
+ * drawing, which is half a feature and the confusing half.
+ */
+function mergeOnDrop(objs) {
+  if (drawMode !== "merge") return { ok: true, merged: 0, cut: 0 };
+  var kf = CKF();
+  if (!kf) return { ok: false, why: "there is no keyframe here" };
+  var total = { merged: 0, cut: 0, removed: 0 };
+  (objs || []).forEach(function (o) {
+    if (kf.objects.indexOf(o) < 0) return;
+    var r = applyMergeDraw(o, kf);
+    if (!r.ok) return;
+    total.merged += r.merged || 0;
+    total.cut += r.cut || 0;
+    total.removed += r.removed || 0;
+  });
+  return Object.assign({ ok: true }, total);
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -21468,6 +21688,11 @@ function initKeys(){
     if(e.key==="ArrowDown"){
       if(selection.length>0){pushUndo();selection.forEach(function(o){o.y+=(e.shiftKey?10:1);});render();}
       return;
+    }
+    /* J is Flash's Object Drawing toggle. Tested before the tool keys below,
+       which claim every bare letter they are given. */
+    if(!ctrl&&!e.altKey&&(e.key==="j"||e.key==="J")){
+      e.preventDefault();doAction("toggleDrawMode");return;
     }
     // Tool shortcuts
     var toolKey=e.key.toLowerCase();
@@ -26196,6 +26421,14 @@ function init(){
     samplesToWAV: samplesToWAV,
     /* The gradient editor: stops, overflow, focal point, and the stroke's
        own gradient -- none of which could be authored before. */
+    /* Merge drawing: Flash's other drawing model. */
+    drawMode: function(){ return drawMode; },
+    setDrawMode: setDrawMode,
+    isMergeable: isMergeable,
+    sameFill: sameFill,
+    objectFromRegion: objectFromRegion,
+    applyMergeDraw: applyMergeDraw,
+    mergeOnDrop: mergeOnDrop,
     GRADIENT_OVERFLOW: GRADIENT_OVERFLOW,
     gradientStops: gradientStops,
     setGradientStops: setGradientStops,

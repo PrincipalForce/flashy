@@ -181,6 +181,18 @@
   /* Ten nanometres on a stage measured in pixels: far below anything visible,
      far above the 1e-9 at which endpoints are matched. */
   var JITTER = 1e-5;
+  /* How far off its line a parallel edge may sit and still count as lying
+     ALONG it. Coarser than the jitter above, which is what makes a shared
+     edge still read as shared after B has been perturbed. */
+  var COLLINEAR = 1e-3;
+  /* The grid two segments must agree on to be the same edge.
+     Deliberately as coarse as COLLINEAR: crossCut gives the two sides the
+     same split POINTS, but B is still jittered, so a shared run's endpoints
+     differ by a few millionths. A 1e-6 grid missed that and kept both copies
+     of the edge -- which produced an outline with the right bounds and the
+     wrong area, a figure of eight rather than a ring. A thousandth of a pixel
+     is still far below any feature anyone draws. */
+  var COINCIDE = 1e-3;
 
   /**
    * Nudge every vertex by a deterministic sub-visible amount.
@@ -191,6 +203,74 @@
    * Perturbing one operand makes those cases crossings like any other.
    * Deterministic, so the same edit always gives the same result.
    */
+  /**
+   * Pull B's vertices onto A wherever they very nearly touch it.
+   *
+   * The boolean chains its kept segments by matching endpoints at a
+   * millionth of a pixel. That works when every split point was computed once
+   * and pushed into both sides -- but a shared edge's ends are a vertex of
+   * one operand and a point on the other, so the two sides came out a few
+   * millionths apart and the chain broke at the seam. The outline then failed
+   * to close and was discarded, which is why subtracting a flush shape gave
+   * nothing at all.
+   *
+   * Welding first removes the seam rather than widening the tolerance that
+   * hides it. Only B moves, by less than a thousandth of a pixel, and B has
+   * already been jittered by a comparable amount -- A keeps its exact
+   * coordinates, which is what lets a shape be erased repeatedly without its
+   * far side drifting.
+   */
+  function weldTo(region, onto) {
+    var edges = [];
+    for (var i = 0; i < onto.length; i++) {
+      var loop = onto[i];
+      for (var k = 0; k < loop.length; k += 2) {
+        var x1 = loop[k], y1 = loop[k + 1];
+        var x2 = loop[(k + 2) % loop.length], y2 = loop[(k + 3) % loop.length];
+        var dx = x2 - x1, dy = y2 - y1;
+        var len2 = dx * dx + dy * dy;
+        if (len2 > 1e-18) edges.push([x1, y1, dx, dy, len2]);
+      }
+    }
+    if (!edges.length) return region;
+    // A's vertices, for the first pass.
+    var verts = [];
+    for (var vi = 0; vi < onto.length; vi++) {
+      var vl = onto[vi];
+      for (var vk = 0; vk < vl.length; vk += 2) verts.push([vl[vk], vl[vk + 1]]);
+    }
+    return region.map(function (loop) {
+      var out = loop.slice();
+      for (var k = 0; k < out.length; k += 2) {
+        var px = out[k], py = out[k + 1];
+        /* A VERTEX wins over an edge. Snapping a near-coincident corner to
+           the nearest point on an edge instead put it a millionth of a pixel
+           ALONG that edge rather than at its end -- which left a sliver of A
+           outside the shared run, and the sliver then classified on its own
+           and took a whole side of the outline with it. Two identical squares
+           unioned to a triangle. Vertices first, edges only as a fallback, is
+           the order snap-rounding is always done in. */
+        var bestD = COLLINEAR, bx = px, by = py, snapped = false;
+        for (var v = 0; v < verts.length; v++) {
+          var d0 = Math.hypot(px - verts[v][0], py - verts[v][1]);
+          if (d0 < bestD) { bestD = d0; bx = verts[v][0]; by = verts[v][1]; snapped = true; }
+        }
+        if (!snapped) {
+          for (var e = 0; e < edges.length; e++) {
+            var E = edges[e];
+            var t = ((px - E[0]) * E[2] + (py - E[1]) * E[3]) / E[4];
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            var qx = E[0] + E[2] * t, qy = E[1] + E[3] * t;
+            var d = Math.hypot(px - qx, py - qy);
+            if (d < bestD) { bestD = d; bx = qx; by = qy; }
+          }
+        }
+        out[k] = bx; out[k + 1] = by;
+      }
+      return out;
+    });
+  }
+
   function jitter(region) {
     return region.map(function (loop) {
       var out = new Array(loop.length);
@@ -491,22 +571,109 @@
       var aminy = Math.min(a.y1, a.y2), amaxy = Math.max(a.y1, a.y2);
       for (var j = 0; j < eb.length; j++) {
         var b = eb[j];
-        if (Math.min(b.x1, b.x2) > amaxx || Math.max(b.x1, b.x2) < aminx) continue;
-        if (Math.min(b.y1, b.y2) > amaxy || Math.max(b.y1, b.y2) < aminy) continue;
+        /* Padded by the collinearity tolerance. An axis-aligned edge has a
+           box of zero height, and B has been jittered -- so a shared
+           horizontal edge sat a few millionths ABOVE A's box and was rejected
+           here before any of the work below could look at it. That was the
+           last thing standing between a shared edge and being split. */
+        if (Math.min(b.x1, b.x2) > amaxx + COLLINEAR ||
+            Math.max(b.x1, b.x2) < aminx - COLLINEAR) continue;
+        if (Math.min(b.y1, b.y2) > amaxy + COLLINEAR ||
+            Math.max(b.y1, b.y2) < aminy - COLLINEAR) continue;
         var rx = a.x2 - a.x1, ry = a.y2 - a.y1;
         var sx = b.x2 - b.x1, sy = b.y2 - b.y1;
         var den = rx * sy - ry * sx;
-        // Parallel, including collinear overlaps. Left alone: the midpoint
-        // classification below still places such edges correctly, and trying
-        // to split along a shared edge is what produces zero-length garbage.
-        if (Math.abs(den) < 1e-12) continue;
         var qpx = b.x1 - a.x1, qpy = b.y1 - a.y1;
+
+        /* Collinearity is decided by PERPENDICULAR DISTANCE, not by the
+           cross product. B has been jittered by 1e-5, which leaves two
+           nominally parallel edges with a `den` of around 1e-3 -- a thousand
+           times the usual parallel threshold. Testing `den` therefore never
+           fired for exactly the edges this needs to catch, which is why the
+           first version of this fix changed nothing at all. */
+        var aLen = Math.hypot(rx, ry);
+        var collinear = false;
+        if (aLen > 1e-9) {
+          var d1 = Math.abs(qpx * ry - qpy * rx) / aLen;
+          var d2 = Math.abs((b.x2 - a.x1) * ry - (b.y2 - a.y1) * rx) / aLen;
+          collinear = d1 <= COLLINEAR && d2 <= COLLINEAR;
+        }
+
+        if (collinear) {
+          /* Parallel. These used to be skipped, with a comment saying the
+             midpoint classification would place them correctly. It does not:
+             the midpoint of a SHARED edge lies on the other region's
+             boundary, where the winding test is a coin toss, so one edge of
+             the outline was dropped — and the outline then chained into two
+             loops and normalize() threw one away. Two aligned rectangles
+             unioned to the second one alone.
+
+             Collinear overlaps are therefore split at each other's interior
+             endpoints, so the shared run becomes ONE segment on each side
+             with the same two endpoints, which the classifier can then pair. */
+          var rlen2 = rx * rx + ry * ry;
+          if (rlen2 < 1e-18) continue;
+
+          /* B's interior endpoints land on A as their PROJECTION onto A's
+             line, and the identical point is pushed into B as well. Both
+             sides have to carry bit-identical coordinates, because chain()
+             joins segments by value — getting this wrong is what made the
+             first attempt at this fix collapse the result to nothing. A also
+             keeps its own line exactly, which is what lets a shape be erased
+             repeatedly without its far side drifting. */
+          var bEnds = [[b.x1, b.y1], [b.x2, b.y2]];
+          for (var be = 0; be < 2; be++) {
+            var tt = ((bEnds[be][0] - a.x1) * rx + (bEnds[be][1] - a.y1) * ry) / rlen2;
+            if (tt <= EPS || tt >= 1 - EPS) continue;
+            var ppx = a.x1 + rx * tt, ppy = a.y1 + ry * tt;
+            (a.cuts || (a.cuts = [])).push({ t: tt, x: ppx, y: ppy });
+            var slen2c = sx * sx + sy * sy;
+            if (slen2c > 1e-18) {
+              var uu2 = ((ppx - b.x1) * sx + (ppy - b.y1) * sy) / slen2c;
+              if (uu2 > EPS && uu2 < 1 - EPS) {
+                (b.cuts || (b.cuts = [])).push({ t: uu2, x: ppx, y: ppy });
+              }
+            }
+          }
+          /* A's interior endpoints land on B as A's OWN vertices, verbatim:
+             A already has them, so sharing the exact value costs nothing and
+             guarantees the match. */
+          var slen2 = sx * sx + sy * sy;
+          if (slen2 < 1e-18) continue;
+          var aEnds = [[a.x1, a.y1], [a.x2, a.y2]];
+          for (var ae = 0; ae < 2; ae++) {
+            var uu = ((aEnds[ae][0] - b.x1) * sx + (aEnds[ae][1] - b.y1) * sy) / slen2;
+            if (uu <= EPS || uu >= 1 - EPS) continue;
+            (b.cuts || (b.cuts = [])).push({
+              t: uu, x: aEnds[ae][0], y: aEnds[ae][1] });
+          }
+          continue;
+        }
+
+        if (Math.abs(den) < 1e-12) continue;        // parallel, and apart
         var t = (qpx * sy - qpy * sx) / den;
         var u = (qpx * ry - qpy * rx) / den;
-        if (t <= EPS || t >= 1 - EPS || u <= EPS || u >= 1 - EPS) continue;
+        // Touching at all, endpoints included: a T-junction is a meeting too.
+        if (t < -EPS || t > 1 + EPS || u < -EPS || u > 1 + EPS) continue;
+        var tIn = t > EPS && t < 1 - EPS;
+        var uIn = u > EPS && u < 1 - EPS;
+        if (!tIn && !uIn) continue;                   // vertex meeting vertex
         var px = a.x1 + rx * t, py = a.y1 + ry * t;
-        (a.cuts || (a.cuts = [])).push({ t: t, x: px, y: py });
-        (b.cuts || (b.cuts = [])).push({ t: u, x: px, y: py });
+        if (tIn && uIn) {
+          // A real crossing: one computed point, pushed into both.
+          (a.cuts || (a.cuts = [])).push({ t: t, x: px, y: py });
+          (b.cuts || (b.cuts = [])).push({ t: u, x: px, y: py });
+        } else if (tIn) {
+          /* B ENDS on A. A is split at B's own vertex, exactly, so the two
+             share the value. Rejecting this case left A whole, so the two
+             operands' segment lists did not line up at all. */
+          var bv = u <= 0.5 ? [b.x1, b.y1] : [b.x2, b.y2];
+          (a.cuts || (a.cuts = [])).push({ t: t, x: bv[0], y: bv[1] });
+        } else {
+          // A ends on B: B is split at A's vertex, exactly.
+          var av = t <= 0.5 ? [a.x1, a.y1] : [a.x2, a.y2];
+          (b.cuts || (b.cuts = [])).push({ t: u, x: av[0], y: av[1] });
+        }
       }
     }
   }
@@ -613,19 +780,63 @@
     // Only B is perturbed. A keeps its exact coordinates, so an edge the
     // other operand never reaches comes back bit-for-bit unchanged — which is
     // what lets a shape be erased twenty times without its far side drifting.
-    var ea = edgesOf(a), eb = edgesOf(jitter(b));
+    /* B is jittered to break exact ties, then welded onto A so that anywhere
+       the two very nearly touch they touch EXACTLY -- which is what lets the
+       chaining below match endpoints by value. */
+    var ea = edgesOf(a), eb = edgesOf(weldTo(jitter(b), a));
     crossCut(ea, eb);
     var segA = splitEdges(ea), segB = splitEdges(eb);
+
+    /* ---- coincident edges ----------------------------------------------
+     * Where the operands share an edge, the midpoint test cannot decide it:
+     * the point is on the other region's boundary. The answer is not a better
+     * probe but a rule, and it turns on whether the two regions lie on the
+     * SAME side of the edge:
+     *
+     *   same direction   the regions are on the same side. The edge is on the
+     *                    boundary of a union and of an intersection — kept
+     *                    once, from A — and interior to a difference.
+     *   opposite         they face each other across it. Interior to a union
+     *                    and an intersection, and it IS what a difference
+     *                    cuts along.
+     *
+     * crossCut now gives both sides bit-identical endpoints for a shared run,
+     * so these match on a tolerance far tighter than any real feature.
+     * ------------------------------------------------------------------ */
+    var keyOf = function (x0, y0, x1, y1) {
+      var q = function (v) { return Math.round(v / COINCIDE); };
+      return q(x0) + ',' + q(y0) + '|' + q(x1) + ',' + q(y1);
+    };
+    var bFwd = Object.create(null), bRev = Object.create(null);
+    var bTaken = [];
+    for (var bi = 0; bi < segB.length; bi++) {
+      var bs = segB[bi];
+      bFwd[keyOf(bs[0], bs[1], bs[2], bs[3])] = bi;
+      bRev[keyOf(bs[2], bs[3], bs[0], bs[1])] = bi;
+    }
 
     var keep = [];
     var i, s, mx, my, inside;
     for (i = 0; i < segA.length; i++) {
       s = segA[i];
+      var kFwd = bFwd[keyOf(s[0], s[1], s[2], s[3])];
+      var kRev = bRev[keyOf(s[0], s[1], s[2], s[3])];
+      if (kFwd !== undefined) {
+        bTaken[kFwd] = true;
+        if (mode !== OP_DIFFERENCE) keep.push(s);
+        continue;
+      }
+      if (kRev !== undefined) {
+        bTaken[kRev] = true;
+        if (mode === OP_DIFFERENCE) keep.push(s);
+        continue;
+      }
       mx = (s[0] + s[2]) / 2; my = (s[1] + s[3]) / 2;
       inside = contains(b, mx, my);
       if (mode === OP_INTERSECTION ? inside : !inside) keep.push(s);
     }
     for (i = 0; i < segB.length; i++) {
+      if (bTaken[i]) continue;              // already decided with A's copy
       s = segB[i];
       mx = (s[0] + s[2]) / 2; my = (s[1] + s[3]) / 2;
       inside = contains(a, mx, my);
