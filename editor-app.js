@@ -512,6 +512,7 @@ var menus=[
     {label:"Save a Copy...",action:"saveCopy"},
     {type:"sep"},
     {label:"Export as HTML...",action:"export",shortcut:"Ctrl+Shift+S"},
+    {label:"Export as Animated GIF...",action:"exportAnimGIF"},
     {label:"Export as Sprite Sheet...",action:"exportGIF"},
     {label:"Export as Video (WebM/MP4)...",action:"exportMP4"},
     {label:"Export as SVG...",action:"exportSVG"},
@@ -12064,6 +12065,9 @@ function doActionInner(a){
     break;
   case "export":
     genHTML(function(html){dlFile(html,"animation.html","text/html");});
+    break;
+  case "exportAnimGIF":
+    showGIFDialog();
     break;
   case "exportGIF":
     exportAsGIF();
@@ -24185,6 +24189,7 @@ function docPublish(){
 
 var PUBLISH_TARGETS=[
   ["html","HTML page","export"],
+  ["gif","Animated GIF","exportAnimGIF"],
   ["sprite","Sprite sheet","exportGIF"],
   ["video","Video (WebM/MP4)","exportMP4"],
   ["svg","SVG (current frame)","exportSVG"],
@@ -24594,12 +24599,17 @@ function genHTML(callback){
 // otherwise "Export as GIF" quietly exported whichever symbol you happened to
 // have open, and the HTML export (which has always used the scene) and the
 // raster exports disagreed about what the document was.
-function renderFrameToCanvas(frameNum, w, h) {
+function renderFrameToCanvas(frameNum, w, h, transparent) {
   var c = document.createElement("canvas");
   c.width = w; c.height = h;
   var cx = c.getContext("2d");
-  cx.fillStyle = doc.backgroundColor || "#FFFFFF";
-  cx.fillRect(0, 0, w, h);
+  /* `transparent` leaves the stage colour unpainted, which is what an
+     animated GIF with a transparent background needs. Every existing caller
+     omits it and gets the stage colour, exactly as before. */
+  if (!transparent) {
+    cx.fillStyle = doc.backgroundColor || "#FFFFFF";
+    cx.fillRect(0, 0, w, h);
+  }
   withAllLayers(function () {
     // flattenScenes() returns the current scene's output layers untouched when
     // there is only one, so nothing about the common case changes.
@@ -24651,6 +24661,142 @@ function exportAsGIF() {
     document.body.removeChild(st);
     dlFile(html, "animation-sprite.html", "text/html");
   }, 50);
+}
+
+/* ------------------------------------------------------------------ *
+ * Animated GIF
+ *
+ * Flash's File > Export Movie had Animated GIF, and it is how most Flash
+ * animation actually left Flash. The encoder is flashy-gif.js; this is the
+ * part that knows about the document: which frames, how big, how long each
+ * one lasts, and what to do about the stage colour.
+ * ------------------------------------------------------------------ */
+
+/** The export's sticky settings, the way the Publish dialog's were. */
+var gifSettings = {
+  colors: 256, dither: null, scale: 1,
+  /* Transparent means the stage colour is NOT painted, so the GIF can sit on
+     any page. Off by default, because a GIF with a hard alpha edge looks
+     worse on an unexpected background than one with the colour baked in --
+     GIF has one transparent index, not an alpha channel. */
+  transparent: false,
+  loop: true, optimize: true
+};
+
+/**
+ * Every frame of the scene as ImageData, at the export scale.
+ *
+ * Deliberately not the stage canvas: that is the viewport, with the pasteboard
+ * and the selection chrome on it. renderFrameToCanvas draws the movie alone,
+ * which is the same thing the sprite sheet and the video export use.
+ */
+function gifFrames(scale, transparent) {
+  var maxF = sceneMaxFrame();
+  var w = Math.max(1, Math.round(doc.width * scale));
+  var h = Math.max(1, Math.round(doc.height * scale));
+  var out = [];
+  for (var f = 1; f <= maxF; f++) {
+    var src = renderFrameToCanvas(f, doc.width, doc.height, transparent);
+    var c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    var cx = c.getContext("2d");
+    // Smoothed on the way down, because a halved cartoon frame drawn with
+    // nearest neighbour loses its thin lines completely.
+    cx.imageSmoothingEnabled = true;
+    cx.drawImage(src, 0, 0, w, h);
+    out.push(cx.getImageData(0, 0, w, h));
+  }
+  return out;
+}
+
+/** The GIF bytes for the current scene, with `opts` overriding the settings. */
+function buildGIF(opts) {
+  var o = Object.assign({}, gifSettings, opts || {});
+  var frames = gifFrames(o.scale || 1, !!o.transparent);
+  if (!frames.length) return null;
+  /* GIF delays are in HUNDREDTHS of a second, and 24fps is 4.1667 of them --
+     so the rounding is visible as a speed difference over a long animation.
+     Rounding per frame against a running total keeps the whole thing the
+     right length even though each delay is an integer. */
+  var per = 100 / Math.max(1, doc.fps);
+  var delays = [], acc = 0, emitted = 0;
+  for (var i = 0; i < frames.length; i++) {
+    acc += per;
+    var d = Math.max(1, Math.round(acc - emitted));
+    delays.push(d);
+    emitted += d;
+  }
+  return FlashyGif.encode(frames, {
+    colors: o.colors,
+    dither: o.dither,
+    delay: delays,
+    loop: o.loop ? 0 : null,
+    transparent: !!o.transparent,
+    optimize: o.optimize !== false
+  });
+}
+
+/** File > Export as Animated GIF. */
+function showGIFDialog() {
+  var maxF = sceneMaxFrame();
+  showDialog({
+    title: "Export Animated GIF",
+    okLabel: "Export",
+    footnote: maxF + " frame" + (maxF === 1 ? "" : "s") + " at " + doc.fps +
+              " fps. GIF times each frame in hundredths of a second, so the "+
+              "playback speed is rounded to that -- spread across the whole "+
+              "animation, not dropped from every frame.",
+    fields: [
+      { name: "colors", label: "Colours", type: "select", value: String(gifSettings.colors),
+        options: [["256","256"],["128","128"],["64","64"],["32","32"],
+                  ["16","16"],["8","8"],["4","4"],["2","2 (black and white)"]],
+        hint: "A global palette over every frame, chosen by median cut. A "+
+              "per-frame palette would make the colours shift as it plays." },
+      { name: "dither", label: "Dither", type: "select",
+        value: gifSettings.dither || "none",
+        options: [["none","None"],["ordered","Ordered"],["diffusion","Diffusion"]],
+        hint: "None is right for flat cartoon colour. Ordered is stable "+
+              "frame to frame; diffusion is smoother on one frame but its "+
+              "texture crawls when the picture moves." },
+      { name: "scale", label: "Scale", type: "select", value: String(gifSettings.scale),
+        options: [["1","100%"],["0.5","50%"],["0.25","25%"],["2","200%"]] },
+      { name: "loop", label: "Loop forever", type: "checkbox", value: gifSettings.loop },
+      { name: "transparent", label: "Transparent background", type: "checkbox",
+        value: gifSettings.transparent,
+        hint: "GIF has one transparent index, not an alpha channel, so a "+
+              "soft edge comes out hard. Leave it off unless the GIF has to "+
+              "sit on a background you do not control." },
+      { name: "optimize", label: "Store only what changed", type: "checkbox",
+        value: gifSettings.optimize,
+        hint: "Each frame is cropped to the part that moved. On a still "+
+              "background with a moving character that is most of the file." }
+    ],
+    onOk: function (v) {
+      gifSettings.colors = parseInt(v.colors, 10) || 256;
+      gifSettings.dither = v.dither === "none" ? null : v.dither;
+      gifSettings.scale = parseFloat(v.scale) || 1;
+      gifSettings.loop = !!v.loop;
+      gifSettings.transparent = !!v.transparent;
+      gifSettings.optimize = !!v.optimize;
+      var st = document.createElement("div");
+      st.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#333;color:#fff;padding:20px 40px;border-radius:8px;z-index:9999;font:14px sans-serif;";
+      st.textContent = "Encoding " + maxF + " frames...";
+      document.body.appendChild(st);
+      // A tick, so the message is on screen before the encode blocks the thread.
+      setTimeout(function () {
+        var bytes = null, err = null;
+        try { bytes = buildGIF(); } catch (e) { err = e; }
+        if (st.parentNode) document.body.removeChild(st);
+        if (!bytes) {
+          showMessage("Export Animated GIF",
+            err ? ("The GIF could not be encoded: " + err.message)
+                : "There are no frames to export.");
+          return;
+        }
+        dlFile(bytes, "animation.gif", "image/gif");
+      }, 50);
+    }
+  });
 }
 
 function exportAsMP4() {
@@ -27357,6 +27503,10 @@ function init(){
       if(!spine)return null;
       return St.decorate(spine, o.strokeStyle||"solid", Math.max(0.2, o.strokeWidth||1));
     },
+    /* Animated GIF: the real format, not a sprite sheet in a player. */
+    gifSettings: function(){ return Object.assign({}, gifSettings); },
+    gifFrames: gifFrames,
+    buildGIF: buildGIF,
     gradientHandles: gradientHandles,
     setGradientHandle: setGradientHandle,
     /** The pen, as its three gestures: place, shape the handle, finish. */
