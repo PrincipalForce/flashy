@@ -1044,7 +1044,7 @@ the first pass never had a row for.
 | Area | What is missing | Status |
 |---|---|---|
 | **Gradient fills** | No stop editor at all — more than two stops could exist in the save format and could not be authored. No overflow mode, no radial focal point, no gradient on a stroke. | ✅ Wave 14 |
-| **Drawing model** | Flash had two: Object Drawing, and the MERGE model where a new shape cuts and unions the ones it lands on. Flashy is object-only. | ⬜ |
+| **Drawing model** | Flash had two: Object Drawing, and the MERGE model where a new shape cuts and unions the ones it lands on. Flashy is object-only. | ✅ Wave 15 |
 | **Free Transform** | Scale, rotate and skew. No Distort (drag one corner freely) and no Envelope (Bézier warp). | ⬜ |
 | **Stroke styles** | Solid, dashed and dotted. No hairline, ragged, stipple or hatched, and no stroke-scaling mode. | ⬜ |
 | **Animated GIF** | "Export as Sprite Sheet" produces a PNG sheet. There is no animated GIF — the format the web still actually uses for a short loop. | ⬜ |
@@ -1102,3 +1102,71 @@ the first pass never had a row for.
     than losing the gradient.
 
     Covered by `tests/gradients.spec.js` (16 specs).
+
+### Wave 15 — merge drawing, and a boolean bug four layers deep
+
+70. ✅ **Merge drawing.** Flash had two drawing models and a button to switch
+    between them. Object Drawing is what Flashy has always done — every shape
+    is its own thing and they stack. MERGE drawing is the one Flash started
+    with: a shape drawn in the same colour JOINS what it lands on, and one in
+    a different colour CUTS it.
+
+    It is how you draw a mouth on a face without making a mask, how you take a
+    bite out of a circle, and how most Flash artwork was actually made. The
+    only route before was the Combine Objects menu and three clicks per
+    operation.
+
+    Object Drawing stays the default, which is the opposite of Flash — every
+    document here was drawn under it, and changing the default would change
+    what an existing file does when you draw on it. The mode applies on DROP
+    as well as on draw, because Flash merged where a shape landed; a mode that
+    only worked while drawing would be half a feature and the confusing half.
+    Symbols, text and bitmaps are left alone, as Flash left them.
+
+71. ✅ **The coincident-edge bug in `FlashyGeom`.** Building the above turned
+    up a real fault underneath Combine Objects, the eraser, the paint bucket
+    and the shaped brush: the booleans were wrong whenever two shapes shared
+    an edge **exactly**.
+
+        union(rect(50,50,100,100), rect(100,50,100,100))
+
+    — two squares overlapping by half, sharing their top and bottom edges —
+    came back as the second square alone. Two rectangles drawn aligned is not
+    an edge case in any useful sense, and `combineUnion` on the Modify menu
+    was losing one of them.
+
+    It was four faults stacked, each hiding the next, and each one looked like
+    the whole problem until it was fixed:
+
+    1. **`crossCut` skipped parallel edges on purpose**, with a comment saying
+       the midpoint classifier would place them correctly. It cannot: the
+       midpoint of a shared edge lies on the other region’s boundary, where
+       the winding test is a coin toss. T-junctions were skipped too, so the
+       two operands’ segment lists never even lined up.
+    2. **Collinearity cannot be read from the cross product here.** B is
+       jittered by 1e-5 to break ties, which leaves two nominally parallel
+       edges with a `den` of about 1e-3 — a thousand times the parallel
+       threshold. The first fix therefore changed absolutely nothing, which is
+       a useful kind of failure: it proved the branch was dead rather than
+       wrong.
+    3. **The bounding-box pre-reject is exact.** An axis-aligned edge has a
+       box of zero height, so a jittered horizontal edge sat a few millionths
+       outside it and was rejected before any of the new work could look.
+    4. **Chaining matches endpoints at a millionth of a pixel**, and a shared
+       run’s ends are a vertex of one operand and a point on the other — so
+       the seam broke the loop, which then failed to close and was discarded.
+       Fixed by welding B onto A before splitting, **vertices before edges**:
+       snapping a near-coincident corner to the nearest point on an EDGE put
+       it a fraction along that edge instead of at its end, which unioned two
+       identical squares into a triangle.
+
+    A shared edge is now settled by a rule rather than a probe, and the rule
+    turns on whether the two regions lie on the same side of it: same
+    direction means the edge is on the boundary of a union and interior to a
+    difference; opposite means they face each other across it, so it is
+    interior to a union and is exactly what a difference cuts along.
+
+    `tests/geom-booleans.spec.js` (16 specs) pins the booleans at the level
+    their callers depend on, and was written FIRST — ten failing, six passing,
+    which is what separated the broken cases from the ones that always worked.
+    All 801 existing tests still pass.
