@@ -58,6 +58,10 @@
     { id: "align", title: "Align", home: "right", with: "props", closed: true },
     { id: "info", title: "Info", home: "right", with: "props", closed: true },
     { id: "transform", title: "Transform", home: "right", with: "props", closed: true },
+    /* The Motion Editor: one easing curve per animatable property. Closed by
+       default and docked with Properties, because it is only meaningful while
+       standing on a tween. */
+    { id: "motion", title: "Motion Editor", home: "right", with: "props", closed: true },
     /* Scene lists the movie's scenes and switches between them. It joins the
        Library's group — both answer "what is this document made of". */
     { id: "scene", title: "Scene", home: "right", with: "library", closed: true },

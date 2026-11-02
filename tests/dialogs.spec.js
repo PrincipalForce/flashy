@@ -88,17 +88,20 @@ test("Document Settings applies all four fields and validates", async ({ page })
   await page.evaluate(() => window._flashyEditor.doAction("docSettings"));
 
   const d = page.locator("#fy-dialog");
+  /* Field 0 is now Ruler units, a select: Document Properties in Flash set
+     the units and the stage size together, because the size is expressed IN
+     those units. Width, height, frame rate and background follow it. */
   const inputs = d.locator(".fy-dialog-input");
-  await inputs.nth(0).fill("800");
-  await inputs.nth(1).fill("600");
-  await inputs.nth(2).fill("30");
-  await inputs.nth(3).fill("not-a-colour");
+  await inputs.nth(1).fill("800");
+  await inputs.nth(2).fill("600");
+  await inputs.nth(3).fill("30");
+  await inputs.nth(4).fill("not-a-colour");
   await d.getByText("OK").click();
 
   // A bad colour keeps the dialog open with a message, rather than silently
   // writing "not-a-colour" into the document as the old prompt() did.
   await expect(d.locator(".fy-dialog-error")).toContainText("hex colour");
-  await inputs.nth(3).fill("#102030");
+  await inputs.nth(4).fill("#102030");
   await d.getByText("OK").click();
   await expect(d).toHaveCount(0);
 

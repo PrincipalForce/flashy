@@ -733,7 +733,10 @@ test("each tool brings its own options, and the strip hides when there are none"
   // Selection has no options.
   await expect(page.locator("#tool-options")).toBeHidden();
 
-  await page.locator('button[title*="Brush"]').click();
+  /* By data-tool, not by title: the Spray Brush's title also contains
+     "Brush", and a selector that matches two tools is a selector that will
+     match three. */
+  await page.locator('button[data-tool="brush"]').click();
   await expect(page.locator("#tool-options")).toBeVisible();
   await expect(page.locator("#tool-options")).toContainText("px");
   // The brush gets the bracket keys too.
@@ -742,12 +745,12 @@ test("each tool brings its own options, and the strip hides when there are none"
   expect(await page.evaluate(() => window._flashyAI.toolOptions().brushSize))
     .toBeGreaterThan(before);
 
-  await page.locator('button[title*="Pencil"]').click();
+  await page.locator('button[data-tool="pencil"]').click();
   await expect(page.locator('.tool-opt-btn[data-shape="smooth"]')).toHaveClass(/active/);
   await page.locator('.tool-opt-btn[data-shape="ink"]').click();
   expect(await page.evaluate(() => window._flashyAI.toolOptions().pencilMode)).toBe("ink");
 
-  await page.locator('button[title*="Selection Tool"]').click();
+  await page.locator('button[data-tool="select"]').click();
   await expect(page.locator("#tool-options")).toBeHidden();
 });
 

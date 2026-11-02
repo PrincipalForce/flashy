@@ -100,6 +100,76 @@
   Easing.cubicBezier = cubicBezierEase;
   Easing.resolve = resolveEasing;
 
+  /* -------------------- the Motion Editor's per-property curves ---------
+   *
+   * Flash had ONE easing curve per tween. CS4's Motion Editor gave each
+   * animatable property its own, and it is the difference between a bouncing
+   * ball that squashes on impact and one that squashes gradually all the way
+   * down: the position wants a sharp ease-in and the scale wants a snap right
+   * at the end, and a single curve cannot say both.
+   *
+   * `kf.propEase` is {property: name} or {property: [x1,y1,x2,y2]}, and
+   * anything absent falls back to the tween's own `easing`/`easeBezier` --
+   * so a document that never opens the Motion Editor behaves exactly as it
+   * always did, and a property that is left alone stays in step with the
+   * rest.
+   * ------------------------------------------------------------------ */
+
+  /* The properties a motion tween animates, in the order the panel shows
+     them: where it is, how big, how turned, how visible. Grouped, because a
+     flat list of fourteen rows is not a panel anyone reads. */
+  Easing.MOTION_PROPS = [
+    { key: 'x', label: 'X', group: 'Position' },
+    { key: 'y', label: 'Y', group: 'Position' },
+    { key: 'width', label: 'Width', group: 'Size' },
+    { key: 'height', label: 'Height', group: 'Size' },
+    { key: 'scaleX', label: 'Scale X', group: 'Size' },
+    { key: 'scaleY', label: 'Scale Y', group: 'Size' },
+    { key: 'rotation', label: 'Rotation', group: 'Rotation and skew' },
+    { key: 'skewX', label: 'Skew X', group: 'Rotation and skew' },
+    { key: 'skewY', label: 'Skew Y', group: 'Rotation and skew' },
+    { key: 'alpha', label: 'Alpha', group: 'Colour' },
+    { key: 'filters', label: 'Filters', group: 'Colour' },
+    { key: 'colorEffect', label: 'Colour effect', group: 'Colour' },
+    { key: 'cornerRadius', label: 'Corner radius', group: 'Shape' },
+    { key: 'ovalStart', label: 'Oval start', group: 'Shape' },
+    { key: 'ovalEnd', label: 'Oval end', group: 'Shape' },
+    { key: 'ovalInner', label: 'Inner radius', group: 'Shape' }
+  ];
+
+  /** True when `prop` is one the Motion Editor can give its own curve. */
+  Easing.isMotionProp = function (prop) {
+    return Easing.MOTION_PROPS.some(function (p) { return p.key === prop; });
+  };
+
+  /**
+   * The eased amount for one property of a tween.
+   *
+   * `kf` carries the tween's own easing and, optionally, a per-property
+   * override. A string override is a named preset; an array is that
+   * property's own cubic-bezier curve.
+   */
+  Easing.atFor = function (kf, prop, t) {
+    var x = Math.min(1, Math.max(0, t));
+    var own = kf && kf.propEase ? kf.propEase[prop] : null;
+    if (own) {
+      if (Array.isArray(own) && own.length >= 4) {
+        return cubicBezierEase(own[0], own[1], own[2], own[3])(x);
+      }
+      if (typeof own === 'string' && Easing[own]) return Easing[own](x);
+    }
+    return resolveEasing(kf && kf.easing, kf && kf.easeBezier)(x);
+  };
+
+  /** True when any property of this tween has a curve of its own. */
+  Easing.hasPropEase = function (kf) {
+    if (!kf || !kf.propEase) return false;
+    for (var k in kf.propEase) {
+      if (Object.prototype.hasOwnProperty.call(kf.propEase, k) && kf.propEase[k]) return true;
+    }
+    return false;
+  };
+
   /* -------------------- Output --------------------
    *
    * Where trace() goes.
@@ -1916,6 +1986,20 @@
          is every object in a document that does not use them. */
       this.filters = null;
       this.colorTransform = null;
+      /* Flash's "Cache as bitmap". The object is drawn once into an offscreen
+         canvas and blitted from then on, which is the whole trade: a complex
+         vector drawing costs one blit per frame instead of hundreds of path
+         operations, and the cost is that it is PIXELS, so scaling or rotating
+         it afterwards resamples rather than re-renders.
+         `cacheBounds` is {x,y,w,h} in this object's own untransformed space.
+         Without it there is nothing to size the surface from -- a display
+         object has no general bounds here -- so caching is simply skipped,
+         which is the honest failure: a wrong guess at the bounds would clip
+         the artwork and look like a rendering bug. */
+      this.cacheAsBitmap = false;
+      this.cacheBounds = null;
+      this._cacheCanvas = null;
+      this._cacheAt = null;
       this.parent = null;
       this._listeners = {};
     }
@@ -1968,8 +2052,66 @@
     _renderFiltered(ctx) {
       const hasF = this.filters && this.filters.length &&
                    this.filters.some(f => f && f.enabled !== false);
-      if (!hasF && !Filters.hasColor(this.colorTransform)) { this.render(ctx); return; }
-      Filters.render(ctx, this.filters, this.colorTransform, c => this.render(c));
+      const paint = (!hasF && !Filters.hasColor(this.colorTransform))
+        ? (c => this.render(c))
+        : (c => Filters.render(c, this.filters, this.colorTransform, cc => this.render(cc)));
+      if (this.cacheAsBitmap && this.cacheBounds) {
+        if (this._renderCached(ctx, paint)) return;
+      }
+      paint(ctx);
+    }
+
+    /** Invalidate the cached surface, so the next frame redraws it. */
+    invalidateCache() {
+      this._cacheCanvas = null;
+      this._cacheAt = null;
+      return this;
+    }
+
+    /**
+     * Draw through the cached surface, or report that it could not be done.
+     *
+     * The surface is rendered at the DEVICE scale the context is currently at,
+     * so a cached object at 100% zoom is pixel-for-pixel what it would have
+     * been uncached. Changing that scale rebuilds it -- the alternative is a
+     * blurry object the moment anyone zooms in, which is worse than losing the
+     * cache.
+     */
+    _renderCached(ctx, paint) {
+      if (typeof document === 'undefined') return false;
+      const b = this.cacheBounds;
+      const w = Math.abs(b.w || 0), h = Math.abs(b.h || 0);
+      if (!(w > 0) || !(h > 0)) return false;
+      const t = ctx.getTransform ? ctx.getTransform() : null;
+      const sx = t ? Math.hypot(t.a, t.b) : 1;
+      const sy = t ? Math.hypot(t.c, t.d) : 1;
+      const pw = Math.ceil(w * sx), ph = Math.ceil(h * sy);
+      /* A surface bigger than this is not a saving: the blit costs as much as
+         the drawing and the memory is real. Flash had the same cliff and the
+         same answer -- stop caching rather than cache badly. */
+      if (!(pw > 0) || !(ph > 0) || pw > 4096 || ph > 4096) return false;
+      const key = pw + 'x' + ph;
+      if (!this._cacheCanvas || this._cacheAt !== key) {
+        const c = document.createElement('canvas');
+        c.width = pw; c.height = ph;
+        const cx = c.getContext('2d');
+        if (!cx) return false;
+        // The object draws around its own origin, so the surface is shifted
+        // by the bounds' top-left and scaled to the device.
+        cx.setTransform(sx, 0, 0, sy, -b.x * sx, -b.y * sy);
+        paint(cx);
+        this._cacheCanvas = c;
+        this._cacheAt = key;
+      }
+      ctx.save();
+      /* Blitted in the object's own space at 1/scale, so the context's
+         transform still places and orients it: cacheAsBitmap caches the
+         RASTERISATION, not the position. */
+      ctx.translate(b.x, b.y);
+      ctx.scale(1 / sx, 1 / sy);
+      ctx.drawImage(this._cacheCanvas, 0, 0);
+      ctx.restore();
+      return true;
     }
 
     removeFromParent() { if (this.parent) this.parent.removeChild(this); return this; }

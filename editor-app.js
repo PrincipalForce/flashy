@@ -14,7 +14,7 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";/* Flash's Scale menu for a stroke: which of the instance's scale factors reach the line width. "none" is what keeps a UI frame a 1px box however the symbol around it is sized. */this.strokeScale="normal";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Free Transform's Distort and Envelope. {kind:"distort"|"envelope", points:[...]} in the object's own box coordinates, or null -- and null costs the render path nothing. */this.warp=null;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Text kinds and field options. `textType` is the big one: a STATIC field is
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";/* Flash's Scale menu for a stroke: which of the instance's scale factors reach the line width. "none" is what keeps a UI frame a 1px box however the symbol around it is sized. */this.strokeScale="normal";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Free Transform's Distort and Envelope. {kind:"distort"|"envelope", points:[...]} in the object's own box coordinates, or null -- and null costs the render path nothing. */this.warp=null;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Flash's "Use runtime bitmap caching". The object is drawn once into an offscreen canvas and blitted from then on -- a complex vector drawing costs one blit per frame instead of hundreds of path operations. The trade is that it becomes PIXELS, so scaling or rotating it afterwards resamples rather than re-renders, which is why the default is off and why Flash's advice was to cache what does not change shape. */this.cacheAsBitmap=false;/* Text kinds and field options. `textType` is the big one: a STATIC field is
    drawn and forgotten, a DYNAMIC one has a name so a script can write to it,
    and an INPUT one can be typed into. Without the last two there is no score
    display, no form and no typed-in name. All default to the static behaviour
@@ -31,8 +31,8 @@ if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clon
    `easeBezier` is a custom easing curve; `rotateDir`/`rotateTimes` make a
    tween spin instead of taking the short way round; `tweenScale` is Flash's
    Scale checkbox. All default to the behaviour documents already have. */
-function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;this.orientToPath=false;this.tweenSnap=false;this.tweenSync=false;this.shapeHints=null;}
-KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.tweenSnap=!!this.tweenSnap;c.tweenSync=!!this.tweenSync;c.effect=this.effect?JSON.parse(JSON.stringify(this.effect)):null;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;return c;};
+function KeyFrame(i){this.index=i;this.duration=1;this.tweenType="none";this.easing="linear";this.objects=[];this.script="";this.label="";this.labelType="name";this.sound=null;this.easeBezier=null;this.rotateDir="none";this.rotateTimes=1;this.tweenScale=true;this.orientToPath=false;this.tweenSnap=false;this.tweenSync=false;this.shapeHints=null;/* The Motion Editor: one easing curve per animatable property, as {property: presetName | [x1,y1,x2,y2]}. Null means every property follows this tween's own `easing`, which is what every document written before this meant. */this.propEase=null;}
+KeyFrame.prototype.clone=function(){var c=new KeyFrame(this.index);c.duration=this.duration;c.tweenType=this.tweenType;c.easing=this.easing;c.objects=this.objects.map(function(o){return o.clone();});c.script=this.script;c.label=this.label;c.labelType=this.labelType||"name";c.sound=this.sound?cloneSound(this.sound):null;c.easeBezier=this.easeBezier?this.easeBezier.slice():null;c.rotateDir=this.rotateDir||"none";c.rotateTimes=this.rotateTimes||1;c.tweenScale=this.tweenScale!==false;c.orientToPath=!!this.orientToPath;c.tweenSnap=!!this.tweenSnap;c.tweenSync=!!this.tweenSync;c.effect=this.effect?JSON.parse(JSON.stringify(this.effect)):null;c.shapeHints=this.shapeHints?this.shapeHints.map(function(h){return h.slice();}):null;/* `propEase` nests arrays inside an object, so a shallow copy would have two keyframes sharing one set of curves -- the same trap group children, filter stacks and sound envelopes each fell into. */c.propEase=this.propEase?JSON.parse(JSON.stringify(this.propEase)):null;return c;};
 function cloneSound(s){
   return {
     asset:s.asset,sync:s.sync||"stream",
@@ -523,6 +523,7 @@ var menus=[
     {label:"Revert",action:"revert"},
     {type:"sep"},
     {label:"Document Settings...",action:"docSettings"},
+    {label:"Bitmap Properties...",action:"bitmapSettings"},
     {label:"Match Stage Size to Contents",action:"matchStage"},
     {label:"Publish Settings...",action:"publishSettings"},
     {label:"Publish",action:"publish",shortcut:"Ctrl+F12"},
@@ -578,6 +579,7 @@ var menus=[
     {label:"Fit in Window",action:"zoomFit",shortcut:"Ctrl+2"},
     {type:"sep"},
     {label:"Show Grid",action:"grid",shortcut:"Ctrl+''''"},
+    {label:"Edit Grid...",action:"gridSettings"},
     {label:"Show Rulers",action:"rulers",shortcut:"Ctrl+Alt+Shift+R"},
     {label:"Show Guides",action:"guidesShow"},
     {label:"Clear Guides",action:"guidesClear"},
@@ -904,6 +906,12 @@ var TOOLS=[
   {id:"polystar",label:"PolyStar Tool \u2014 polygons and stars",svg:'<path d="M7,1 L8.8,5.2 L13,5.6 L9.8,8.5 L10.7,12.8 L7,10.6 L3.3,12.8 L4.2,8.5 L1,5.6 L5.2,5.2 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"pencil",label:"Pencil Tool (Y)",key:"y",svg:'<path d="M2,12 L4,10 L10,4 L12,2 L11,3 L5,9 L3,11 Z" fill="none" stroke="currentColor" stroke-width="1"/>'},
   {id:"brush",label:"Brush Tool (B)",key:"b",svg:'<path d="M9,1 Q12,4 8,8 Q6,10 3,13 Q2,12 4,9 Q5,7 6,6 L9,1 Z" fill="currentColor"/>'},
+  /* Flash CS4's two generative tools, and the only ones in the box that make
+     artwork rather than edit it. Both produce ordinary objects, which is how
+     Flash's worked and is what makes them safe: a live procedural fill would
+     mean never being able to fix one leaf. */
+  {id:"deco",label:"Deco Tool (U) \u2014 drag out an area to fill it with a pattern",key:"u",svg:'<circle cx="3.5" cy="3.5" r="1.6" fill="currentColor"/><circle cx="10.5" cy="3.5" r="1.6" fill="currentColor"/><circle cx="7" cy="7" r="1.6" fill="currentColor"/><circle cx="3.5" cy="10.5" r="1.6" fill="currentColor"/><circle cx="10.5" cy="10.5" r="1.6" fill="currentColor"/>'},
+  {id:"spray",label:"Spray Brush (G) \u2014 drag to scatter copies of a symbol",key:"g",svg:'<path d="M3,11 L6,8 L8,10 L5,13 Z" fill="currentColor"/><circle cx="9" cy="5" r="1.1" fill="currentColor"/><circle cx="12" cy="3" r="0.9" fill="currentColor"/><circle cx="11.5" cy="7" r="0.8" fill="currentColor"/><circle cx="8" cy="2" r="0.7" fill="currentColor"/>'},
   {id:"eraser",label:"Eraser Tool (E) — erases vector shapes and bitmaps alike",key:"e",svg:'<path d="M5.5,11.5 L1.5,7.5 L7.5,1.5 L11.5,5.5 Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><line x1="3.5" y1="9.5" x2="9.5" y2="3.5" stroke="currentColor" stroke-width="1"/><line x1="1" y1="12.5" x2="13" y2="12.5" stroke="currentColor" stroke-width="1.2"/>'},
   {id:"bucket",label:"Paint Bucket (K)",key:"k",svg:'<path d="M3,5 L7,1 L11,5 L7,9 Z" fill="currentColor" opacity="0.4"/><path d="M2,9 L2,13 L12,13 L12,9 L10,7 L7,10 L4,7 Z" fill="currentColor"/>'},
   {id:"inkbottle",label:"Ink Bottle (S) — click a shape to restyle its stroke",key:"s",svg:'<path d="M5,1 L9,1 L9,4 L11,7 L11,13 L3,13 L3,7 L5,4 Z" fill="none" stroke="currentColor" stroke-width="1"/><rect x="4" y="9" width="6" height="3.5" fill="currentColor"/>'},
@@ -975,6 +983,84 @@ function newStrokeStyle(){
 }
 
 function toolOptionSpec(tool){
+  if(tool==="deco"){
+    return [
+      {type:"choice",title:"Deco pattern",
+       options:[["grid","\u2237","Grid fill \u2014 rows and columns"],
+                ["vine","\u2740","Vine fill \u2014 a climbing stem with leaves"],
+                ["symmetry","\u273b","Symmetry brush \u2014 a kaleidoscope"],
+                ["scatter","\u2059","Random scatter"]],
+       get:function(){return decoSettings.pattern;},
+       set:function(v){decoSettings.pattern=v;updateToolOptions();}},
+      {type:"label",text:function(){return decoSettings.size+" px";}},
+      {type:"range",min:2,max:120,step:1,title:"Stamp size",
+       get:function(){return decoSettings.size;},
+       set:function(v){decoSettings.size=v;updateToolOptions();}},
+      {type:"label",hidden:function(){
+         return decoSettings.pattern!=="grid"&&decoSettings.pattern!=="symmetry";
+       },text:function(){return "every "+decoSettings.spacing;}},
+      {type:"range",min:4,max:160,step:1,title:"Spacing between stamps",
+       hidden:function(){
+         return decoSettings.pattern!=="grid"&&decoSettings.pattern!=="symmetry";
+       },
+       get:function(){return decoSettings.spacing;},
+       set:function(v){decoSettings.spacing=v;updateToolOptions();}},
+      {type:"label",hidden:function(){
+         return decoSettings.pattern!=="vine"&&decoSettings.pattern!=="scatter";
+       },text:function(){return decoSettings.count+" stamps";}},
+      {type:"range",min:2,max:400,step:1,title:"How many stamps",
+       hidden:function(){
+         return decoSettings.pattern!=="vine"&&decoSettings.pattern!=="scatter";
+       },
+       get:function(){return decoSettings.count;},
+       set:function(v){decoSettings.count=v;updateToolOptions();}},
+      {type:"label",hidden:function(){return decoSettings.pattern!=="symmetry";},
+       text:function(){return decoSettings.branches+" arms";}},
+      {type:"range",min:2,max:24,step:1,title:"How many arms",
+       hidden:function(){return decoSettings.pattern!=="symmetry";},
+       get:function(){return decoSettings.branches;},
+       set:function(v){decoSettings.branches=v;updateToolOptions();}},
+      {type:"button",label:"Reseed",
+       title:"A different arrangement from the same settings",
+       click:function(){
+         /* The seed is a SETTING rather than the clock, so the same gesture
+            twice gives the same artwork -- which is what makes an accidental
+            undo recoverable. Reseeding is therefore a deliberate act. */
+         decoSettings.seed=(decoSettings.seed*1103515245+12345)>>>8;
+         updateToolOptions();
+       }}
+    ];
+  }
+  if(tool==="spray"){
+    return [
+      {type:"label",text:function(){return spraySettings.size+" px";}},
+      {type:"range",min:2,max:160,step:1,title:"Brush size \u2014 how wide the scatter is",
+       get:function(){return spraySettings.size;},
+       set:function(v){spraySettings.size=v;updateToolOptions();}},
+      {type:"label",text:function(){return "every "+spraySettings.spacing;}},
+      {type:"range",min:2,max:80,step:1,title:"Spacing along the drag",
+       get:function(){return spraySettings.spacing;},
+       set:function(v){spraySettings.spacing=v;updateToolOptions();}},
+      {type:"choice",title:"Jitter",
+       options:[["none","\u25cf","No jitter \u2014 every stamp the same"],
+                ["some","\u25d1","Some size and rotation jitter"],
+                ["lots","\u25cc","Heavy jitter"]],
+       get:function(){
+         if(spraySettings.scaleJitter<=0.01)return "none";
+         return spraySettings.scaleJitter>0.6?"lots":"some";
+       },
+       set:function(v){
+         spraySettings.scaleJitter=v==="none"?0:v==="lots"?0.9:0.4;
+         spraySettings.rotationJitter=v==="none"?0:v==="lots"?180:45;
+         updateToolOptions();
+       }},
+      {type:"button",label:"Reseed",title:"A different scatter from the same settings",
+       click:function(){
+         spraySettings.seed=(spraySettings.seed*1103515245+12345)>>>8;
+         updateToolOptions();
+       }}
+    ];
+  }
   if(tool==="transform"){
     /* Flash's four Free Transform modifiers. Scale/rotate/skew is the
        Standard mode and is driven from the Transform panel; Distort and
@@ -1406,15 +1492,27 @@ function render(){
   ctx.restore();
   // grid
   if(showGrid){
-    ctx.strokeStyle="rgba(0,0,0,0.12)";
+    /* Its own colour, at a fixed low opacity. A hard-coded grey was invisible
+       over grey artwork, which is most of a greyscale drawing. */
+    ctx.strokeStyle=gridRGBA(gridColor,0.35);
     ctx.lineWidth=0.5;
-    for(var gx=0;gx<=doc.width;gx+=gridSize){
-      var px=gx*zoom+panX;
-      ctx.beginPath();ctx.moveTo(px,panY);ctx.lineTo(px,panY+sh);ctx.stroke();
+    /* Separate spacings. A grid matched to a tile sheet, a comic panel layout
+       or a line of text is rarely square, and one number could not say so. */
+    var stepX=Math.max(0.001,gridX),stepY=Math.max(0.001,gridY);
+    /* Skipped when the lines would be closer together than a screen pixel:
+       at that point the grid is a flat wash that hides the artwork, and
+       drawing thousands of lines to produce it is the slow way to do it. */
+    if(stepX*zoom>=2){
+      for(var gx=0;gx<=doc.width+1e-6;gx+=stepX){
+        var px=gx*zoom+panX;
+        ctx.beginPath();ctx.moveTo(px,panY);ctx.lineTo(px,panY+sh);ctx.stroke();
+      }
     }
-    for(var gy=0;gy<=doc.height;gy+=gridSize){
-      var py=gy*zoom+panY;
-      ctx.beginPath();ctx.moveTo(panX,py);ctx.lineTo(panX+sw,py);ctx.stroke();
+    if(stepY*zoom>=2){
+      for(var gy=0;gy<=doc.height+1e-6;gy+=stepY){
+        var py=gy*zoom+panY;
+        ctx.beginPath();ctx.moveTo(panX,py);ctx.lineTo(panX+sw,py);ctx.stroke();
+      }
     }
   }
   ctx.restore();
@@ -1618,11 +1716,19 @@ function drawSnapHints(){
  * `zoom` and `panX/panY` exactly, and a DOM ruler would have to re-derive both.
  * Dragging out of a ruler creates a guide — see rulerHitAxis / onMouseDown. */
 function rulerStep(){
-  // Keep labelled ticks at least ~50 screen pixels apart, on 1-2-5 steps.
-  var want=50/zoom,pow=Math.pow(10,Math.floor(Math.log(want)/Math.LN10));
+  /* Keep labelled ticks at least ~50 screen pixels apart, on 1-2-5 steps --
+     chosen in the DOCUMENT'S UNITS and converted back, so an inch ruler is
+     marked at halves and quarters rather than at 36 and 72 pixels. A ruler
+     whose ticks do not fall on round numbers of its own unit is worse than
+     no ruler. */
+  var perPx=docUnit()[2];
+  var want=(50/zoom)*perPx;
+  var pow=Math.pow(10,Math.floor(Math.log(want)/Math.LN10));
   var mults=[1,2,5,10];
-  for(var i=0;i<mults.length;i++)if(pow*mults[i]>=want)return pow*mults[i];
-  return pow*10;
+  for(var i=0;i<mults.length;i++){
+    if(pow*mults[i]>=want)return (pow*mults[i])/perPx;
+  }
+  return (pow*10)/perPx;
 }
 
 function drawRulers(){
@@ -1646,7 +1752,9 @@ function drawRulers(){
     var sx=Math.round(x*zoom+panX)+0.5;
     if(sx<RULER_W)continue;
     ctx.beginPath();ctx.moveTo(sx,RULER_W-5);ctx.lineTo(sx,RULER_W);ctx.stroke();
-    ctx.fillText(String(Math.round(x)),sx+2,2);
+    // Unsuffixed: the unit is in the Info panel, and "72 px" on every tick
+    // would be most of the ruler.
+    ctx.fillText(fmtUnits(x,false),sx+2,2);
   }
   var firstY=Math.floor((-panY/zoom)/step)*step;
   for(var y=firstY;y*zoom+panY<canvasH;y+=step){
@@ -1655,7 +1763,7 @@ function drawRulers(){
     ctx.beginPath();ctx.moveTo(RULER_W-5,sy);ctx.lineTo(RULER_W,sy);ctx.stroke();
     ctx.save();
     ctx.translate(2,sy+2);
-    ctx.fillText(String(Math.round(y)),0,0);
+    ctx.fillText(fmtUnits(y,false),0,0);
     ctx.restore();
   }
   // Where the pointer is, on both rulers — the readout the Info panel repeats
@@ -4102,13 +4210,100 @@ function colorTransformOf(o){
  * the engine uses, so a glow on the stage is the glow in the export.
  */
 function paintObj(cx,o,opts){
-  if(objHasEffects(o)&&window.Flashy&&Flashy.Filters){
-    Flashy.Filters.render(cx,o.filters,colorTransformOf(o),function(c){
-      paintObj9(c,o,opts);
-    });
-    return;
+  var paint=function(c){
+    if(objHasEffects(o)&&window.Flashy&&Flashy.Filters){
+      Flashy.Filters.render(c,o.filters,colorTransformOf(o),function(cc){
+        paintObj9(cc,o,opts);
+      });
+      return;
+    }
+    paintObj9(c,o,opts);
+  };
+  /* Runtime bitmap caching. Skipped while the object is SELECTED, because the
+     thing you are doing to a selected object is editing it and a cache that
+     has to be invalidated on every pointer move is pure cost. The stage is
+     also not where the win is -- it redraws on demand, and the player redraws
+     every frame -- but the stage has to agree with the player about what the
+     cached version looks like, or "cache as bitmap" would be a checkbox whose
+     effect you could only see after exporting. */
+  if(o.cacheAsBitmap&&selection.indexOf(o)<0&&paintCached(cx,o,paint))return;
+  paint(cx);
+}
+
+/* Cached surfaces, keyed by object id. Deliberately not held on the object:
+   an EditorObject is cloned for every undo snapshot and a canvas on it would
+   be copied with it, which is how a cache becomes a memory leak. */
+var cacheSurfaces = Object.create(null);
+
+/** Everything a cached surface depends on, as one string. */
+function cacheSignature(o){
+  /* The object's WHOLE record, position and transform included. The editor's
+     painter draws in stage coordinates -- paintObjRaw applies the object's own
+     translate and rotation -- so the surface is of the object where it sits,
+     and moving it has to rebuild. That is a narrower cache than the player's,
+     where the node carries its own transform and only the rasterisation is
+     cached; the trade here is correctness, because a surface blitted at the
+     wrong place is artwork in the wrong place.
+
+     JSON of the whole thing is coarse and that is the point: a cache that
+     misses an edit draws stale artwork, which is far worse than a cache that
+     rebuilds more often than it strictly must. */
+  var parts=[o.id];
+  try{
+    parts.push(JSON.stringify(plainObj(o)));
+  }catch(e){ return null; }
+  if(o.type==="symbol"){
+    /* A symbol's APPEARANCE lives in the library, not in the instance, so the
+       instance's own record cannot see an edit to it. The library entry's
+       serialised form can, and a symbol is exactly the thing people cache. */
+    try{ parts.push(JSON.stringify(doc.library[o.symbolName]||null)); }
+    catch(e){ return null; }
+    // ...and which frame of it is showing.
+    parts.push(String(curFrame));
   }
-  paintObj9(cx,o,opts);
+  return parts.join("|");
+}
+
+/** Draw `o` through a cached surface, or report that it could not be done. */
+function paintCached(cx,o,paint){
+  if(!cx.getTransform)return false;
+  var b=cacheStageBounds(o);
+  if(!b)return false;
+  var t=cx.getTransform();
+  var sx=Math.hypot(t.a,t.b)||1, sy=Math.hypot(t.c,t.d)||1;
+  var pw=Math.ceil(b.w*sx), ph=Math.ceil(b.h*sy);
+  // Past this size the blit costs as much as the drawing and the memory is
+  // real. Flash had the same cliff and the same answer: stop caching.
+  if(!(pw>0)||!(ph>0)||pw>4096||ph>4096)return false;
+  var sig=cacheSignature(o);
+  if(!sig)return false;
+  var key=sig+"@"+pw+"x"+ph;
+  var hit=cacheSurfaces[o.id];
+  if(!hit||hit.key!==key){
+    var c=document.createElement("canvas");
+    c.width=pw;c.height=ph;
+    var ccx=c.getContext("2d");
+    if(!ccx)return false;
+    /* The painter draws in stage coordinates, so the surface is shifted by
+       the footprint's top-left and scaled to the device. Everything inside
+       then lands where it would have on the stage, which is what makes the
+       cached and uncached pixels identical. */
+    ccx.setTransform(sx,0,0,sy,-b.x*sx,-b.y*sy);
+    paint(ccx);
+    hit={key:key,canvas:c};
+    cacheSurfaces[o.id]=hit;
+  }
+  cx.save();
+  cx.translate(b.x,b.y);
+  cx.scale(1/sx,1/sy);
+  cx.drawImage(hit.canvas,0,0);
+  cx.restore();
+  return true;
+}
+
+/** Throw away cached surfaces. Called when the document is replaced. */
+function clearCacheSurfaces(){
+  cacheSurfaces=Object.create(null);
 }
 
 /**
@@ -4597,10 +4792,19 @@ function easeAmount(t,easing,bezier){
  */
 function interpObj(a,b,t,easing,kf){
   var e=easeAmount(t,easing,kf&&kf.easeBezier);
+  /* Per-property easing, from the Motion Editor. `atFor` falls back to the
+     tween's own curve for anything with no override, so this is `e` for every
+     property of every tween nobody has touched -- and the one resolver is
+     shared with the exported player, as the single tween curve already was. */
+  var hasPE=!!(window.Flashy&&Flashy.Easing&&Flashy.Easing.hasPropEase&&
+               Flashy.Easing.hasPropEase(kf));
+  var easeOf=function(k){
+    return hasPE?Flashy.Easing.atFor(kf,k,t):e;
+  };
   var tmp=a.clone();
   var lerp=function(k,dflt){
     var av=a[k]!=null?a[k]:dflt,bv=b[k]!=null?b[k]:dflt;
-    return av+(bv-av)*e;
+    return av+(bv-av)*easeOf(k);
   };
   tmp.x=lerp("x",0);tmp.y=lerp("y",0);
   tmp.width=lerp("width",0);tmp.height=lerp("height",0);
@@ -4626,7 +4830,7 @@ function interpObj(a,b,t,easing,kf){
       if(to===from)to-=360;
       to-=360*(turns-1);
     }
-    tmp.rotation=from+(to-from)*e;
+    tmp.rotation=from+(to-from)*easeOf("rotation");
   }else{
     tmp.rotation=lerp("rotation",0);
   }
@@ -4656,8 +4860,8 @@ function interpObj(a,b,t,easing,kf){
      stack — same filters, in the same order — because there is no sensible
      interpolation between "blur" and "drop shadow", and guessing one would
      produce a frame that is neither. */
-  tmp.filters=lerpFilters(a.filters,b.filters,e);
-  tmp.colorEffect=lerpColorEffect(a.colorEffect,b.colorEffect,e);
+  tmp.filters=lerpFilters(a.filters,b.filters,easeOf("filters"));
+  tmp.colorEffect=lerpColorEffect(a.colorEffect,b.colorEffect,easeOf("colorEffect"));
   return tmp;
 }
 
@@ -5106,6 +5310,55 @@ function drawPrev(){
       ctx.restore();
       return;
     }
+  }
+  if(p.type==="deco"){
+    /* The area, and its stamp grid previewed as dots. A Deco fill is almost
+       impossible to aim from a plain rectangle: the thing you are judging is
+       how dense it will be, not where its corners are. */
+    var d1=s2c(Math.min(p.x1,p.x2),Math.min(p.y1,p.y2));
+    var d2=s2c(Math.max(p.x1,p.x2),Math.max(p.y1,p.y2));
+    ctx.strokeStyle="#0066FF";ctx.lineWidth=1;ctx.setLineDash([3,3]);
+    ctx.strokeRect(d1.x,d1.y,d2.x-d1.x,d2.y-d1.y);
+    ctx.setLineDash([]);
+    var reg={x:Math.min(p.x1,p.x2),y:Math.min(p.y1,p.y2),
+             w:Math.abs(p.x2-p.x1),h:Math.abs(p.y2-p.y1)};
+    if(reg.w>2&&reg.h>2){
+      /* Capped, and sampled rather than built: a 400-stamp scatter previewed
+         in full would make the drag stutter, and the point of a preview is to
+         keep the drag readable. */
+      var prevObjs=decoObjects(reg,{count:Math.min(decoSettings.count,120)});
+      ctx.fillStyle="rgba(0,102,255,0.45)";
+      for(var pi3=0;pi3<prevObjs.length&&pi3<240;pi3++){
+        var po=prevObjs[pi3];
+        var pc=s2c(po.x+po.width/2,po.y+po.height/2);
+        var pr=Math.max(1,(po.width/2)*zoom);
+        ctx.beginPath();ctx.arc(pc.x,pc.y,pr,0,Math.PI*2);ctx.fill();
+      }
+    }
+    ctx.restore();
+    return;
+  }
+  if(p.type==="spray"){
+    // The brush's reach at the pointer, plus the paint already laid down.
+    if(p.points&&p.points.length>=2){
+      ctx.fillStyle="rgba(0,102,255,0.4)";
+      var sp=sprayObjects(p.points,{});
+      for(var si3=0;si3<sp.length&&si3<400;si3++){
+        var so=sp[si3];
+        var sc3=s2c(so.x+so.width/2,so.y+so.height/2);
+        ctx.beginPath();
+        ctx.arc(sc3.x,sc3.y,Math.max(1,(so.width/2)*zoom),0,Math.PI*2);
+        ctx.fill();
+      }
+      var tipx=p.points[p.points.length-2],tipy=p.points[p.points.length-1];
+      var tip=s2c(tipx,tipy);
+      ctx.strokeStyle="rgba(0,102,255,0.8)";ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.arc(tip.x,tip.y,Math.max(2,spraySettings.size*zoom),0,Math.PI*2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
   }
   if(p.type==="rect"||p.type==="oval"||p.type==="line"||p.type==="text"){
     var p1=s2c(Math.min(p.x1,p.x2),Math.min(p.y1,p.y2));
@@ -5566,6 +5819,11 @@ function onMouseDown(e){
       return;
     }
     dragPreview={type:"eraser",points:[p.x,p.y]};
+  }else if(curTool==="deco"){
+    // Dragged out like a rectangle: the area is what gets filled.
+    dragPreview={type:"deco",x1:p.x,y1:p.y,x2:p.x,y2:p.y};
+  }else if(curTool==="spray"){
+    dragPreview={type:"spray",points:[p.x,p.y]};
   }else if(curTool==="text"){
     dragPreview={type:"text",x1:p.x,y1:p.y,x2:p.x,y2:p.y};
   }else if(curTool==="hand"){
@@ -5666,8 +5924,12 @@ function onMouseMove(e){
         var g0=getBounds(moveObjStarts.map(function(s,i){
           return {x:s.x,y:s.y,width:selection[i].width||0,height:selection[i].height||0};
         }));
-        dx=Math.round((g0.x+dx)/gridSize)*gridSize-g0.x;
-        dy=Math.round((g0.y+dy)/gridSize)*gridSize-g0.y;
+        /* Through snapToGrid, which respects Flash's four snap accuracies:
+           the nearest line is taken only if the drag came close enough, so
+           "nudge it deliberately off the grid" is possible again. It used to
+           round unconditionally, which is Always Snap and nothing else. */
+        dx=snapToGrid(g0.x+dx,"x")-g0.x;
+        dy=snapToGrid(g0.y+dy,"y")-g0.y;
       }
       /* Object and guide snapping, on the selection's bounding box. Alt
          suspends it, for the one time in ten you need to land between two
@@ -5703,6 +5965,10 @@ function onMouseMove(e){
     penDragTo(p.x,p.y);
   }else if(curTool==="lasso"){
     if(lassoMode==="freeform"&&lassoPts)lassoPts.push(p.x,p.y);
+  }else if(curTool==="deco"){
+    if(dragPreview){dragPreview.x2=p.x;dragPreview.y2=p.y;}
+  }else if(curTool==="spray"){
+    if(dragPreview&&dragPreview.points)dragPreview.points.push(p.x,p.y);
   }else if(curTool==="rect"||curTool==="oval"||curTool==="line"||
            curTool==="text"||curTool==="polystar"){
     if(dragPreview){dragPreview.x2=p.x;dragPreview.y2=p.y;}
@@ -5800,6 +6066,25 @@ function onMouseUp(e){
       if(warpPreSnap)pushUndoSnap(warpPreSnap);
       warpDrag=null;warpPreSnap=null;
       updateProps();
+    }
+  }else if(curTool==="deco"){
+    if(dragPreview){
+      var dres=applyDecoFill({
+        x:Math.min(dragPreview.x1,dragPreview.x2),
+        y:Math.min(dragPreview.y1,dragPreview.y2),
+        w:Math.abs(dragPreview.x2-dragPreview.x1),
+        h:Math.abs(dragPreview.y2-dragPreview.y1)
+      });
+      dragPreview=null;
+      if(dres.ok)fullRefresh();
+      else showMessage("Deco Tool","Nothing was drawn: "+dres.why+".");
+    }
+  }else if(curTool==="spray"){
+    if(dragPreview&&dragPreview.points){
+      var sres=applySpray(dragPreview.points);
+      dragPreview=null;
+      if(sres.ok)fullRefresh();
+      else showMessage("Spray Brush","Nothing was sprayed: "+sres.why+".");
     }
   }else if(curTool==="subselect"){
     if(subPoint){
@@ -7580,6 +7865,22 @@ function updateProps(){
       }
     }
 
+    /* Flash's "Use runtime bitmap caching", on the kinds it was offered for.
+       Not a micro-optimisation: a background drawn as a few thousand vector
+       paths is the difference between a cartoon that plays at its frame rate
+       and one that does not. */
+    if(canCache(o)){
+      sect("Rendering");
+      row("Cache as bitmap",!!o.cacheAsBitmap,function(v){
+        pushUndo();o.cacheAsBitmap=!!v;fullRefresh();
+      },{type:"checkbox"});
+      if(o.cacheAsBitmap){
+        note("Drawn once and blitted from then on. It is PIXELS now, so "+
+             "scaling or rotating it goes soft \u2014 cache what does not "+
+             "change shape, which was Flash's advice too.");
+      }
+    }
+
     // ── Stroke ──
     sect("Stroke");
     /* Flash's seven line styles. The first four are a pen and a dash
@@ -8798,21 +9099,24 @@ function updateInfoPanel(){
     host.appendChild(r);
   };
   var rnd=function(n){return Math.round(n*10)/10;};
+  void rnd;
   alignSectionLabel(host,"Selection");
   if(selection.length){
     var b=getBounds(selection);
-    pair("W",rnd(b.w)+" px");
-    pair("H",rnd(b.h)+" px");
-    pair("X",rnd(b.x)+" px");
-    pair("Y",rnd(b.y)+" px");
+    // Every measurement through the document's ruler units, which is what
+    // Flash's Info panel did and the whole reason the setting exists.
+    pair("W",fmtUnits(b.w));
+    pair("H",fmtUnits(b.h));
+    pair("X",fmtUnits(b.x));
+    pair("Y",fmtUnits(b.y));
     pair("Objects",String(selection.length));
   }else{
     pair("W","—");pair("H","—");pair("X","—");pair("Y","—");
   }
   alignSectionLabel(host,"Pointer");
   if(stageHover){
-    pair("X",rnd(stageHover.x)+" px");
-    pair("Y",rnd(stageHover.y)+" px");
+    pair("X",fmtUnits(stageHover.x));
+    pair("Y",fmtUnits(stageHover.y));
     // Inside or outside the stage matters: a lot of "where did my drawing go"
     // is artwork placed on the pasteboard.
     pair("On stage",(stageHover.x>=0&&stageHover.y>=0&&
@@ -8821,7 +9125,9 @@ function updateInfoPanel(){
     pair("X","—");pair("Y","—");
   }
   alignSectionLabel(host,"Document");
-  pair("Stage",doc.width+" × "+doc.height);
+  pair("Stage",fmtUnits(doc.width,false)+" × "+fmtUnits(doc.height));
+  pair("Units",docUnit()[1]);
+  pair("Grid",fmtUnits(gridX,false)+" × "+fmtUnits(gridY));
   pair("Zoom",Math.round(zoom*100)+"%");
   pair("Frame",curFrame+" / "+currentMaxFrame());
 }
@@ -8917,7 +9223,16 @@ function updateTransformPanel(){
  * survives a save and the exported player can evaluate it identically, which
  * a hand-drawn point list could not.
  */
-function buildEasingEditor(pp,kf,note){
+/**
+ * The draggable cubic-bezier editor.
+ *
+ * `curveOf` is optional and returns the four-number array to edit; without it
+ * the editor edits the keyframe's own `easeBezier`, which is every existing
+ * call. The Motion Editor passes one per property, so one curve editor serves
+ * both -- a second copy of a Bezier handle drag is exactly the kind of
+ * duplication that lets two editors disagree about the same curve.
+ */
+function buildEasingEditor(pp,kf,note,curveOf){
   var size=118;
   var wrap=document.createElement("div");
   wrap.className="props-row";
@@ -8930,7 +9245,7 @@ function buildEasingEditor(pp,kf,note){
   pp.appendChild(wrap);
 
   var cx=cv.getContext("2d");
-  var bez=function(){
+  var bez=curveOf||function(){
     if(!kf.easeBezier||kf.easeBezier.length<4)kf.easeBezier=[0.25,0.1,0.25,1];
     return kf.easeBezier;
   };
@@ -12099,22 +12414,36 @@ function doActionInner(a){
   case "docSettings":
     showDialog({
       title:"Document Settings",
+      /* Width and height are in the document's RULER UNITS, which is what
+         Flash's Document Properties did -- the whole point of setting the
+         units to millimetres is that you then type the size in millimetres. */
+      footnote:"Width and height are in "+docUnit()[1].toLowerCase()+
+               ". The stage is stored in pixels at 72 to the inch, as Flash's"+
+               " ruler was, so changing the units never moves any artwork.",
       fields:[
-        {name:"w",label:"Width",type:"number",value:doc.width,min:1},
-        {name:"h",label:"Height",type:"number",value:doc.height,min:1},
+        {name:"units",label:"Ruler units",type:"select",value:doc.units||"px",
+         options:DOC_UNITS.map(function(u){return [u[0],u[1]];})},
+        {name:"w",label:"Width",type:"number",value:fmtUnits(doc.width,false),min:0.001,step:"any"},
+        {name:"h",label:"Height",type:"number",value:fmtUnits(doc.height,false),min:0.001,step:"any"},
         {name:"fps",label:"Frame rate",type:"number",value:doc.fps,min:1,max:120,hint:"Frames per second."},
         {name:"bg",label:"Background",value:doc.backgroundColor,placeholder:"#FFFFFF"}
       ],
       validate:function(v){
-        if(!(parseInt(v.w,10)>0)||!(parseInt(v.h,10)>0))return "Width and height must be positive numbers.";
+        if(!(parseFloat(v.w)>0)||!(parseFloat(v.h)>0))return "Width and height must be positive numbers.";
         if(!(parseInt(v.fps,10)>0))return "Frame rate must be a positive number.";
         if(!/^#?[0-9a-fA-F]{6}$/.test(String(v.bg).trim()))return "Background must be a hex colour like #FFFFFF.";
         return null;
       },
       onOk:function(v){
         pushUndo();
-        doc.width=parseInt(v.w,10);
-        doc.height=parseInt(v.h,10);
+        /* The size is read in the units the dialog was SHOWING, then the
+           units are changed -- the other order would reinterpret the numbers
+           you typed in a unit you had just left. */
+        var pw=Math.max(1,Math.round(fromUnits(v.w)));
+        var ph=Math.max(1,Math.round(fromUnits(v.h)));
+        doc.units=DOC_UNITS.some(function(u){return u[0]===v.units;})?v.units:"px";
+        doc.width=pw;
+        doc.height=ph;
         doc.fps=Math.max(1,Math.min(120,parseInt(v.fps,10)));
         var bg=String(v.bg).trim();
         doc.backgroundColor=bg[0]==="#"?bg:"#"+bg;
@@ -12252,6 +12581,18 @@ function doActionInner(a){
     updateZoomUI();centerStage();render();
     break;
   case "grid":showGrid=!showGrid;render();break;
+  case "gridSettings":showGridDialog();break;
+  case "bitmapSettings":
+    var bsel=libSel&&libSel.kind==="bitmap"
+      ? libSel.name
+      : (selection.length===1&&selection[0].type==="bitmap"
+          ? selection[0].bitmapAsset : null);
+    if(bsel)showBitmapSettingsDialog(bsel);
+    else showMessage("Bitmap Properties",
+      "Select a bitmap in the Library, or a bitmap on the stage, first.\n\n"+
+      "Compression and smoothing belong to the IMAGE rather than to one "+
+      "placement of it, which is where Flash put them too.");
+    break;
   case "snap":snapGrid=!snapGrid;break;
   case "insKF":
     pushUndo();
@@ -20966,6 +21307,1050 @@ function warpedOutline(o) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Ruler units
+ *
+ * Flash's Document Properties had a Ruler Units menu, and every number the
+ * editor showed you went through it: the rulers, the Info panel, the grid
+ * spacing, the stage size. It was not decoration -- a Flash movie printed to
+ * paper or laid out against a print design is authored in inches or
+ * millimetres, and converting in your head on every measurement is how you
+ * get a banner that is nearly the right size.
+ *
+ * Everything INSIDE Flashy stays in pixels: the document, the objects, the
+ * save format, the exports. Units are a display conversion at the edge and
+ * nothing else, which is the only version of this that cannot introduce
+ * rounding into the artwork.
+ *
+ * Flash's ruler was 72 pixels to the inch, which also makes a point exactly
+ * one pixel -- so "pt" and "px" differ in name only, and both are offered
+ * because which one you say depends on what you are making.
+ * ------------------------------------------------------------------ */
+
+/** [id, label, units per pixel, decimal places]. */
+var DOC_UNITS = [
+  ["px", "Pixels", 1, 0],
+  ["pt", "Points", 1, 0],
+  ["in", "Inches", 1 / 72, 3],
+  ["cm", "Centimetres", 2.54 / 72, 2],
+  ["mm", "Millimetres", 25.4 / 72, 1]
+];
+
+/** The document's unit record, defaulting to pixels. */
+function docUnit() {
+  var id = (doc && doc.units) || "px";
+  for (var i = 0; i < DOC_UNITS.length; i++) {
+    if (DOC_UNITS[i][0] === id) return DOC_UNITS[i];
+  }
+  return DOC_UNITS[0];
+}
+
+/** Pixels to the document's units. */
+function toUnits(px) {
+  return (px || 0) * docUnit()[2];
+}
+
+/** The document's units back to pixels, which is what everything stores. */
+function fromUnits(v) {
+  var n = parseFloat(v);
+  if (!isFinite(n)) return 0;
+  return n / docUnit()[2];
+}
+
+/** A pixel measurement as text in the document's units, with its suffix. */
+function fmtUnits(px, suffix) {
+  var u = docUnit();
+  var v = toUnits(px);
+  var s = u[3] ? v.toFixed(u[3]) : String(Math.round(v));
+  /* Trailing zeros trimmed: "2.5 cm" rather than "2.50 cm", because a column
+     of numbers padded to three decimals is harder to read at a glance, which
+     is the only thing a ruler readout is for. */
+  if (u[3] && s.indexOf(".") >= 0) s = s.replace(/0+$/, "").replace(/\.$/, "");
+  return suffix === false ? s : s + " " + u[0];
+}
+
+/** Set the ruler units and redraw everything that shows a measurement. */
+function setDocUnits(id) {
+  var found = DOC_UNITS.some(function (u) { return u[0] === id; });
+  if (!found) return false;
+  doc.units = id;
+  touchDoc();
+  fullRefresh();
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Grid settings
+ *
+ * Flash's View > Grid > Edit Grid set the spacing on both axes, the grid's
+ * colour and the snap accuracy. Flashy had one `gridSize` for both axes, a
+ * hard-coded grey, and a snap that rounded unconditionally.
+ *
+ * Separate axes matter more than it sounds: a grid matched to a tile sheet,
+ * a comic panel layout or a line of text is rarely square. The colour
+ * matters because a grey grid is invisible over grey artwork, which is most
+ * of a greyscale drawing. And the accuracy is the difference between a grid
+ * that helps and one that fights you -- "always snap" is right while laying
+ * out, and wrong the moment you want to nudge something off the grid.
+ * ------------------------------------------------------------------ */
+
+/* Flash's four, with the screen-pixel pull each one means. Infinity is
+   "Always Snap": every drag lands on a line, which is a mode rather than a
+   tolerance. */
+var GRID_ACCURACY = [
+  ["close", "Must be close", 4],
+  ["normal", "Normal", 10],
+  ["distant", "Can be distant", 22],
+  ["always", "Always snap", Infinity]
+];
+
+var gridX = 10, gridY = 10;
+var gridColor = "#9999AA";
+var gridAccuracy = "normal";
+
+/**
+ * A hex colour as rgba() at a given alpha.
+ *
+ * The grid is drawn at a fixed low opacity whatever colour is chosen, because
+ * a grid you can see as well as the artwork is a grid you cannot draw over.
+ * Three- and six-digit hex both, since the dialog accepts both.
+ */
+function gridRGBA(hex, alpha) {
+  var h = String(hex || "#9999AA").replace("#", "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) h = "9999AA";
+  var n = parseInt(h, 16);
+  return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," +
+         (n & 255) + "," + alpha + ")";
+}
+
+/** The pull, in screen pixels, for the current accuracy. */
+function gridPull() {
+  for (var i = 0; i < GRID_ACCURACY.length; i++) {
+    if (GRID_ACCURACY[i][0] === gridAccuracy) return GRID_ACCURACY[i][2];
+  }
+  return 10;
+}
+
+/**
+ * Snap one coordinate to the grid, or leave it alone.
+ *
+ * `axis` picks the spacing. Returns the snapped value, which is the input
+ * itself when the nearest line is further away than the accuracy allows --
+ * that "leave it alone" is the whole difference between Flash's four
+ * accuracies and the unconditional rounding this replaces.
+ */
+function snapToGrid(v, axis) {
+  var step = axis === "y" ? gridY : gridX;
+  if (!(step > 0)) return v;
+  var at = Math.round(v / step) * step;
+  var pull = gridPull();
+  if (pull === Infinity) return at;
+  // The tolerance is in SCREEN pixels, for the same reason object snapping's
+  // is: at 400% zoom a 10-unit pull would feel like a magnet.
+  if (Math.abs(at - v) * zoom <= pull) return at;
+  return v;
+}
+
+/** Set the grid up, as View > Grid > Edit Grid did. */
+function setGrid(o) {
+  o = o || {};
+  if (o.x != null && parseFloat(o.x) > 0) gridX = parseFloat(o.x);
+  if (o.y != null && parseFloat(o.y) > 0) gridY = parseFloat(o.y);
+  if (o.color) gridColor = o.color;
+  if (o.accuracy && GRID_ACCURACY.some(function (a) { return a[0] === o.accuracy; })) {
+    gridAccuracy = o.accuracy;
+  }
+  if (o.show != null) showGrid = !!o.show;
+  if (o.snap != null) snapGrid = !!o.snap;
+  /* One spacing kept in step with the old single number, so the bracket keys
+     and anything else still reading `gridSize` see what the grid is actually
+     drawn at rather than a stale 10. */
+  gridSize = gridX;
+  touchDoc();
+  fullRefresh();
+  return true;
+}
+
+/** The grid, as saved with the document. */
+function gridState() {
+  return { x: gridX, y: gridY, color: gridColor, accuracy: gridAccuracy,
+           show: !!showGrid, snap: !!snapGrid };
+}
+
+/** View > Grid > Edit Grid. */
+function showGridDialog() {
+  var u = docUnit();
+  showDialog({
+    title: "Grid",
+    okLabel: "OK",
+    footnote: "Spacing is in " + u[1].toLowerCase() + ", the document's ruler " +
+              "units. Snap accuracy is how close a drag has to come before " +
+              "the grid takes it -- Always Snap is right while laying out, " +
+              "and wrong the moment you want something deliberately off it.",
+    fields: [
+      { name: "color", label: "Colour", value: gridColor, placeholder: "#9999AA" },
+      { name: "x", label: "Spacing across", type: "number",
+        value: fmtUnits(gridX, false), min: 0.001, step: "any" },
+      { name: "y", label: "Spacing down", type: "number",
+        value: fmtUnits(gridY, false), min: 0.001, step: "any" },
+      { name: "accuracy", label: "Snap accuracy", type: "select", value: gridAccuracy,
+        options: GRID_ACCURACY.map(function (a) { return [a[0], a[1]]; }) },
+      { name: "show", label: "Show grid", type: "checkbox", value: !!showGrid },
+      { name: "snap", label: "Snap to grid", type: "checkbox", value: !!snapGrid }
+    ],
+    validate: function (v) {
+      if (!(parseFloat(v.x) > 0) || !(parseFloat(v.y) > 0)) {
+        return "Spacing must be a positive number on both axes.";
+      }
+      if (!/^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(String(v.color).trim())) {
+        return "Colour must be a hex value like #9999AA.";
+      }
+      return null;
+    },
+    onOk: function (v) {
+      var c = String(v.color).trim();
+      setGrid({
+        x: fromUnits(v.x), y: fromUnits(v.y),
+        color: c[0] === "#" ? c : "#" + c,
+        accuracy: v.accuracy, show: !!v.show, snap: !!v.snap
+      });
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Per-bitmap export settings
+ *
+ * Sounds got these in Flash's Library and in Flashy: a rate, a channel
+ * count, whether to trim. Bitmaps had the same dialog in Flash -- Bitmap
+ * Properties, with Allow Smoothing, Compression (Photo JPEG or Lossless
+ * PNG/GIF) and a quality slider -- and Flashy had nothing. An imported
+ * photograph therefore went into every export as the PNG it arrived as,
+ * which on a page of photographs is most of the file.
+ *
+ * `smoothing` already existed per OBJECT. This is per ASSET, which is where
+ * Flash put it and is the right place: it is a property of the image, not of
+ * one placement of it.
+ * ------------------------------------------------------------------ */
+
+/** The export settings for a bitmap asset, created on first use. */
+function bitmapSettings(name) {
+  var a = doc.bitmaps && doc.bitmaps[name];
+  if (!a) return null;
+  if (!a.exportSettings) {
+    /* "auto" means lossless for artwork and JPEG for photographs, decided by
+       looking at the image -- which is what you want by default, because the
+       wrong choice either blurs a logo or quadruples a photograph. */
+    a.exportSettings = { compression: "auto", quality: 80, smoothing: true };
+  }
+  return a.exportSettings;
+}
+
+/**
+ * Whether an image looks like a photograph.
+ *
+ * Counts distinct colours in a subsample. Flat artwork -- a logo, a sprite,
+ * a screenshot of a UI -- has very few; a photograph has nearly as many as
+ * it has pixels. The threshold is deliberately generous: JPEG on flat art is
+ * a visible mistake (ringing round every edge), and PNG on a photograph is
+ * only a large file, so the cheap error is the one to prefer.
+ */
+function bitmapLooksPhotographic(name) {
+  var img = bitmapImage(name);
+  if (!img) return false;
+  var w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  if (!w || !h) return false;
+  var sw = Math.min(64, w), sh = Math.min(64, h);
+  var c = document.createElement("canvas");
+  c.width = sw; c.height = sh;
+  var cx = c.getContext("2d");
+  cx.drawImage(img, 0, 0, sw, sh);
+  var d;
+  try { d = cx.getImageData(0, 0, sw, sh).data; } catch (e) { return false; }
+  var seen = Object.create(null), n = 0, alpha = false;
+  for (var i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 250) alpha = true;
+    var k = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3);
+    if (!seen[k]) { seen[k] = 1; n++; }
+  }
+  /* Transparency settles it on its own: JPEG has none, so an image with an
+     alpha channel is never a JPEG candidate however photographic it looks. */
+  if (alpha) return false;
+  return n > (sw * sh) * 0.25;
+}
+
+/** The compression an asset will actually be written with. */
+function bitmapCompression(name) {
+  var s = bitmapSettings(name);
+  if (!s) return "lossless";
+  if (s.compression === "photo") return "photo";
+  if (s.compression === "lossless") return "lossless";
+  return bitmapLooksPhotographic(name) ? "photo" : "lossless";
+}
+
+/**
+ * An asset re-encoded to its export settings, as a data URL.
+ *
+ * Returns the original when nothing would be gained: a lossless setting, a
+ * missing decode, or a re-encode that came out BIGGER than what went in --
+ * which happens often enough on small flat images that not checking would
+ * make "optimise" a pessimisation.
+ */
+function bitmapExportURL(name) {
+  var plain = bitmapDataURL(name);
+  if (bitmapCompression(name) !== "photo") return plain;
+  var s = bitmapSettings(name);
+  var img = bitmapImage(name);
+  if (!img) return plain;
+  var w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  if (!w || !h) return plain;
+  var c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  var cx = c.getContext("2d");
+  // JPEG has no transparency, so what is behind it has to be decided here
+  // rather than left to whatever the page happens to be.
+  cx.fillStyle = "#FFFFFF";
+  cx.fillRect(0, 0, w, h);
+  cx.drawImage(img, 0, 0);
+  var url;
+  try {
+    url = c.toDataURL("image/jpeg", Math.max(0.05, Math.min(1, (s.quality || 80) / 100)));
+  } catch (e) { return plain; }
+  if (!url || url.indexOf("data:image/jpeg") !== 0) return plain;
+  return url.length < plain.length ? url : plain;
+}
+
+/** What each asset would cost in an export, under its current settings. */
+function bitmapExportReport() {
+  return Object.keys(doc.bitmaps || {}).map(function (name) {
+    var a = doc.bitmaps[name];
+    var before = a.data ? Math.round(a.data.length * 3 / 4) : 0;
+    var url = bitmapExportURL(name);
+    var comma = url.indexOf(",");
+    var after = comma < 0 ? before : Math.round((url.length - comma - 1) * 3 / 4);
+    return {
+      name: name,
+      compression: bitmapCompression(name),
+      requested: bitmapSettings(name).compression,
+      quality: bitmapSettings(name).quality,
+      smoothing: bitmapSettings(name).smoothing !== false,
+      before: before, after: after,
+      recoded: after !== before
+    };
+  });
+}
+
+/** The Library's Bitmap Properties, for one asset. */
+function showBitmapSettingsDialog(name) {
+  var a = doc.bitmaps && doc.bitmaps[name];
+  if (!a) {
+    showMessage("Bitmap Properties", "That bitmap is not in the library.");
+    return;
+  }
+  var s = bitmapSettings(name);
+  var img = bitmapImage(name);
+  var w = img ? (img.naturalWidth || img.width) : (a.width || 0);
+  var h = img ? (img.naturalHeight || img.height) : (a.height || 0);
+  var bytes = a.data ? Math.round(a.data.length * 3 / 4) : 0;
+  showDialog({
+    title: "Bitmap Properties — " + name,
+    okLabel: "OK",
+    footnote: w + " × " + h + " pixels, " + Math.max(1, Math.round(bytes / 1024)) +
+              " KB as imported. Auto looks at the image: a photograph goes " +
+              "out as JPEG, flat artwork stays lossless, and anything with " +
+              "transparency stays lossless whatever it looks like, because " +
+              "JPEG has no alpha channel.",
+    fields: [
+      { name: "compression", label: "Compression", type: "select",
+        value: s.compression,
+        options: [["auto", "Auto"], ["photo", "Photo (JPEG)"],
+                  ["lossless", "Lossless (PNG/GIF)"]] },
+      { name: "quality", label: "Quality", type: "number", value: s.quality,
+        min: 5, max: 100, step: 1,
+        hint: "JPEG quality, 5 to 100. Ignored when the compression is lossless." },
+      { name: "smoothing", label: "Allow smoothing", type: "checkbox",
+        value: s.smoothing !== false,
+        hint: "Off is what pixel art needs: a scaled-up sprite stays crisp " +
+              "instead of turning to mush." }
+    ],
+    validate: function (v) {
+      var q = parseInt(v.quality, 10);
+      if (!(q >= 5 && q <= 100)) return "Quality must be between 5 and 100.";
+      return null;
+    },
+    onOk: function (v) {
+      pushUndo();
+      s.compression = v.compression;
+      s.quality = Math.max(5, Math.min(100, parseInt(v.quality, 10) || 80));
+      s.smoothing = !!v.smoothing;
+      /* The asset's smoothing is the default for new placements AND the
+         answer for existing ones that never had an opinion -- an imported
+         pixel-art sprite should not need its smoothing turned off once per
+         instance. */
+      doc.layers.forEach(function (l) {
+        l.keyframes.forEach(function (kf) {
+          kf.objects.forEach(function (o) {
+            if (o.type === "bitmap" && o.bitmapAsset === name) o.smoothing = s.smoothing;
+          });
+        });
+      });
+      touchDoc();
+      fullRefresh();
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * The Motion Editor
+ *
+ * Flash had ONE easing curve per tween, and Flashy has had that since the
+ * easing editor was built. CS4's Motion Editor gave each animatable property
+ * its own curve, and it is the difference between a bouncing ball that
+ * squashes on impact and one that squashes gradually all the way down: the
+ * position wants a sharp ease-in and the scale wants a snap right at the end,
+ * and a single curve cannot say both.
+ *
+ * The data is `kf.propEase` — {property: presetName} or {property:
+ * [x1,y1,x2,y2]} — and anything absent falls back to the tween's own easing.
+ * So a document that never opens this panel behaves exactly as it always did,
+ * and a property left alone stays in step with the rest, which is what makes
+ * the panel safe to open out of curiosity.
+ *
+ * `Flashy.Easing.atFor` is the one resolver, shared by the authoring stage and
+ * the exported player — the same arrangement the single tween curve already
+ * had, and for the same reason: a curve that eases one way while authoring
+ * and another way in the movie is worse than no curve.
+ * ------------------------------------------------------------------ */
+
+/** The keyframe the Motion Editor is editing: the current layer's tween. */
+function motionKeyframe() {
+  var l = CL();
+  if (!l) return null;
+  var kf = l.getKeyframeAt(curFrame);
+  if (!kf) {
+    // Standing inside a tween's span rather than on its first frame is the
+    // normal case, because that is where you are when you notice the easing.
+    for (var i = l.keyframes.length - 1; i >= 0; i--) {
+      var k = l.keyframes[i];
+      if (curFrame >= k.index && curFrame < k.index + k.duration) { kf = k; break; }
+    }
+  }
+  if (!kf) return null;
+  if (!kf.tweenType || kf.tweenType === "none" || kf.duration < 2) return null;
+  return kf;
+}
+
+/** The curve or preset a property is using, or null when it follows the tween. */
+function propEase(kf, prop) {
+  if (!kf || !kf.propEase) return null;
+  var v = kf.propEase[prop];
+  if (Array.isArray(v) && v.length >= 4) return v.slice(0, 4).map(Number);
+  if (typeof v === "string" && v) return v;
+  return null;
+}
+
+/**
+ * Give one property its own easing, or hand it back to the tween.
+ *
+ * `value` is a preset name, a four-number curve, or null to follow the tween
+ * again. Deleting the key rather than storing null is deliberate: `propEase`
+ * has to be EMPTY when nothing overrides anything, or every document saved
+ * after opening this panel would carry a table of nulls.
+ */
+function setPropEase(kf, prop, value) {
+  if (!kf || !Flashy.Easing.isMotionProp(prop)) return false;
+  if (!kf.propEase) kf.propEase = {};
+  if (value == null) delete kf.propEase[prop];
+  else if (Array.isArray(value)) kf.propEase[prop] = value.slice(0, 4).map(Number);
+  else kf.propEase[prop] = String(value);
+  if (!Flashy.Easing.hasPropEase(kf)) kf.propEase = null;
+  touchDoc();
+  return true;
+}
+
+/** Hand every property back to the tween's own curve. */
+function clearPropEase(kf) {
+  if (!kf || !kf.propEase) return false;
+  kf.propEase = null;
+  touchDoc();
+  return true;
+}
+
+/** Copy one property's curve onto every other property of the same tween. */
+function applyPropEaseToAll(kf, prop) {
+  var v = propEase(kf, prop);
+  if (!kf) return false;
+  Flashy.Easing.MOTION_PROPS.forEach(function (p) {
+    setPropEase(kf, p.key, v);
+  });
+  return true;
+}
+
+/**
+ * The eased amount for one property, sampled across the tween.
+ *
+ * Used by the panel's graph and by the specs. Returns `steps+1` values from
+ * t=0 to t=1 inclusive, which is what makes the endpoints visible: a curve
+ * that does not reach 1 is the commonest mistake when dragging by hand.
+ */
+function propEaseCurve(kf, prop, steps) {
+  var n = Math.max(2, steps || 24);
+  var out = [];
+  for (var i = 0; i <= n; i++) out.push(Flashy.Easing.atFor(kf, prop, i / n));
+  return out;
+}
+
+/* Which properties actually CHANGE across this tween. A panel that offers a
+   curve for Inner Radius on a tween between two rectangles is a panel of
+   dead controls, and Flash's Motion Editor showed only the live channels for
+   exactly this reason. */
+function motionActiveProps(kf) {
+  var l = CL();
+  if (!kf || !l) return [];
+  var next = l.keyframes[l.keyframes.indexOf(kf) + 1];
+  if (!next) return [];
+  var live = Object.create(null);
+  var defaults = { alpha: 1, scaleX: 1, scaleY: 1, ovalEnd: 360 };
+  kf.objects.forEach(function (a, i) {
+    var b = next.objects[i];
+    if (!b) return;
+    Flashy.Easing.MOTION_PROPS.forEach(function (p) {
+      if (live[p.key]) return;
+      if (p.key === "filters") {
+        if (JSON.stringify(a.filters || null) !== JSON.stringify(b.filters || null)) live[p.key] = 1;
+        return;
+      }
+      if (p.key === "colorEffect") {
+        if (JSON.stringify(a.colorEffect || null) !== JSON.stringify(b.colorEffect || null)) live[p.key] = 1;
+        return;
+      }
+      var d = defaults[p.key] != null ? defaults[p.key] : 0;
+      var av = a[p.key] != null ? a[p.key] : d;
+      var bv = b[p.key] != null ? b[p.key] : d;
+      if (Math.abs(av - bv) > 1e-9) live[p.key] = 1;
+    });
+  });
+  return Flashy.Easing.MOTION_PROPS.filter(function (p) { return !!live[p.key]; });
+}
+
+/** The Motion Editor panel. */
+function updateMotionPanel() {
+  var host = document.getElementById("motionPanel");
+  if (!host) return;
+  host.textContent = "";
+  var kf = motionKeyframe();
+  if (!kf) {
+    var none = document.createElement("div");
+    none.className = "props-note";
+    none.textContent =
+      "Stand on a motion tween to give its properties their own easing. " +
+      "A tween needs at least two frames; one keyframe has nothing to ease.";
+    host.appendChild(none);
+    return;
+  }
+
+  var head = document.createElement("div");
+  head.className = "props-note";
+  head.textContent = "Frame " + kf.index + "–" + (kf.index + kf.duration - 1) +
+    ", " + (kf.tweenType === "shape" ? "shape" : "motion") + " tween, easing " +
+    (kf.easing || "linear") + ". Properties left alone follow that curve.";
+  host.appendChild(head);
+
+  var active = motionActiveProps(kf);
+  var shown = active.length ? active : Flashy.Easing.MOTION_PROPS;
+  if (!active.length) {
+    var hint = document.createElement("div");
+    hint.className = "props-note";
+    hint.textContent = "Nothing changes across this tween yet, so every " +
+      "property is listed. Move or resize the object on the next keyframe " +
+      "and the list narrows to what is actually animating.";
+    host.appendChild(hint);
+  }
+
+  var group = null;
+  shown.forEach(function (p) {
+    if (p.group !== group) {
+      group = p.group;
+      alignSectionLabel(host, group);
+    }
+    var row = document.createElement("div");
+    row.className = "props-row";
+    var lab = document.createElement("span");
+    lab.className = "props-label";
+    lab.textContent = p.label;
+    row.appendChild(lab);
+
+    var cur = propEase(kf, p.key);
+    var sel = document.createElement("select");
+    sel.className = "props-input motion-ease";
+    sel.style.width = "104px";
+    sel.dataset.prop = p.key;
+    [["", "(tween's own)"], ["linear", "linear"], ["quadIn", "quadIn"],
+     ["quadOut", "quadOut"], ["quadInOut", "quadInOut"], ["cubicIn", "cubicIn"],
+     ["cubicOut", "cubicOut"], ["cubicInOut", "cubicInOut"], ["sineInOut", "sineInOut"],
+     ["expoOut", "expoOut"], ["backOut", "backOut"], ["elasticOut", "elasticOut"],
+     ["bounceOut", "bounceOut"], ["custom", "custom curve…"]
+    ].forEach(function (op) {
+      var o = document.createElement("option");
+      o.value = op[0]; o.textContent = op[1];
+      if (Array.isArray(cur) ? op[0] === "custom" : (cur || "") === op[0]) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener("change", function () {
+      pushUndo();
+      if (sel.value === "custom") {
+        /* A curve to edit, seeded from an ease-out rather than a straight
+           line: switching to Custom and seeing nothing change is how you
+           conclude the control is broken. */
+        setPropEase(kf, p.key, Array.isArray(cur) ? cur : [0.25, 0.1, 0.25, 1]);
+      } else {
+        setPropEase(kf, p.key, sel.value || null);
+      }
+      fullRefresh();
+    });
+    row.appendChild(sel);
+    host.appendChild(row);
+
+    if (Array.isArray(cur)) {
+      buildEasingEditor(host, kf, function (text) {
+        var n = document.createElement("div");
+        n.className = "props-note";
+        n.textContent = p.label + ": " + text;
+        host.appendChild(n);
+      }, function () {
+        if (!Array.isArray(kf.propEase && kf.propEase[p.key])) {
+          setPropEase(kf, p.key, [0.25, 0.1, 0.25, 1]);
+        }
+        return kf.propEase[p.key];
+      });
+    }
+  });
+
+  /* The graph: every property's curve over the tween, overlaid. Reading six
+     separate thumbnails against each other is the thing a graph is for, and
+     it is how you see that the scale is still snapping after the position has
+     settled. */
+  var cv = document.createElement("canvas");
+  cv.id = "motionGraph";
+  /* Its own class rather than .ease-curve: that one is the draggable handle
+     editor, and a read-only overlay graph is a different thing -- sharing the
+     class made every selector that counted curve editors find this too. */
+  cv.className = "motion-graph";
+  cv.width = 180; cv.height = 110;
+  cv.title = "Time across, progress up. One line per property.";
+  var wrap = document.createElement("div");
+  wrap.className = "props-row";
+  wrap.style.cssText = "justify-content:center;padding:6px 0";
+  wrap.appendChild(cv);
+  host.appendChild(wrap);
+  drawMotionGraph(cv, kf, shown);
+
+  var acts = [];
+  if (Flashy.Easing.hasPropEase(kf)) {
+    acts.push({ label: "Reset all", title: "Every property follows the tween's own curve again",
+      onClick: function () { pushUndo(); clearPropEase(kf); fullRefresh(); } });
+  }
+  var first = shown.find(function (p) { return !!propEase(kf, p.key); });
+  if (first) {
+    acts.push({ label: "Apply " + first.label + " to all",
+      title: "Copy that property's easing onto every other one",
+      onClick: function () { pushUndo(); applyPropEaseToAll(kf, first.key); fullRefresh(); } });
+  }
+  if (acts.length) {
+    /* A small button row, inlined rather than through updateProps's own
+       btnGroup: that one is a closure inside the inspector and reaching for
+       it from another panel would mean exporting a helper that only exists
+       because two panels look alike. */
+    var bar = document.createElement("div");
+    bar.className = "props-row";
+    bar.style.flexWrap = "wrap";
+    var grp = document.createElement("div");
+    grp.className = "props-btn-group";
+    acts.forEach(function (it) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "props-btn-toggle";
+      b.textContent = it.label;
+      b.title = it.title;
+      b.addEventListener("click", it.onClick);
+      grp.appendChild(b);
+    });
+    bar.appendChild(grp);
+    host.appendChild(bar);
+  }
+}
+
+/** Every listed property's easing curve, overlaid on one graph. */
+function drawMotionGraph(cv, kf, props) {
+  var cx = cv.getContext("2d");
+  var w = cv.width, h = cv.height;
+  cx.clearRect(0, 0, w, h);
+  cx.fillStyle = "#1E1E1E";
+  cx.fillRect(0, 0, w, h);
+  cx.strokeStyle = "#3A3A3A";
+  cx.lineWidth = 1;
+  cx.beginPath(); cx.moveTo(0, h); cx.lineTo(w, 0); cx.stroke();
+  /* A distinct hue per line, by index. Fourteen named colours would be a
+     list to maintain; a hue rotation is one line and always distinct. */
+  props.forEach(function (p, i) {
+    var own = !!propEase(kf, p.key);
+    var pts = propEaseCurve(kf, p.key, 48);
+    cx.strokeStyle = own
+      ? "hsl(" + ((i * 47) % 360) + ",80%,65%)"
+      : "rgba(140,140,150,0.45)";
+    // An overridden property is drawn on top and thicker: it is the one you
+    // are looking at, and the rest are there for comparison.
+    cx.lineWidth = own ? 2 : 1;
+    cx.beginPath();
+    pts.forEach(function (v, k) {
+      var x = (k / (pts.length - 1)) * w;
+      var y = h - v * h;
+      if (k === 0) cx.moveTo(x, y); else cx.lineTo(x, y);
+    });
+    cx.stroke();
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Cache as bitmap
+ *
+ * Flash's Property inspector had a "Use runtime bitmap caching" checkbox on
+ * every symbol instance, and it was not a micro-optimisation: a background
+ * drawn as a few thousand vector paths is the difference between a cartoon
+ * that plays at its frame rate and one that does not. The object is drawn
+ * once into an offscreen canvas and blitted from then on.
+ *
+ * The trade is real and has to be stated, because it is the reason the
+ * default is off: a cached object is PIXELS. Scaling or rotating it afterwards
+ * resamples rather than re-renders, so a symbol that grows across a tween
+ * goes soft. Flash's advice was "cache what does not change shape", and that
+ * is still the advice.
+ *
+ * `Flashy.DisplayObject` holds the mechanism, because the exported player
+ * needs it more than the authoring stage does -- the stage redraws on demand
+ * and the player redraws every frame.
+ * ------------------------------------------------------------------ */
+
+/** True when this object is the kind runtime caching is worth offering on. */
+function canCache(o) {
+  if (!o) return false;
+  /* Flash offered it on symbol instances, groups and text. A rectangle is one
+     fill: caching it costs a canvas to save nothing, and offering the
+     checkbox anyway would be offering a mistake. */
+  return o.type === "symbol" || o.type === "group" || o.type === "text" ||
+         (o.type === "path" && o.path && o.path.length > 60);
+}
+
+/**
+ * The stage-space footprint a cached surface has to cover.
+ *
+ * The editor's painter draws in stage coordinates, so this is the object's
+ * rotated, scaled bounding box, padded for whatever its filters reach
+ * outside it. The export needs the OTHER convention -- see cacheBoundsOf --
+ * because an engine node carries its own transform and draws around its own
+ * origin.
+ */
+function cacheStageBounds(o) {
+  var box = objectBounds(o);
+  if (!box || !(box.w > 0) || !(box.h > 0)) return null;
+  var pad = cachePadFor(o);
+  return { x: box.x - pad, y: box.y - pad, w: box.w + pad * 2, h: box.h + pad * 2 };
+}
+
+/**
+ * How far outside its box this object's filters draw.
+ *
+ * A glow on a cached symbol sliced off at the edge looks exactly like a
+ * clipping bug, and is the first thing caching gets blamed for.
+ */
+function cachePadFor(o) {
+  var pad = 0;
+  if (o.filters && o.filters.length) {
+    o.filters.forEach(function (f) {
+      if (!f || f.enabled === false) return;
+      var reach = (f.blurX || f.blur || 0) + (f.distance || 0) +
+                  (f.strength ? 4 : 0) + 4;
+      if (reach > pad) pad = reach;
+    });
+  }
+  return pad;
+}
+
+/** The bounds a cached surface needs, in the object's own centred space. */
+function cacheBoundsOf(o) {
+  var w = Math.abs(o.width || 0), h = Math.abs(o.height || 0);
+  if (!w || !h) return null;
+  var pad = cachePadFor(o);
+  return { x: -w / 2 - pad, y: -h / 2 - pad, w: w + pad * 2, h: h + pad * 2 };
+}
+
+/* ------------------------------------------------------------------ *
+ * The Deco tool and the Spray brush
+ *
+ * Flash CS4 added two generative tools, and they are the only ones in the box
+ * that make artwork rather than edit it:
+ *
+ *   DECO    fills a region with a pattern -- a grid of a symbol, a climbing
+ *           vine, a kaleidoscope of whatever you draw into it.
+ *   SPRAY   scatters copies of a symbol along a drag, with jitter in size and
+ *           rotation, like an airbrush loaded with stamps.
+ *
+ * Both are generators: one gesture produces many objects, and from then on
+ * they are ordinary artwork that can be selected, moved and deleted. That is
+ * deliberately how Flash's worked too, and it is what makes them safe -- a
+ * live procedural fill that regenerated on every edit would mean never being
+ * able to fix one leaf.
+ *
+ * The randomness is a SEEDED generator stored in the settings, so the same
+ * gesture with the same seed produces the same artwork. Flash reseeded from
+ * the clock, which meant an accidental undo lost a spray you liked for ever.
+ * ------------------------------------------------------------------ */
+
+/** A small deterministic generator: same seed, same artwork. */
+function decoRandom(seed) {
+  var s = (seed | 0) || 1;
+  return function () {
+    // xorshift32. Short, has no state to manage, and is reproducible across
+    // every browser -- which Math.random is explicitly not.
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5; s >>>= 0;
+    return (s >>> 0) / 4294967296;
+  };
+}
+
+var DECO_PATTERNS = [
+  ["grid", "Grid fill"],
+  ["vine", "Vine fill"],
+  ["symmetry", "Symmetry brush"],
+  ["scatter", "Random scatter"]
+];
+
+/** The Deco tool's settings, sticky the way Flash's Options panel was. */
+var decoSettings = {
+  pattern: "grid",
+  symbol: "",          // "" means a plain dot in the current fill colour
+  size: 18,
+  spacing: 28,
+  jitter: 0.25,
+  count: 40,
+  branches: 6,
+  seed: 1234
+};
+
+/** The Spray brush's settings. */
+var spraySettings = {
+  symbol: "",
+  size: 16,
+  spacing: 14,
+  scaleJitter: 0.4,
+  rotationJitter: 180,
+  density: 1,
+  seed: 4321
+};
+
+/**
+ * One stamp: an instance of the chosen symbol, or a dot.
+ *
+ * A symbol is the point of these tools -- a sprayed flower is a flower, not a
+ * circle -- but they have to do something useful with an empty library, so
+ * the fallback is an oval in the current fill colour.
+ */
+function decoStamp(symbolName, x, y, size, rotation) {
+  var o;
+  if (symbolName && doc.library[symbolName]) {
+    o = new EditorObject("symbol");
+    o.symbolName = symbolName;
+    o.symbolBehavior = "graphic";
+  } else {
+    o = new EditorObject("oval");
+    o.fillColor = fillColor;
+    o.fillAlpha = fillAlpha;
+    o.fillType = "solid";
+    o.strokeStyle = "none";
+    o.strokeWidth = 0;
+  }
+  o.width = size;
+  o.height = size;
+  o.x = x - size / 2;
+  o.y = y - size / 2;
+  o.rotation = rotation || 0;
+  return o;
+}
+
+/**
+ * The objects a Deco fill produces over a region.
+ *
+ * `region` is {x,y,w,h} in stage coordinates. Returns objects and does not
+ * place them, so the caller decides about undo and the specs can look at the
+ * geometry without a document.
+ */
+function decoObjects(region, opts) {
+  var o = Object.assign({}, decoSettings, opts || {});
+  var rnd = decoRandom(o.seed);
+  var out = [];
+  var size = Math.max(1, o.size);
+  var step = Math.max(2, o.spacing);
+  var jit = Math.max(0, Math.min(1, o.jitter));
+
+  if (o.pattern === "grid") {
+    /* Rows and columns, with the jitter applied per cell. A perfectly regular
+       grid reads as a texture map rather than as drawing, which is why Flash's
+       grid fill had a randomness control at all. */
+    for (var y = region.y + step / 2; y < region.y + region.h; y += step) {
+      for (var x = region.x + step / 2; x < region.x + region.w; x += step) {
+        var dx = (rnd() - 0.5) * step * jit;
+        var dy = (rnd() - 0.5) * step * jit;
+        var sc = 1 + (rnd() - 0.5) * jit;
+        out.push(decoStamp(o.symbol, x + dx, y + dy, size * sc, 0));
+      }
+    }
+    return out;
+  }
+
+  if (o.pattern === "vine") {
+    /* A climbing stem with leaves either side. Grown rather than placed: each
+       step turns a little, which is what makes it look like a plant instead
+       of a zigzag. */
+    var n = Math.max(2, o.count);
+    var px = region.x + region.w / 2;
+    var py = region.y + region.h;
+    var ang = -Math.PI / 2;
+    for (var i = 0; i < n; i++) {
+      ang += (rnd() - 0.5) * 0.9 * jit * 2;
+      var len = step * (0.7 + rnd() * 0.6);
+      px += Math.cos(ang) * len;
+      py += Math.sin(ang) * len;
+      if (px < region.x || px > region.x + region.w ||
+          py < region.y || py > region.y + region.h) break;
+      // Leaves alternate sides, which is what a stem does.
+      var side = (i % 2 === 0) ? 1 : -1;
+      var lx = px + Math.cos(ang + side * Math.PI / 2) * size * 0.5;
+      var ly = py + Math.sin(ang + side * Math.PI / 2) * size * 0.5;
+      var leaf = size * (0.6 + rnd() * 0.8);
+      out.push(decoStamp(o.symbol, lx, ly, leaf,
+                         (ang + side * Math.PI / 2) * 180 / Math.PI));
+    }
+    return out;
+  }
+
+  if (o.pattern === "symmetry") {
+    /* A kaleidoscope: one arm of stamps, repeated round the centre. Flash's
+       Symmetry brush could reflect, rotate or grid; rotation is the one
+       people actually used, and it is the one that makes a snowflake. */
+    var arms = Math.max(2, Math.min(24, o.branches));
+    var cx = region.x + region.w / 2, cy = region.y + region.h / 2;
+    var reach = Math.min(region.w, region.h) / 2;
+    var per = Math.max(1, Math.floor(reach / step));
+    for (var a = 0; a < arms; a++) {
+      var base = (a / arms) * Math.PI * 2;
+      var armRnd = decoRandom(o.seed + 1);        // the SAME arm, every time
+      for (var k = 1; k <= per; k++) {
+        var r = (k / per) * reach;
+        var wob = (armRnd() - 0.5) * jit * 0.6;
+        var ax = cx + Math.cos(base + wob) * r;
+        var ay = cy + Math.sin(base + wob) * r;
+        out.push(decoStamp(o.symbol, ax, ay, size * (0.5 + k / per * 0.8),
+                           (base + wob) * 180 / Math.PI));
+      }
+    }
+    return out;
+  }
+
+  // Scatter: `count` stamps anywhere in the region.
+  var total = Math.max(1, o.count);
+  for (var c = 0; c < total; c++) {
+    out.push(decoStamp(o.symbol,
+      region.x + rnd() * region.w,
+      region.y + rnd() * region.h,
+      size * (1 + (rnd() - 0.5) * jit * 2),
+      rnd() * 360));
+  }
+  return out;
+}
+
+/** Fill a region with the current Deco pattern, as one undoable action. */
+function applyDecoFill(region, opts) {
+  var kf = CKF();
+  if (!kf) {
+    var l = CL();
+    if (l) kf = l.insertKeyframe(curFrame);
+  }
+  if (!kf) return { ok: false, why: "there is no frame to draw on" };
+  if (!(region.w > 1) || !(region.h > 1)) {
+    return { ok: false, why: "the area dragged out is too small to fill" };
+  }
+  var made = decoObjects(region, opts);
+  if (!made.length) return { ok: false, why: "that pattern produced nothing" };
+  pushUndo();
+  made.forEach(function (o) { kf.objects.push(o); });
+  selection = made.slice();
+  touchDoc();
+  return { ok: true, count: made.length };
+}
+
+/**
+ * The stamps a spray drag lays down.
+ *
+ * `points` is the drag as a flat polyline. Stamps are placed along ARC LENGTH
+ * rather than per pointer event, so a fast drag and a slow one over the same
+ * path put down the same paint -- which is the difference between a tool and
+ * a lottery.
+ */
+function sprayObjects(points, opts) {
+  var o = Object.assign({}, spraySettings, opts || {});
+  if (!points || points.length < 4) return [];
+  var rnd = decoRandom(o.seed);
+  var step = Math.max(1, o.spacing) / Math.max(0.1, o.density);
+  var out = [];
+  var carry = 0;
+  for (var i = 2; i < points.length; i += 2) {
+    var x0 = points[i - 2], y0 = points[i - 1];
+    var x1 = points[i], y1 = points[i + 1];
+    var seg = Math.hypot(x1 - x0, y1 - y0);
+    if (seg < 1e-9) continue;
+    var at = carry;
+    while (at < seg) {
+      var t = at / seg;
+      var bx = x0 + (x1 - x0) * t, by = y0 + (y1 - y0) * t;
+      // Scattered across the brush, not strung along its centre line.
+      var ang = rnd() * Math.PI * 2;
+      var rad = Math.sqrt(rnd()) * o.size;
+      var sc = 1 + (rnd() - 0.5) * 2 * Math.max(0, o.scaleJitter);
+      out.push(decoStamp(o.symbol,
+        bx + Math.cos(ang) * rad, by + Math.sin(ang) * rad,
+        Math.max(1, o.size * 0.6 * sc),
+        (rnd() - 0.5) * 2 * o.rotationJitter));
+      at += step;
+    }
+    carry = at - seg;
+  }
+  return out;
+}
+
+/** Commit a spray drag. */
+function applySpray(points, opts) {
+  var kf = CKF();
+  if (!kf) {
+    var l = CL();
+    if (l) kf = l.insertKeyframe(curFrame);
+  }
+  if (!kf) return { ok: false, why: "there is no frame to draw on" };
+  var made = sprayObjects(points, opts);
+  if (!made.length) return { ok: false, why: "the drag was too short to spray" };
+  pushUndo();
+  made.forEach(function (o) { kf.objects.push(o); });
+  selection = made.slice();
+  touchDoc();
+  return { ok: true, count: made.length };
+}
+
+/** The library symbols these two tools can stamp, newest first. */
+function stampSymbols() {
+  return Object.keys(doc.library || {});
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -22229,6 +23614,9 @@ function serializeLayers(layers){
           // Shape hints: [ax,ay,bx,by] in stage space, a point on the start
           // shape and the point it becomes on the end shape.
           shapeHints:kf.shapeHints?kf.shapeHints.map(function(h){return h.slice();}):null,
+          // Per-property easing. Written as null when nothing overrides
+          // anything, so an untouched tween round-trips byte for byte.
+          propEase:kf.propEase?JSON.parse(JSON.stringify(kf.propEase)):null,
           /* A Timeline Effect's spec, so it can be re-run or removed after a
              save. Without it the generated frames are exactly as opaque as
              Flash's were, which is the thing worth fixing about them. */
@@ -22317,7 +23705,13 @@ function serializeBitmaps(bitmaps){
     out[name]={name:name,mediaType:a.mediaType||"image/png",data:a.data,
                width:a.width||0,height:a.height||0,
                // Bitmaps live in the same Library and go in the same folders.
-               folder:typeof a.folder==="string"?a.folder:""};
+               folder:typeof a.folder==="string"?a.folder:"",
+               /* Compression, quality and smoothing, which Flash's Bitmap
+                  Properties set per ASSET. Dropped here, they would be lost
+                  on every save -- a setting that does not survive the file
+                  is not a setting. */
+               exportSettings:(a.exportSettings&&typeof a.exportSettings==="object")
+                 ? JSON.parse(JSON.stringify(a.exportSettings)) : null};
   });
   return out;
 }
@@ -22331,6 +23725,11 @@ function serializeDoc(){
     width:doc.width,height:doc.height,fps:doc.fps,
     backgroundColor:doc.backgroundColor,
     totalFrames:doc.totalFrames,
+    /* Ruler units and the grid are document furniture, like the guides: a
+       layout you set up for a print-sized piece is worth keeping, and
+       reopening it in pixels with a square 10px grid would throw it away. */
+    units:doc.units||"px",
+    grid:gridState(),
     layers:serializeLayers(doc.layers),
     library:serializeLibrary(doc.library),
     // Audio travels inside the document, so a .flashy stays one file.
@@ -22441,6 +23840,22 @@ function exportDocData(){
        published file is still shipped, still downloaded, and still readable by
        anyone who opens it. */
     d.layers=serializeLayers(outputLayers(doc.layers));
+  }
+  /* Per-bitmap export settings, applied to the COPY that ships: a photograph
+     set to Photo (JPEG) is re-encoded here and goes out at a fraction of the
+     bytes, while the document keeps the lossless original. Flash's Bitmap
+     Properties did exactly this, and without it an imported photo went into
+     every export as the PNG it arrived as. */
+  if(d.bitmaps){
+    Object.keys(d.bitmaps).forEach(function(bn){
+      var url=bitmapExportURL(bn);
+      var comma=url.indexOf(",");
+      if(comma<0)return;
+      var mime=url.slice(5,url.indexOf(";"));
+      if(mime===d.bitmaps[bn].mediaType)return;   // nothing was re-encoded
+      d.bitmaps[bn].mediaType=mime;
+      d.bitmaps[bn].data=url.slice(comma+1);
+    });
   }
   // Scenes are already baked into `layers`; shipping them again would have the
   // player build every scene twice.
@@ -22553,6 +23968,24 @@ function reviveKeyframe(kd){
   kf.tweenSnap=!!kd.tweenSnap;
   kf.tweenSync=!!kd.tweenSync;
   kf.effect=(kd.effect&&kd.effect.id)?JSON.parse(JSON.stringify(kd.effect)):null;
+  /* Only the properties the Motion Editor knows about, and only values it
+     could have written: a hand-edited file cannot make the interpolator read
+     a curve of strings. */
+  kf.propEase=null;
+  if(kd.propEase&&typeof kd.propEase==="object"){
+    var pe={};
+    Object.keys(kd.propEase).forEach(function(k){
+      if(!window.Flashy||!Flashy.Easing.isMotionProp(k))return;
+      var v=kd.propEase[k];
+      if(Array.isArray(v)&&v.length>=4){
+        var nums=v.slice(0,4).map(Number);
+        if(nums.every(isFinite))pe[k]=nums;
+      }else if(typeof v==="string"&&v){
+        pe[k]=v;
+      }
+    });
+    if(Object.keys(pe).length)kf.propEase=pe;
+  }
   kf.shapeHints=Array.isArray(kd.shapeHints)
     ? kd.shapeHints.filter(function(h){return Array.isArray(h)&&h.length>=4;})
         .map(function(h){return h.slice(0,4).map(Number);})
@@ -22626,6 +24059,21 @@ function deserializeDoc(d){
   doc.width=d.width||550;doc.height=d.height||400;
   doc.fps=d.fps||24;doc.backgroundColor=d.backgroundColor||"#FFFFFF";
   doc.totalFrames=d.totalFrames||60;
+  // A file written before units existed loads in pixels, which is what it meant.
+  doc.units=DOC_UNITS.some(function(u){return u[0]===d.units;})?d.units:"px";
+  if(d.grid&&typeof d.grid==="object"){
+    gridX=parseFloat(d.grid.x)>0?parseFloat(d.grid.x):10;
+    gridY=parseFloat(d.grid.y)>0?parseFloat(d.grid.y):gridX;
+    gridColor=/^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(String(d.grid.color||""))
+      ? String(d.grid.color) : "#9999AA";
+    gridAccuracy=GRID_ACCURACY.some(function(a){return a[0]===d.grid.accuracy;})
+      ? d.grid.accuracy : "normal";
+    if(d.grid.show!=null)showGrid=!!d.grid.show;
+    if(d.grid.snap!=null)snapGrid=!!d.grid.snap;
+  }else{
+    gridX=gridY=10;gridColor="#9999AA";gridAccuracy="normal";
+  }
+  gridSize=gridX;
   doc.library=reviveLibrary(d.library);
   doc.sounds=reviveSounds(d.sounds);
   doc.bitmaps=reviveBitmaps(d.bitmaps);
@@ -22680,6 +24128,9 @@ function deserializeDoc(d){
 // File ▸ Open and, on the desktop, by files handed to us by the shell.
 function loadDocFromObject(d){
   if(audioTrack)audioTrack.stopAll();
+  // The old document's cached surfaces are keyed by ids that are about to
+  // mean something else.
+  clearCacheSurfaces();
   deserializeDoc(d);
   curFrame=1;curLayer=0;selection=[];
   undoStack=[];redoStack=[];editStack=[];
@@ -23516,6 +24967,29 @@ function exportRuntime(data, canvas, options) {
          and whatever its scripts have done. */
       return node;
     }
+    /* Runtime bitmap caching. The player is where this actually pays: it
+       redraws every frame, where the authoring stage redraws on demand. The
+       bounds have to be handed over because a display object has no general
+       bounds in the engine, and guessing would clip the artwork. */
+    node.cacheAsBitmap = !!o.cacheAsBitmap;
+    if (node.cacheAsBitmap) {
+      var cw = Math.abs(o.width || 0), ch = Math.abs(o.height || 0);
+      var cpad = 0;
+      if (o.filters && o.filters.length) {
+        for (var cfi = 0; cfi < o.filters.length; cfi++) {
+          var cf = o.filters[cfi];
+          if (!cf || cf.enabled === false) continue;
+          var reach = (cf.blurX || cf.blur || 0) + (cf.distance || 0) +
+                      (cf.strength ? 4 : 0) + 4;
+          if (reach > cpad) cpad = reach;
+        }
+      }
+      node.cacheBounds = (cw && ch)
+        ? { x: -cw / 2 - cpad, y: -ch / 2 - cpad,
+            w: cw + cpad * 2, h: ch + cpad * 2 }
+        : null;
+      if (!node.cacheBounds) node.cacheAsBitmap = false;
+    }
     node.__placed = true;
     node.x = (o.x || 0) + hw;
     node.y = (o.y || 0) + hh;
@@ -23912,6 +25386,20 @@ function exportRuntime(data, canvas, options) {
     // Divide by duration (not duration-1) so the frame holding the next
     // keyframe is the one that shows the destination — same as the stage.
     var t = nk ? easeAt((fr - kf.index) / kf.duration, kf.easing, kf.easeBezier) : 0;
+    /* The raw 0..1 position, kept because per-property easing has to be
+       computed from TIME rather than from the already-eased amount. */
+    var tRaw = nk ? Math.min(1, Math.max(0, (fr - kf.index) / kf.duration)) : 0;
+    /* The Motion Editor's per-property curves. `atFor` falls back to the
+       tween's own easing for anything with no override, so `pe` is `t` for
+       every property of every tween nobody has touched -- and the resolver is
+       the engine's, shared with the authoring stage, because this function is
+       the runtime's own copy of the interpolator and that is exactly how two
+       interpolators drift apart. */
+    var usePE = !!(Flashy.Easing && Flashy.Easing.hasPropEase &&
+                   Flashy.Easing.hasPropEase(kf));
+    var pe = function (key) {
+      return usePE ? Flashy.Easing.atFor(kf, key, tRaw) : t;
+    };
     var out = [];
     for (var oi = 0; oi < kf.objects.length; oi++) {
       var a = kf.objects[oi];
@@ -23967,18 +25455,18 @@ function exportRuntime(data, canvas, options) {
       if (b) {
         o = {};
         for (var prop in a) o[prop] = a[prop];
-        o.x = a.x + (b.x - a.x) * t;
-        o.y = a.y + (b.y - a.y) * t;
+        o.x = a.x + (b.x - a.x) * pe("x");
+        o.y = a.y + (b.y - a.y) * pe("y");
         /* Flash's "Scale" checkbox: off means the object keeps its own size
            through the tween and only moves. */
         if (kf.tweenScale === false) {
           o.width = a.width; o.height = a.height;
           o.scaleX = a.scaleX; o.scaleY = a.scaleY;
         } else {
-          o.width = a.width + (b.width - a.width) * t;
-          o.height = a.height + (b.height - a.height) * t;
-          o.scaleX = (a.scaleX || 1) + ((b.scaleX || 1) - (a.scaleX || 1)) * t;
-          o.scaleY = (a.scaleY || 1) + ((b.scaleY || 1) - (a.scaleY || 1)) * t;
+          o.width = a.width + (b.width - a.width) * pe("width");
+          o.height = a.height + (b.height - a.height) * pe("height");
+          o.scaleX = (a.scaleX || 1) + ((b.scaleX || 1) - (a.scaleX || 1)) * pe("scaleX");
+          o.scaleY = (a.scaleY || 1) + ((b.scaleY || 1) - (a.scaleY || 1)) * pe("scaleY");
         }
         /* Rotate CW/CCW x n: a tween otherwise always takes the short way
            round, so 0 to 350 degrees rolls backwards and 0 to 360 does not
@@ -23996,33 +25484,35 @@ function exportRuntime(data, canvas, options) {
             if (rt === rf) rt -= 360;
             rt -= 360 * (turns - 1);
           }
-          o.rotation = rf + (rt - rf) * t;
+          o.rotation = rf + (rt - rf) * pe("rotation");
         } else {
-          o.rotation = (a.rotation || 0) + ((b.rotation || 0) - (a.rotation || 0)) * t;
+          o.rotation = (a.rotation || 0) +
+            ((b.rotation || 0) - (a.rotation || 0)) * pe("rotation");
         }
         /* Skew, filters and the colour effect tween here too. They did not,
            which meant a glow that pulsed on the authoring stage held still in
            the export — the exact divergence class paintObj exists to prevent,
            reappearing because this function is the runtime's own copy of the
            interpolator. */
-        o.skewX = (a.skewX || 0) + ((b.skewX || 0) - (a.skewX || 0)) * t;
-        o.skewY = (a.skewY || 0) + ((b.skewY || 0) - (a.skewY || 0)) * t;
+        o.skewX = (a.skewX || 0) + ((b.skewX || 0) - (a.skewX || 0)) * pe("skewX");
+        o.skewY = (a.skewY || 0) + ((b.skewY || 0) - (a.skewY || 0)) * pe("skewY");
         /* Primitive parameters, same as the authoring interpolator: a wedge
            sweeps open in the export too. */
         var num = function (key, dflt) {
           var av = a[key] == null ? dflt : a[key], bv = b[key] == null ? dflt : b[key];
-          return av + (bv - av) * t;
+          return av + (bv - av) * pe(key);
         };
         o.cornerRadius = num("cornerRadius", 0);
         o.ovalStart = num("ovalStart", 0);
         o.ovalEnd = num("ovalEnd", 360);
         o.ovalInner = num("ovalInner", 0);
         if (Flashy.Filters) {
-          o.filters = Flashy.Filters.lerpFilters(a.filters, b.filters, t);
-          o.colorEffect = Flashy.Filters.lerpColorEffect(a.colorEffect, b.colorEffect, t);
+          o.filters = Flashy.Filters.lerpFilters(a.filters, b.filters, pe("filters"));
+          o.colorEffect = Flashy.Filters.lerpColorEffect(
+            a.colorEffect, b.colorEffect, pe("colorEffect"));
         }
         var aa = a.alpha != null ? a.alpha : 1, ba = b.alpha != null ? b.alpha : 1;
-        o.alpha = aa + (ba - aa) * t;
+        o.alpha = aa + (ba - aa) * pe("alpha");
         /* A motion guide: the object's CENTRE rides the path instead of the
            straight line between its keyframes, and `orientToPath` turns it to
            face along the path as well. */
@@ -25335,7 +26825,8 @@ function _objToSVGRaw(o, depth) {
     case "bitmap":
       // Embedded as a data URI, so the SVG is as self-contained as the HTML
       // export — a file that needs a sidecar PNG is not an export.
-      var burl = bitmapDataURL(o.bitmapAsset);
+      // Through the asset's export settings, like every other export path.
+      var burl = bitmapExportURL(o.bitmapAsset);
       if (!burl) return '';
       var clipRef = '';
       var defs = '';
@@ -26815,6 +28306,7 @@ function fullRefresh(){
   updateAlignPanel();
   updateInfoPanel();
   updateTransformPanel();
+  updateMotionPanel();
   updateScenePanel();
   updateOutputCount();
   updateHistoryPanel();
@@ -27507,6 +28999,50 @@ function init(){
     gifSettings: function(){ return Object.assign({}, gifSettings); },
     gifFrames: gifFrames,
     buildGIF: buildGIF,
+    /* Ruler units, the grid, and per-bitmap export settings. */
+    DOC_UNITS: DOC_UNITS,
+    docUnit: docUnit,
+    rulerStep: rulerStep,
+    gridRGBA: gridRGBA,
+    updateInfoPanel: updateInfoPanel,
+    decodeBitmap: decodeBitmap,
+    toUnits: toUnits,
+    fromUnits: fromUnits,
+    fmtUnits: fmtUnits,
+    setDocUnits: setDocUnits,
+    GRID_ACCURACY: GRID_ACCURACY,
+    gridState: gridState,
+    setGrid: setGrid,
+    snapToGrid: snapToGrid,
+    gridPull: gridPull,
+    bitmapSettings: bitmapSettings,
+    bitmapCompression: bitmapCompression,
+    bitmapLooksPhotographic: bitmapLooksPhotographic,
+    bitmapExportURL: bitmapExportURL,
+    bitmapExportReport: bitmapExportReport,
+    /* The Motion Editor: per-property easing curves. */
+    motionKeyframe: motionKeyframe,
+    propEase: propEase,
+    setPropEase: setPropEase,
+    clearPropEase: clearPropEase,
+    applyPropEaseToAll: applyPropEaseToAll,
+    propEaseCurve: propEaseCurve,
+    motionActiveProps: motionActiveProps,
+    updateMotionPanel: updateMotionPanel,
+    /* Cache as bitmap, and the two generative tools. */
+    canCache: canCache,
+    cacheBoundsOf: cacheBoundsOf,
+    DECO_PATTERNS: DECO_PATTERNS,
+    decoSettings: function(){ return Object.assign({}, decoSettings); },
+    setDeco: function(o){ Object.assign(decoSettings, o||{}); updateToolOptions(); },
+    decoRandom: decoRandom,
+    decoObjects: decoObjects,
+    applyDecoFill: applyDecoFill,
+    spraySettings: function(){ return Object.assign({}, spraySettings); },
+    setSpray: function(o){ Object.assign(spraySettings, o||{}); updateToolOptions(); },
+    sprayObjects: sprayObjects,
+    applySpray: applySpray,
+    stampSymbols: stampSymbols,
     gradientHandles: gradientHandles,
     setGradientHandle: setGradientHandle,
     /** The pen, as its three gestures: place, shape the handle, finish. */

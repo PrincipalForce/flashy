@@ -1045,12 +1045,12 @@ the first pass never had a row for.
 |---|---|---|
 | **Gradient fills** | No stop editor at all — more than two stops could exist in the save format and could not be authored. No overflow mode, no radial focal point, no gradient on a stroke. | ✅ Wave 14 |
 | **Drawing model** | Flash had two: Object Drawing, and the MERGE model where a new shape cuts and unions the ones it lands on. Flashy is object-only. | ✅ Wave 15 |
-| **Free Transform** | Scale, rotate and skew. No Distort (drag one corner freely) and no Envelope (Bézier warp). | ⬜ |
-| **Stroke styles** | Solid, dashed and dotted. No hairline, ragged, stipple or hatched, and no stroke-scaling mode. | ⬜ |
-| **Animated GIF** | "Export as Sprite Sheet" produces a PNG sheet. There is no animated GIF — the format the web still actually uses for a short loop. | ⬜ |
-| **Per-bitmap export settings** | Sounds got per-asset settings in Wave 11; bitmaps did not. | ⬜ |
-| **Document units** | Everything is pixels. No inches, centimetres, millimetres or points for the rulers, the grid or the Info panel. | ⬜ |
-| **Grid settings** | Show/hide and snap only — no spacing, colour or snap accuracy. | ⬜ |
+| **Free Transform** | Scale, rotate and skew. No Distort (drag one corner freely) and no Envelope (Bézier warp). | ✅ Wave 16 |
+| **Stroke styles** | Solid, dashed and dotted. No hairline, ragged, stipple or hatched, and no stroke-scaling mode. **And the engine's `lineStyle` took no dash argument, so every dashed stroke published SOLID.** | ✅ Wave 17 |
+| **Animated GIF** | "Export as Sprite Sheet" produces a PNG sheet. There is no animated GIF — the format the web still actually uses for a short loop. | ✅ Wave 18 |
+| **Per-bitmap export settings** | Sounds got per-asset settings in Wave 11; bitmaps did not. | ✅ Wave 19 |
+| **Document units** | Everything is pixels. No inches, centimetres, millimetres or points for the rulers, the grid or the Info panel. | ✅ Wave 19 |
+| **Grid settings** | Show/hide and snap only — no spacing, colour or snap accuracy. | ✅ Wave 19 |
 | **Motion Editor** | A custom easing curve per TWEEN exists; a curve per PROPERTY (CS4's Motion Editor) does not. | ⬜ |
 | **Deco / Spray brush** | Absent. | ⬜ |
 | **Bone tool / IK** | Character rigs with poses exist; an IK chain with constrained joints does not. | ⬜ |
@@ -1170,3 +1170,162 @@ the first pass never had a row for.
     their callers depend on, and was written FIRST — ten failing, six passing,
     which is what separated the broken cases from the ones that always worked.
     All 801 existing tests still pass.
+
+### Wave 16 — Free Transform: Distort and Envelope
+
+The tool existed, had a keyboard shortcut, and did nothing: its mousedown
+selected a shape and stopped. Scale, rotate and skew are matrices and the
+Transform panel has always driven those; Flash's other two modifiers are not
+matrices.
+
+*   **`Flashy.Warp`** (in the engine, because four render paths have to agree
+    about it). `distortFor`/`envelopeFor` start AS the object's box, so arming
+    a modifier changes nothing until a handle moves. `point(warp,u,v)` is
+    bilinear for a distort and a **Coons patch** over four cubic edges for an
+    envelope — the subtraction of the bilinear corner patch is what keeps the
+    interior following the sides instead of puffing out near the corners.
+*   **`Warp.path`** flattens as it warps. A warped quadratic is not a
+    quadratic, and keeping the curve opcode would draw a different shape from
+    the one the handles describe. A straight line is subdivided too, under an
+    envelope: skipping that left a rectangle's sides obstinately straight
+    while its corners moved.
+*   **`Warp.outline`** is the one place `rect`, `oval`, `path` and a
+    parameterised primitive become one command stream. It returns null for a
+    symbol, a group, a text field, a bitmap and a pencil stroke — which is
+    also the list Flash refused, and for the same reason: contents, not an
+    outline.
+*   Routed through **all four consumers**: `paintObjRaw` (which already had a
+    command-stream branch for primitives, in box coordinates — exactly what a
+    warped outline is), `_objToSVGRaw`, `exportRuntime`'s shape builder, and
+    `objectRegion`, so the eraser cuts round the distorted shape rather than
+    the box it started in.
+*   The tool: a three-way mode option (Standard / Distort / Envelope), a cage
+    drawn inside the stage transform with square corners and round tangents,
+    handle picking that prefers corners on a tie, and a Reset button. Dragging
+    comes back through `objMatrix`, so a corner of a rotated, scaled shape
+    follows the pointer rather than a sheared version of it. **A corner
+    carries its two tangents with it**, as Flash's did — without that,
+    adjusting any corner straightens the two curves beside it and an envelope
+    is unusable. A distort promoted to an envelope regrows its tangents at the
+    thirds of the ALREADY-DISTORTED sides, so the promotion is the identity.
+*   `tests/free-transform.spec.js` (19 specs), including a pixel probe at a
+    stage coordinate 80px outside the shape's own box.
+
+### Wave 17 — line styles: all seven, and the Scale menu
+
+Flash's Stroke panel had seven styles and a Scale menu. Flashy had three — and
+two of those were wrong outside the stage, because the engine's `lineStyle`
+took no dash argument at all. **Every dashed and dotted stroke published
+solid.** That is the fifth feature found whole in the UI and the save format
+and absent from the output, after `skewX`/`skewY`, `layerHeight`, `kf.label`
+and `fillStops`.
+
+*   **`Flashy.Stroke`**. `dash(style,width)` is proportional to the width, so
+    a 1px dashed line and a 10px one share a rhythm rather than a gap, which
+    is what Flash's did. `width(style,w,scale,sx,sy)` returns the number to
+    HAND the context — "normal" passes the authored width through, everything
+    else expresses a screen width and divides the context's own scale back
+    out. That is what makes a **hairline** one pixel at every zoom and under
+    every scale, and what makes Scale: None mean it.
+*   **Ragged, stipple and hatched are not a pen.** Flash drew them
+    procedurally and turned them into filled shapes on export, which is also
+    the only way a canvas, an SVG and a SWF can show the same scatter. So
+    `decorate` returns closed loops and all four paths fill the same ones:
+    ragged is one ribbon per polyline (so it fills under the same even-odd
+    rule as everything else), stipple a scatter of octagons, hatched a row of
+    leaning ticks. Everything is driven off **arc length**, so the texture
+    does not bunch where the path curves.
+*   The scatter is a **deterministic integer hash** of position along the
+    line, not `Math.random`. A stippled line that re-scatters between the
+    stage and the export is a different drawing, not the same one twice.
+*   **`Stroke.spine`** gives the line a stroke follows for every stroked kind
+    — including a warped shape's warped outline, so the texture follows the
+    shape you can see.
+*   Along the way: **a `line` object and a `pencil` stroke both drew their pen
+    unconditionally**, ignoring `strokeOn` entirely. A line is nothing but its
+    stroke, so a hatched line came out hatched on top of solid.
+*   The style and the scaling mode are sticky across draws, the way Flash's
+    Stroke panel was, and the ink bottle applies the style it is showing — it
+    used to keep whatever the shape already had, so there was no way to make
+    an existing line hatched at all.
+*   `tests/stroke-styles.spec.js` (16 specs), two of which run the exported
+    player and count ink along the line.
+
+### Wave 18 — export an animated GIF, as a GIF
+
+"Export as Sprite Sheet" wrote a PNG grid inside a generated HTML player.
+Useful, and not a GIF. A GIF plays in an `<img>`, a chat window, a forum post
+and a text message; nothing else in the export list does, and it is how most
+Flash animation actually left Flash.
+
+*   **`flashy-gif.js`**, a real GIF89a encoder, browser-free (everything takes
+    ImageData-shaped objects and returns bytes).
+*   **Median-cut global palette** over every frame at once, because a
+    per-frame palette makes the colours shift as the animation plays. The
+    split is at the **pixel-count** median, not the entry-count median, so one
+    colour covering half the picture does not share a box with the long tail.
+    Fewer distinct colours than the palette size come back **exactly** — flat
+    cartoon colour is what GIF is best at, and requantising twelve colours
+    into twelve would be a way to make all twelve slightly wrong.
+*   **Ordered (8x8 Bayer) and diffusion (Floyd-Steinberg) dithering**, Flash's
+    two. Ordered is the default recommendation for animation because diffusion
+    error travels differently in each frame and the texture crawls.
+*   **GIF-variant LZW**, growing the code width one entry LATE as the format
+    requires. Early is the classic encoder bug: every decoder then reads the
+    rest of the stream shifted by a bit, and only after the first table reset.
+*   **The NETSCAPE2.0 block**, without which a GIF plays once.
+*   **Frame differencing**: each frame cropped to what changed, the rest left
+    transparent over the frame before, disposal 1. On a still background with
+    a moving character that is most of the file, and a spec measures it (more
+    than 2x smaller on a 10-frame fixture).
+*   Delays round against a **running total**: 24fps is 4.1667 hundredths, and
+    rounding each frame to 4 would run every second of the animation 4% slow.
+*   `tests/gif-export.spec.js` (12 specs). The decisive one hands the bytes to
+    **the browser's own decoder**, for every option that changes the stream —
+    palette size, each dither, differencing on and off, transparency. A GIF
+    this encoder likes and a decoder rejects is not a GIF.
+
+### Wave 19 — ruler units, the grid, and per-bitmap export settings
+
+*   **Ruler units.** Flash's Document Properties had a units menu and every
+    number the editor showed went through it. A movie printed to paper or laid
+    out against a print design is authored in inches or millimetres, and
+    converting in your head on every measurement is how you get a banner that
+    is nearly the right size. Everything INSIDE Flashy stays in pixels — the
+    document, the objects, the save format, the exports — so units are a
+    display conversion at the edge and cannot introduce rounding into the
+    artwork. 72 pixels to the inch, as Flash's ruler was, which also makes a
+    point exactly a pixel.
+    *   The rulers pick their tick step **in the document's units** and convert
+        back, so an inch ruler is marked at halves and quarters rather than at
+        36 and 72 pixels. A ruler whose ticks miss round numbers of its own
+        unit is worse than no ruler.
+    *   Document Settings takes the stage size in those units, and reads the
+        fields **before** changing the unit — the other order would
+        reinterpret the numbers you just typed in a unit you had just left.
+*   **The grid.** Separate spacings on the two axes (a grid matched to a tile
+    sheet, a comic panel layout or a line of text is rarely square), its own
+    colour (a hard-coded grey is invisible over grey artwork, which is most of
+    a greyscale drawing), and **Flash's four snap accuracies**. The snap used
+    to round unconditionally, which is Always Snap and nothing else — so
+    "nudge it deliberately off the grid" was impossible. A grid finer than two
+    screen pixels is skipped: at that point it is a flat wash hiding the
+    artwork, and drawing thousands of lines to produce it is the slow way
+    there. Units and grid are saved with the document, like the guides.
+*   **Per-bitmap export settings.** Sounds got these in Wave 11; bitmaps had
+    the same dialog in Flash and got nothing, so an imported photograph went
+    into every export as the PNG it arrived as. Compression is auto / photo
+    (JPEG) / lossless, plus a quality and Allow Smoothing. **Auto looks at the
+    image**: distinct colours in a subsample separate flat artwork from a
+    photograph, and the threshold is deliberately generous because JPEG on
+    flat art rings visibly round every edge while PNG on a photograph is only
+    a large file — the cheap error is the one to prefer. **Transparency
+    settles it outright**: JPEG has no alpha channel, so an image with one
+    stays lossless however photographic it looks. A re-encode that comes out
+    BIGGER is discarded, or "optimise" would be a pessimisation on small flat
+    images. Applied in `exportDocData`, so every export path gets it from one
+    place while the document keeps the lossless original. `serializeBitmaps`
+    was dropping every field it did not know about, which would have lost the
+    settings on each save — a setting that does not survive the file is not a
+    setting.
+*   `tests/units-grid-bitmaps.spec.js` (18 specs).

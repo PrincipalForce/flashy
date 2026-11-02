@@ -302,6 +302,8 @@ body.dock-dragging .dock-zone { outline: 1px dashed #5a5a5a; outline-offset: -2p
 .tool-opt-btn:hover { color: #fff; border-color: #888; }
 /* A worded action rather than a glyph, so it needs room for the word. */
 .tool-opt-btn.wide { width: auto; padding: 0 6px; font-size: 9px; }
+/* The Motion Editor's overlay graph: read-only, so no cursor affordance. */
+.motion-graph { border: 1px solid #3A3A3A; border-radius: 2px; background: #1E1E1E; }
 .tool-opt-btn.active {
   background: linear-gradient(to bottom, #333, #3A3A3A);
   border-color: #222; color: #80CCFF;
