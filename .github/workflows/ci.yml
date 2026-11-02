@@ -55,13 +55,15 @@ jobs:
 
       # There is no bundler, so nothing else would ever catch a syntax error in
       # a file the editor only loads at runtime.
+      # Globbed rather than listed. The list it replaced had drifted: it was
+      # missing flashy-swf-write.js, flashy-gif.js and flashy-as3.js, so three
+      # files the editor loads were never parse-checked at all -- the same
+      # class of bug check-packaged-files.cjs exists to catch, appearing in
+      # the guard itself.
       - name: node --check every source file
         run: |
           set -e
-          for f in flashy.js flashy-swf.js flashy-fla.js flashy-avm1.js flashy-abc.js flashy-as2.js \
-                   flashy-import.js flashy-trace.js flashy-geom.js \
-                   editor-app.js desktop.js workspace.js character.js \
-                   splash.js feedback.js electron/*.cjs scripts/*.cjs; do
+          for f in *.js electron/*.cjs scripts/*.cjs; do
             echo "checking $f"
             node --check "$f"
           done
