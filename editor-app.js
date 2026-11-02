@@ -14,13 +14,13 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Text kinds and field options. `textType` is the big one: a STATIC field is
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Free Transform's Distort and Envelope. {kind:"distort"|"envelope", points:[...]} in the object's own box coordinates, or null -- and null costs the render path nothing. */this.warp=null;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Text kinds and field options. `textType` is the big one: a STATIC field is
    drawn and forgotten, a DYNAMIC one has a name so a script can write to it,
    and an INPUT one can be typed into. Without the last two there is no score
    display, no form and no typed-in name. All default to the static behaviour
    every existing document means. */this.textType="static";this.variableName="";this.selectable=false;this.lineType="single";this.letterSpacing=0;this.maxChars=0;this.textBorder=false;this.textBackground=false;this.textBorderColor="#000000";this.textBackgroundColor="#FFFFFF";this.antiAlias="normal";this.renderAsHtml=false;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});/* `children` (a group's contents) holds OBJECTS, so the shallow slice above would hand the copy the originals and every edit to one group would show up in the other. Deep-clone it, the way KeyFrame.clone deep-clones its own object list. */
-if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});/* `filters` is an array of OBJECTS, so the shallow slice above would hand the copy the same filter specs and editing one object's blur would change the other's. Same bug class as `children`. */if(Array.isArray(s.filters))c.filters=s.filters.map(function(f){return f?JSON.parse(JSON.stringify(f)):f;});if(s.colorEffect)c.colorEffect=JSON.parse(JSON.stringify(s.colorEffect));c.id=uid();return c;};
+if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});/* `filters` is an array of OBJECTS, so the shallow slice above would hand the copy the same filter specs and editing one object's blur would change the other's. Same bug class as `children`. */if(Array.isArray(s.filters))c.filters=s.filters.map(function(f){return f?JSON.parse(JSON.stringify(f)):f;});if(s.colorEffect)c.colorEffect=JSON.parse(JSON.stringify(s.colorEffect));/* `warp` holds an array inside an object, so the shallow copy above would share the handle list and dragging one shape's corner would move the other's. */if(s.warp)c.warp={kind:s.warp.kind,points:(s.warp.points||[]).slice()};c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
 /* `labelType` is Flash's three kinds of frame label and they are not
@@ -962,6 +962,25 @@ function drawModeOption(){
 }
 
 function toolOptionSpec(tool){
+  if(tool==="transform"){
+    /* Flash's four Free Transform modifiers. Scale/rotate/skew is the
+       Standard mode and is driven from the Transform panel; Distort and
+       Envelope put their own cage on the stage. */
+    return [
+      {type:"choice",title:"Free Transform mode",
+       options:[["standard","\u25a1","Standard \u2014 scale, rotate and skew"],
+                ["distort","\u25c7","Distort \u2014 drag a corner on its own"],
+                ["envelope","\u25cc","Envelope \u2014 bend each side with tangents"]],
+       get:function(){return warpMode;},
+       set:function(v){setWarpMode(v);}},
+      {type:"button",label:"Reset",title:"Reset the distortion, back to the box",
+       click:function(){
+         if(!resetWarpSelection()){
+           showMessage("Free Transform","Nothing selected has been distorted.");
+         }
+       }}
+    ];
+  }
   if(tool==="eraser"){
     return [
       {type:"label",id:"eraserSizeLabel",text:function(){return eraserSize+" px";}},
@@ -1149,6 +1168,20 @@ function updateToolOptions(){
       box.appendChild(r);
       return;
     }
+    if(it.type==="button"){
+      // A one-shot action rather than a setting: Reset on the Free Transform
+      // strip is the first, and the only honest way out of a distortion you
+      // have pushed too far to drag back.
+      var ab=document.createElement("button");
+      ab.type="button";
+      ab.className="tool-opt-btn wide";
+      if(it.id)ab.id=it.id;
+      ab.textContent=it.label;
+      if(it.title)ab.title=it.title;
+      ab.addEventListener("click",it.click);
+      box.appendChild(ab);
+      return;
+    }
     if(it.type==="choice"){
       var g=document.createElement("div");
       g.className="tool-opt-shapes";
@@ -1331,6 +1364,7 @@ function render(){
   // Tool overlays live inside the stage transform so their handles track the
   // artwork at any zoom — the same reason the rig overlay is drawn here.
   if(curTool==="subselect")drawSubselectOverlay(ctx);
+  if(curTool==="transform")drawWarpOverlay(ctx);
   if(curTool==="gradient")drawGradientOverlay(ctx);
   if(curTool==="pen")drawPenOverlay(ctx);
   drawShapeHints(ctx);
@@ -4179,8 +4213,14 @@ function paintObjRaw(cx,o,opts){
   /* Box fractions -> the centre-origin space the shapes draw in. */
   var boxMap=function(fx,fy){return [(-hw)+fx*(o.width||0),(-hh)+fy*(o.height||0)];};
 
-  var primPath=(window.Flashy&&Flashy.Primitives&&Flashy.Primitives.active(o))
-    ? Flashy.Primitives.path(o) : null;
+  /* A Distort or Envelope replaces the outline rather than transforming it,
+     so it is resolved first and then drawn down the same command-stream path
+     a primitive uses -- the stream is already in box coordinates, which is
+     exactly what that branch expects. */
+  var warpPath=(window.Flashy&&Flashy.Warp&&Flashy.Warp.active(o))
+    ? Flashy.Warp.outlineOf(o,Flashy.Primitives) : null;
+  var primPath=warpPath||((window.Flashy&&Flashy.Primitives&&Flashy.Primitives.active(o))
+    ? Flashy.Primitives.path(o) : null);
   if(primPath&&window.FlashyTrace){
     /* A rounded rectangle or an oval arc/pie/donut. The outline comes from
        Flashy.Primitives, which is also what the SVG export, the player, the
@@ -5465,8 +5505,31 @@ function onMouseDown(e){
     if(hit2){fillColor=hit2.fillColor;strokeColor=hit2.strokeColor;strokeWidth=hit2.strokeWidth;updateColorUI();}
     dragging=false;
   }else if(curTool==="transform"){
-    var hit3=hitTest(p.x,p.y);
-    if(hit3){selection=[hit3];updateProps();render();}
+    /* A warp handle first, so clicking a corner that happens to sit over the
+       artwork drags the corner instead of reselecting the shape. */
+    var wh=warpHandleHit(p.x,p.y);
+    if(wh){
+      warpDrag=wh;
+      warpPreSnap=snap();
+    }else{
+      var hit3=hitTest(p.x,p.y);
+      if(hit3){
+        selection=[hit3];
+        /* Picking a shape while a modifier is armed fits it with that
+           modifier's cage straight away -- otherwise the tool looks inert
+           until you switch mode back and forth. */
+        if(warpMode!=="standard"&&canWarp(hit3))ensureWarp(hit3,warpMode);
+        else if(warpMode!=="standard"){
+          showMessage("Free Transform",
+            "Distort and Envelope work on shapes and drawings.\n\n"+
+            "A symbol, a group, a text field or a bitmap has contents rather "+
+            "than an outline, so there are no points to push. Break it apart "+
+            "first, or use Standard mode to scale, rotate and skew it.");
+        }
+        updateProps();
+      }
+      render();
+    }
     dragPreview=null;
   }
 }
@@ -5534,6 +5597,8 @@ function onMouseMove(e){
         selection[i].y=moveObjStarts[i].y+dy;
       }
     }
+  }else if(curTool==="transform"){
+    if(warpDrag)setWarpHandle(warpDrag.obj,warpDrag.index,p.x,p.y);
   }else if(curTool==="subselect"){
     if(subPoint){
       setObjectNode(subPoint.obj,subPoint.node,p.x,p.y);
@@ -5641,6 +5706,12 @@ function onMouseUp(e){
       }
     }
     updateProps();
+  }else if(curTool==="transform"){
+    if(warpDrag){
+      if(warpPreSnap)pushUndoSnap(warpPreSnap);
+      warpDrag=null;warpPreSnap=null;
+      updateProps();
+    }
   }else if(curTool==="subselect"){
     if(subPoint){
       if(subPreSnap)pushUndoSnap(subPreSnap);
@@ -14338,6 +14409,18 @@ function objectRegion(o){
   var G=window.FlashyGeom;
   if(!G)return null;
   var hw=Math.abs((o.width||0)/2),hh=Math.abs((o.height||0)/2);
+  /* A distorted shape is erased round its distorted outline. The warp is
+     resolved before every other kind, because it REPLACES the outline -- a
+     warped rectangle that still erased as a rectangle would leave ink behind
+     the eraser in exactly the places you aimed at. */
+  if(window.Flashy&&Flashy.Warp&&Flashy.Warp.active(o)){
+    var wcmds=Flashy.Warp.outlineOf(o,Flashy.Primitives);
+    if(wcmds&&wcmds.length){
+      var wm=matMul(objMatrix(o),[1,0,0,1,-hw,-hh]);
+      var wsc=Math.max(1e-6,Math.hypot(wm[0],wm[1]),Math.hypot(wm[2],wm[3]));
+      return matApplyLoops(wm,G.normalize(G.pathToLoops(wcmds,ERASE_FLATTEN/wsc)));
+    }
+  }
   if(window.Flashy&&Flashy.Primitives&&Flashy.Primitives.active(o)){
     // A rounded rectangle is erased round its real corners, not its box.
     var pp=Flashy.Primitives.path(o);
@@ -20491,6 +20574,253 @@ function mergeOnDrop(objs) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Free Transform: Distort and Envelope
+ *
+ * Flash's Free Transform tool had four modifiers and Flashy had two of them.
+ * Scale, rotate and skew are matrix transforms, and the Transform panel has
+ * always driven those. Distort and Envelope are not matrices:
+ *
+ *   DISTORT   drags one corner of the box on its own, so the box becomes any
+ *             quadrilateral. Hand-made perspective -- a signpost turning away
+ *             from the camera, a floor receding.
+ *   ENVELOPE  gives every corner two tangent handles, so each side of the box
+ *             becomes a curve and the artwork bends to follow it. A flag
+ *             rippling, a logo wrapped round a bottle.
+ *
+ * The geometry lives in `Flashy.Warp`, in the engine, because four render
+ * paths have to agree about it: the stage painter, the SVG export, the
+ * exported player and the eraser's region. A warp stored here and applied
+ * only on the stage would mean a distorted shape that exports undistorted,
+ * which is worse than not having the tool.
+ *
+ * The object keeps its box. `warp.points` are in the object's own box
+ * coordinates (0,0 to width,height) and start AS that box, so turning a mode
+ * on changes nothing until a handle moves. The box is still what the
+ * selection rectangle, the Transform panel and the Property inspector talk
+ * about -- which is also what Flash did, and is why rotating a distorted
+ * shape still behaves.
+ *
+ * Shapes only. Flash disabled both modifiers for symbols, text, groups and
+ * bitmaps, and for the same reason: those have contents, not an outline, and
+ * there is nothing to push the points of.
+ * ------------------------------------------------------------------ */
+
+/** standard | distort | envelope -- the Free Transform tool's modifier. */
+var warpMode = "standard";
+
+/** True when this object is the kind Distort and Envelope can act on. */
+function canWarp(o) {
+  if (!o || !window.Flashy || !Flashy.Warp) return false;
+  if (!Math.abs(o.width || 0) || !Math.abs(o.height || 0)) return false;
+  return Flashy.Warp.outline(o, Flashy.Primitives) !== null;
+}
+
+function setWarpMode(mode) {
+  if (mode !== "distort" && mode !== "envelope") mode = "standard";
+  warpMode = mode;
+  /* Switching mode fits the selection with the handles that mode needs. A
+     distort converted to an envelope keeps its four corners and grows the
+     eight tangents from them, so the shape does not jump -- going the other
+     way drops the tangents, which does change it, and that is honest: there
+     is no quadrilateral that curves. */
+  if (mode !== "standard") {
+    selection.forEach(function (o) { if (canWarp(o)) ensureWarp(o, mode); });
+  }
+  updateToolOptions();
+  updateProps();
+  render();
+}
+
+/** Give `o` a warp of `kind`, converting or creating as needed. */
+function ensureWarp(o, kind) {
+  var W = Flashy.Warp;
+  var w = Math.abs(o.width || 0), h = Math.abs(o.height || 0);
+  if (o.warp && o.warp.kind === kind && W.active(o)) return o.warp;
+  var corners = (o.warp && Array.isArray(o.warp.points) && o.warp.points.length >= 8)
+    ? o.warp.points.slice(0, 8) : [0, 0, w, 0, w, h, 0, h];
+  if (kind === "distort") {
+    o.warp = { kind: "distort", points: corners };
+  } else {
+    /* The tangents are regrown at the thirds of each (possibly already
+       distorted) side, which is the straight line between those corners --
+       so a distort promoted to an envelope looks identical until a tangent
+       is dragged. */
+    var fresh = W.envelopeFor(w, h);
+    var pts = corners.slice();
+    var sides = [[0, 1], [1, 2], [2, 3], [3, 0]];
+    for (var s = 0; s < 4; s++) {
+      var ax = corners[sides[s][0] * 2], ay = corners[sides[s][0] * 2 + 1];
+      var bx = corners[sides[s][1] * 2], by = corners[sides[s][1] * 2 + 1];
+      pts.push(ax + (bx - ax) / 3, ay + (by - ay) / 3,
+               ax + (bx - ax) * 2 / 3, ay + (by - ay) * 2 / 3);
+    }
+    o.warp = { kind: "envelope", points: pts.length === fresh.points.length ? pts : fresh.points };
+  }
+  return o.warp;
+}
+
+/** Drop the warp, so the shape snaps back to its box. */
+function resetWarp(o) {
+  if (!o || !o.warp) return false;
+  o.warp = null;
+  return true;
+}
+
+/** Reset the Free Transform of everything selected (the menu command). */
+function resetWarpSelection() {
+  var pre = snap();
+  var any = false;
+  selection.forEach(function (o) { if (resetWarp(o)) any = true; });
+  if (!any) return false;
+  pushUndoSnap(pre);
+  fullRefresh();
+  return true;
+}
+
+/**
+ * The handles for an object's warp, in STAGE coordinates.
+ *
+ * `i` indexes `warp.points` in pairs, so dragging writes straight back. The
+ * `tether` is the corner a tangent belongs to, which is what the overlay
+ * draws the connecting line to -- a tangent floating unattached is
+ * unreadable once two of them are near each other.
+ */
+function warpHandles(o) {
+  if (!o || !o.warp || !window.Flashy || !Flashy.Warp || !Flashy.Warp.active(o)) return [];
+  var hw = Math.abs((o.width || 0) / 2), hh = Math.abs((o.height || 0) / 2);
+  var m = matMul(objMatrix(o), [1, 0, 0, 1, -hw, -hh]);
+  var P = o.warp.points;
+  var out = [];
+  // Which corner each tangent hangs off: top is c0-c1, right c1-c2, and so on.
+  var tether = [0, 1, 1, 2, 2, 3, 3, 0];
+  var n = o.warp.kind === "distort" ? 4 : 12;
+  for (var k = 0; k < n; k++) {
+    var x = P[k * 2], y = P[k * 2 + 1];
+    out.push({
+      i: k,
+      kind: k < 4 ? "corner" : "tangent",
+      tether: k < 4 ? -1 : tether[k - 4],
+      x: m[0] * x + m[2] * y + m[4],
+      y: m[1] * x + m[3] * y + m[5]
+    });
+  }
+  return out;
+}
+
+/** The warp handle under a stage point, or null. */
+function warpHandleHit(x, y) {
+  if (warpMode === "standard") return null;
+  var tol = 7 / zoom, best = null, bestD = tol * tol;
+  selection.forEach(function (o) {
+    warpHandles(o).forEach(function (hnd) {
+      var dx = hnd.x - x, dy = hnd.y - y, d = dx * dx + dy * dy;
+      /* Corners win ties. They sit under a tangent whenever the tangent has
+         been dragged back onto one, and the corner is the one you meant: a
+         tangent you cannot reach is recoverable by moving the corner, a
+         corner you cannot reach is not. */
+      if (d < bestD || (d <= bestD && hnd.kind === "corner")) {
+        bestD = d; best = { obj: o, index: hnd.i, kind: hnd.kind };
+      }
+    });
+  });
+  return best;
+}
+
+/**
+ * Move one warp handle to a stage point.
+ *
+ * The point comes back through the object's own matrix, so dragging a corner
+ * of a rotated or scaled shape follows the pointer rather than some sheared
+ * version of it.
+ */
+function setWarpHandle(o, index, x, y) {
+  if (!o || !o.warp) return false;
+  var hw = Math.abs((o.width || 0) / 2), hh = Math.abs((o.height || 0) / 2);
+  var inv = matInvert(matMul(objMatrix(o), [1, 0, 0, 1, -hw, -hh]));
+  if (!inv) return false;
+  var lx = inv[0] * x + inv[2] * y + inv[4];
+  var ly = inv[1] * x + inv[3] * y + inv[5];
+  var P = o.warp.points;
+  if (index * 2 + 1 >= P.length) return false;
+  if (o.warp.kind === "envelope" && index < 4) {
+    /* Flash moved a corner's tangents WITH the corner, so a distorted corner
+       keeps the curvature you gave it instead of straightening as it goes.
+       Without this an envelope is unusable: every corner adjustment undoes
+       the two curves beside it. */
+    var dx = lx - P[index * 2], dy = ly - P[index * 2 + 1];
+    // The two tangents either side of corner `index`, as point indices.
+    var owned = [[4, 11], [5, 6], [7, 8], [9, 10]][index];
+    owned.forEach(function (t) {
+      if (t * 2 + 1 < P.length) { P[t * 2] += dx; P[t * 2 + 1] += dy; }
+    });
+  }
+  P[index * 2] = lx;
+  P[index * 2 + 1] = ly;
+  return true;
+}
+
+var warpDrag = null;      // {obj, index, kind} while a handle is being dragged
+var warpPreSnap = null;
+
+/** The warp cage and its handles, drawn inside the stage transform. */
+function drawWarpOverlay(cx) {
+  if (warpMode === "standard") return;
+  var r = 3.4 / zoom;
+  cx.save();
+  cx.lineWidth = 1 / zoom;
+  selection.forEach(function (o) {
+    var hs = warpHandles(o);
+    if (!hs.length) return;
+    // The cage: corner to corner, through the tangents when there are any.
+    cx.strokeStyle = "rgba(120,200,255,0.75)";
+    cx.beginPath();
+    if (o.warp.kind === "distort") {
+      cx.moveTo(hs[0].x, hs[0].y);
+      for (var i = 1; i < 4; i++) cx.lineTo(hs[i].x, hs[i].y);
+      cx.closePath();
+    } else {
+      cx.moveTo(hs[0].x, hs[0].y);
+      for (var s = 0; s < 4; s++) {
+        var a = hs[4 + s * 2], b = hs[5 + s * 2], c = hs[(s + 1) % 4];
+        cx.bezierCurveTo(a.x, a.y, b.x, b.y, c.x, c.y);
+      }
+    }
+    cx.stroke();
+    // Tethers, so each tangent is visibly attached to its corner.
+    cx.strokeStyle = "rgba(120,200,255,0.45)";
+    hs.forEach(function (hnd) {
+      if (hnd.tether < 0) return;
+      cx.beginPath();
+      cx.moveTo(hs[hnd.tether].x, hs[hnd.tether].y);
+      cx.lineTo(hnd.x, hnd.y);
+      cx.stroke();
+    });
+    hs.forEach(function (hnd) {
+      cx.beginPath();
+      // Square for a corner, round for a tangent -- the same distinction the
+      // Subselection overlay draws, and for the same reason.
+      if (hnd.kind === "corner") {
+        cx.rect(hnd.x - r, hnd.y - r, r * 2, r * 2);
+        cx.fillStyle = "rgba(255,255,255,0.95)";
+      } else {
+        cx.arc(hnd.x, hnd.y, r, 0, Math.PI * 2);
+        cx.fillStyle = "rgba(120,200,255,0.9)";
+      }
+      cx.fill();
+      cx.strokeStyle = "rgba(20,60,120,0.9)";
+      cx.stroke();
+    });
+  });
+  cx.restore();
+}
+
+/** The warped outline of `o` in its own box coordinates, or null. */
+function warpedOutline(o) {
+  if (!window.Flashy || !Flashy.Warp) return null;
+  return Flashy.Warp.outlineOf(o, Flashy.Primitives);
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -21723,6 +22053,8 @@ function plainObj(o){
   // would share them between the document and its serialized form.
   if(Array.isArray(o.filters))r.filters=JSON.parse(JSON.stringify(o.filters));
   if(o.colorEffect)r.colorEffect=JSON.parse(JSON.stringify(o.colorEffect));
+  // Same nesting as the filters: an array inside an object.
+  if(o.warp)r.warp={kind:o.warp.kind,points:(o.warp.points||[]).slice()};
   return r;
 }
 function serializeLayers(layers){
@@ -22050,6 +22382,9 @@ function reviveObject(od){
   if(Array.isArray(od.children))o.children=od.children.map(reviveObject);
   if(Array.isArray(od.filters))o.filters=JSON.parse(JSON.stringify(od.filters));
   if(od.colorEffect)o.colorEffect=JSON.parse(JSON.stringify(od.colorEffect));
+  if(od.warp&&od.warp.kind&&Array.isArray(od.warp.points)){
+    o.warp={kind:od.warp.kind,points:od.warp.points.map(Number)};
+  }else o.warp=null;
   normalizeObjPoints(o);
   return o;
 }
@@ -22908,8 +23243,13 @@ function exportRuntime(data, canvas, options) {
          or donut — resolves to a command stream from Flashy.Primitives, which
          IS shipped with the export, and is then replayed by the same code path
          a traced outline uses. One geometry, five consumers. */
-      var primCmds = (Flashy.Primitives && Flashy.Primitives.active(o))
-        ? Flashy.Primitives.path(o) : null;
+      /* Distort and Envelope likewise: Flashy.Warp IS shipped with the
+         export, so the player resolves the same outline the stage drew
+         rather than carrying a second idea of the shape. */
+      var warpCmds = (Flashy.Warp && Flashy.Warp.active(o))
+        ? Flashy.Warp.outlineOf(o, Flashy.Primitives) : null;
+      var primCmds = warpCmds || ((Flashy.Primitives && Flashy.Primitives.active(o))
+        ? Flashy.Primitives.path(o) : null);
       if (o.type === "path" || primCmds) {
         /* A traced outline. The command stream is replayed inline rather than
            through FlashyTrace, because this whole function is serialised into
@@ -24548,6 +24888,17 @@ function _objToSVGRaw(o, depth) {
   /* A parameterised primitive — a rounded rectangle, or an oval arc, pie or
      donut — emits its own outline from the same geometry the painter uses, so
      the SVG and the stage cannot disagree about the shape. */
+  /* A warped shape exports as its warped outline, from the same
+     Flashy.Warp the stage read. Leaving this out is how you get an SVG that
+     is quietly the undistorted original. */
+  if (window.Flashy && Flashy.Warp && Flashy.Warp.active(o) && window.FlashyTrace) {
+    var wp = Flashy.Warp.outlineOf(o, Flashy.Primitives);
+    if (wp && wp.length) {
+      var wd = FlashyTrace.pathToSVG(FlashyTrace.pathTransform(wp, 1, 1, -hw, -hh));
+      return gdefs + '<path' + a + ' d="' + wd + '" fill="' + fl +
+             '" fill-rule="evenodd" stroke="' + st + '" stroke-width="' + sw + '"/>\n';
+    }
+  }
   if (window.Flashy && Flashy.Primitives && Flashy.Primitives.active(o) && window.FlashyTrace) {
     var prim = Flashy.Primitives.path(o);
     if (prim) {
@@ -26421,6 +26772,17 @@ function init(){
     samplesToWAV: samplesToWAV,
     /* The gradient editor: stops, overflow, focal point, and the stroke's
        own gradient -- none of which could be authored before. */
+    /* Free Transform's Distort and Envelope. */
+    warpMode: function(){ return warpMode; },
+    setWarpMode: setWarpMode,
+    canWarp: canWarp,
+    ensureWarp: ensureWarp,
+    resetWarp: resetWarp,
+    resetWarpSelection: resetWarpSelection,
+    warpHandles: warpHandles,
+    warpHandleHit: warpHandleHit,
+    setWarpHandle: setWarpHandle,
+    warpedOutline: warpedOutline,
     /* Merge drawing: Flash's other drawing model. */
     drawMode: function(){ return drawMode; },
     setDrawMode: setDrawMode,

@@ -2192,6 +2192,236 @@
     }
   };
 
+  /* -------------------- Free Transform: Distort and Envelope --------------
+   *
+   * Flash's Free Transform had four modifiers. Scale, rotate and skew are
+   * matrix transforms and Flashy has always had them. The other two are not
+   * matrices at all:
+   *
+   *   DISTORT   drags one corner on its own, so the box becomes any
+   *             quadrilateral. Perspective, by hand -- a signpost turning
+   *             away from the camera, a floor receding.
+   *   ENVELOPE  gives every corner two tangent handles, so each side becomes
+   *             a curve and the shape bends. A flag rippling, a logo on a
+   *             bottle.
+   *
+   * Neither can be expressed as a transform on the object, so they are stored
+   * as a `warp` and applied to the OUTLINE: the shape is reduced to a path in
+   * its own box coordinates, every point is mapped through the warp, and the
+   * result is drawn. That is one geometry for all four render paths -- the
+   * stage, the raster exports, the SVG and the exported player -- which is
+   * the only way a distorted shape looks the same in all of them.
+   *
+   * Flash offered these for shapes only, never for symbols, text or groups,
+   * and for the same reason: there is no outline to warp, only contents.
+   * ------------------------------------------------------------------ */
+  const Warp = {
+    /** True when an object carries a warp worth applying. */
+    active(o) {
+      if (!o || !o.warp || !o.warp.kind) return false;
+      if (o.warp.kind !== 'distort' && o.warp.kind !== 'envelope') return false;
+      const need = o.warp.kind === 'distort' ? 8 : 24;
+      return Array.isArray(o.warp.points) && o.warp.points.length >= need;
+    },
+
+    /** A fresh distort: the box's own four corners, so it starts as itself. */
+    distortFor(w, h) {
+      return { kind: 'distort', points: [0, 0, w, 0, w, h, 0, h] };
+    },
+
+    /**
+     * A fresh envelope: four corners plus two tangent handles per side.
+     *
+     * The handles start at the thirds of each straight side, which makes the
+     * curve through them the straight line -- so switching to Envelope
+     * changes nothing until a handle is moved. An envelope that bowed the
+     * shape the moment you chose it would be unusable.
+     */
+    envelopeFor(w, h) {
+      const t3 = (ax, ay, bx, by) => [
+        ax + (bx - ax) / 3, ay + (by - ay) / 3,
+        ax + (bx - ax) * 2 / 3, ay + (by - ay) * 2 / 3
+      ];
+      return {
+        kind: 'envelope',
+        points: [0, 0, w, 0, w, h, 0, h].concat(
+          t3(0, 0, w, 0),          // top: c0 -> c1
+          t3(w, 0, w, h),          // right: c1 -> c2
+          t3(w, h, 0, h),          // bottom: c2 -> c3
+          t3(0, h, 0, 0))          // left: c3 -> c0
+      };
+    },
+
+    /** One cubic Bézier point. */
+    _cubic(p0, p1, p2, p3, t) {
+      const u = 1 - t;
+      const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+      return [a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0],
+              a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1]];
+    },
+
+    /**
+     * Map a point from the unit square onto the warp.
+     *
+     * `u` and `v` run 0..1 across and down the object's own box. A distort is
+     * bilinear between its four corners; an envelope is a Coons patch, which
+     * is the standard way to fill a shape bounded by four curves and is what
+     * makes the interior follow the edges instead of shearing away from them.
+     */
+    point(warp, u, v) {
+      const P = warp.points;
+      const c0 = [P[0], P[1]], c1 = [P[2], P[3]], c2 = [P[4], P[5]], c3 = [P[6], P[7]];
+      if (warp.kind === 'distort') {
+        const iu = 1 - u, iv = 1 - v;
+        return [iu * iv * c0[0] + u * iv * c1[0] + u * v * c2[0] + iu * v * c3[0],
+                iu * iv * c0[1] + u * iv * c1[1] + u * v * c2[1] + iu * v * c3[1]];
+      }
+      // The four boundary curves, each a cubic with its own two handles.
+      const h = (i) => [P[8 + i * 2], P[9 + i * 2]];
+      const top = this._cubic(c0, h(0), h(1), c1, u);
+      const right = this._cubic(c1, h(2), h(3), c2, v);
+      const bottom = this._cubic(c3, h(5), h(4), c2, u);   // c3 -> c2
+      const left = this._cubic(c0, h(7), h(6), c3, v);     // c0 -> c3
+      const iu = 1 - u, iv = 1 - v;
+      /* Coons: the two ruled surfaces between opposite edges, minus the
+         bilinear corner patch they both contain. Dropping the subtraction is
+         the classic mistake -- the interior then doubles up near the corners
+         and the shape puffs out. */
+      return [
+        iv * top[0] + v * bottom[0] + iu * left[0] + u * right[0] -
+          (iu * iv * c0[0] + u * iv * c1[0] + u * v * c2[0] + iu * v * c3[0]),
+        iv * top[1] + v * bottom[1] + iu * left[1] + u * right[1] -
+          (iu * iv * c0[1] + u * iv * c1[1] + u * v * c2[1] + iu * v * c3[1])
+      ];
+    },
+
+    /* How finely a curve is chopped before warping. A warped quadratic is not
+       a quadratic, so the only honest way to draw one is to flatten it first.
+       Eight steps per curve is below a pixel's worth of error at the sizes
+       anyone draws, and the shape is re-flattened on every edit anyway. */
+    STEPS: 8,
+
+    /**
+     * Warp a command stream given in box coordinates.
+     *
+     * Returns a new stream of moves and lines only: a warped curve has no
+     * exact curve form, so pretending to keep one would mean drawing a
+     * different shape from the one the handles describe.
+     */
+    path(cmds, warp, w, h) {
+      if (!cmds || !cmds.length) return [];
+      const sw = Math.abs(w) || 1, sh = Math.abs(h) || 1;
+      const at = (x, y) => this.point(warp, x / sw, y / sh);
+      const out = [];
+      let cx = 0, cy = 0;
+      for (let i = 0; i < cmds.length;) {
+        const op = cmds[i];
+        if (op === 0) {
+          const p = at(cmds[i + 1], cmds[i + 2]);
+          out.push(0, p[0], p[1]);
+          cx = cmds[i + 1]; cy = cmds[i + 2];
+          i += 3;
+        } else if (op === 1) {
+          /* A straight line in box space is NOT straight after an envelope,
+             so it is subdivided too. Skipping that was the first thing that
+             looked right and was not: a rectangle's sides stayed stubbornly
+             straight while its corners moved. */
+          const x1 = cmds[i + 1], y1 = cmds[i + 2];
+          const n = warp.kind === 'envelope' ? this.STEPS : 1;
+          for (let k = 1; k <= n; k++) {
+            const t = k / n;
+            const p = at(cx + (x1 - cx) * t, cy + (y1 - cy) * t);
+            out.push(1, p[0], p[1]);
+          }
+          cx = x1; cy = y1;
+          i += 3;
+        } else if (op === 2) {
+          const qx = cmds[i + 1], qy = cmds[i + 2];
+          const x1 = cmds[i + 3], y1 = cmds[i + 4];
+          for (let k = 1; k <= this.STEPS; k++) {
+            const t = k / this.STEPS, u2 = 1 - t;
+            const bx = u2 * u2 * cx + 2 * u2 * t * qx + t * t * x1;
+            const by = u2 * u2 * cy + 2 * u2 * t * qy + t * t * y1;
+            const p = at(bx, by);
+            out.push(1, p[0], p[1]);
+          }
+          cx = x1; cy = y1;
+          i += 5;
+        } else {
+          out.push(3);
+          i += 1;
+        }
+      }
+      return out;
+    },
+
+    /**
+     * An object's outline as a command stream in box coordinates.
+     *
+     * The one place the four shape kinds become one thing. Returns null for
+     * anything that has contents rather than an outline, which is also the
+     * list Flash refused to distort.
+     */
+    outline(o, primitives) {
+      const w = Math.abs(o.width || 0), h = Math.abs(o.height || 0);
+      if (!w || !h) return null;
+      if (primitives && primitives.active && primitives.active(o)) {
+        const p = primitives.path(o);
+        if (p && p.length) return p;
+      }
+      if (o.type === 'rect') return [0, 0, 0, 1, w, 0, 1, w, h, 1, 0, h, 3];
+      if (o.type === 'oval') {
+        /* Four quadratics with the control points on the box's corners, which
+           is the same approximation the SWF writer uses -- and close enough
+           that an undistorted oval drawn this way is indistinguishable. */
+        const hw = w / 2, hh = h / 2;
+        const k = 0.5522847498;
+        const out = [0, hw, 0];
+        const arc = (cx1, cy1, cx2, cy2, x, y) => { out.push(2, (cx1 + cx2) / 2, (cy1 + cy2) / 2, x, y); };
+        void k; void arc;
+        // Eight quadratic segments, which tracks a circle to about 0.03%.
+        const N = 8;
+        for (let i = 1; i <= N; i++) {
+          const a0 = ((i - 1) / N) * Math.PI * 2, a1 = (i / N) * Math.PI * 2;
+          const am = (a0 + a1) / 2;
+          const px = hw + Math.cos(a1) * hw, py = hh + Math.sin(a1) * hh;
+          const mx = hw + Math.cos(am) * hw, my = hh + Math.sin(am) * hh;
+          const sx = hw + Math.cos(a0) * hw, sy = hh + Math.sin(a0) * hh;
+          out.push(2, 2 * mx - (sx + px) / 2, 2 * my - (sy + py) / 2, px, py);
+        }
+        out.push(3);
+        // The move has to be the first point of the walk, not the box's edge.
+        out[1] = hw + hw; out[2] = hh;
+        return out;
+      }
+      if (o.type === 'path' && o.path && o.path.length) {
+        // Scaled from the path's own recorded box into the object's.
+        const sx = o.pathW ? w / o.pathW : 1, sy = o.pathH ? h / o.pathH : 1;
+        if (sx === 1 && sy === 1) return o.path.slice();
+        const out = [];
+        for (let i = 0; i < o.path.length;) {
+          const op = o.path[i];
+          const n = op === 0 || op === 1 ? 2 : op === 2 ? 4 : 0;
+          out.push(op);
+          for (let k = 0; k < n; k += 2) {
+            out.push(o.path[i + 1 + k] * sx, o.path[i + 2 + k] * sy);
+          }
+          i += 1 + n;
+        }
+        return out;
+      }
+      return null;
+    },
+
+    /** An object's warped outline, ready to stroke or fill in box space. */
+    outlineOf(o, primitives) {
+      if (!this.active(o)) return null;
+      const base = this.outline(o, primitives);
+      if (!base) return null;
+      return this.path(base, o.warp, Math.abs(o.width || 1), Math.abs(o.height || 1));
+    }
+  };
+
   class TextField extends DisplayObject {
     constructor(text, opts) {
       super();
@@ -3806,7 +4036,7 @@
     version: '0.7.6',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
-    Shape, TextField, RichText, Fonts, Gradient, Bitmap, MovieClip, Timeline, Tween, Stage,
+    Shape, TextField, RichText, Fonts, Gradient, Warp, Bitmap, MovieClip, Timeline, Tween, Stage,
     /* 9-slice: the cell maths plus the container that uses it, shared with the
        authoring stage and the SVG export so all three agree to the pixel. */
     Slice9, NineSlice,
