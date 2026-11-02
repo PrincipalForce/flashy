@@ -59,7 +59,8 @@
   ],
   "scripts": {
     "// serve": "Node rather than `python -m http.server`, so a checkout needs nothing but Node \u2014 same reason the CI job can skip Python entirely.",
-    "start": "node scripts/serve.cjs 8000",
+    "// start": "No port argument on purpose: a managed container sets $PORT and the server reads it, so hard-coding 8000 here is how a deploy ends up listening on a port the platform proxy never asks for. `dev` keeps 8000 for the workstation.",
+    "start": "node scripts/serve.cjs",
     "dev": "node scripts/serve.cjs 8000",
     "test": "playwright test",
     "test:web": "playwright test --project=chromium",

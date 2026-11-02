@@ -492,7 +492,22 @@ test("the exported player plays the clip and fires its cue points", async ({ pag
   const html = await downloadFromAction(page, "export");
   const { page: out, errors } = await runExportedHTML(context, html);
   // Long enough for the playhead to cross 0.6s of footage at the movie's rate.
-  await out.waitForTimeout(1600);
+  /* Polled, not slept, and polled for BOTH things this test asserts. A fixed
+     wait for the playhead to cross 0.6s of footage is a flake waiting to
+     happen: under a dozen parallel workers all decoding video, the exported
+     movie's own frame loop runs slower than wall clock. Waiting on the cue
+     alone is not enough either -- it fires the moment the playhead passes it,
+     which can be before the first video frame has been painted. */
+  await out.waitForFunction(() => {
+    if (!Array.isArray(window.__cues) || !window.__cues.length) return false;
+    const c = document.querySelector("canvas");
+    if (!c) return false;
+    const g = c.getContext("2d");
+    const d = g.getImageData(Math.round(40 * (c.width / 120)),
+                             Math.round(30 * (c.height / 90)), 1, 1).data;
+    // Anything but the white stage means a frame of the clip is on screen.
+    return !(d[0] > 240 && d[1] > 240 && d[2] > 240);
+  }, null, { timeout: 15000 });
   const run = await out.evaluate(() => {
     const c = document.querySelector("canvas");
     const g = c.getContext("2d");

@@ -11,7 +11,33 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const ROOT = path.join(__dirname, "..");
+
+/* Which port to listen on.
+ *
+ * An explicit argument wins, because the test harness passes one and needs
+ * exactly that port. Otherwise $PORT, because that is how every managed
+ * container tells an app where to listen -- and listening anywhere else there
+ * means the platform's health check never succeeds and the deploy is reported
+ * as failed with the app running perfectly inside.
+ *
+ * `npm start` deliberately passes NO argument so $PORT is honoured; `npm run
+ * dev` passes 8000, which is the workstation case.
+ */
 const PORT = Number(process.argv[2] || process.env.PORT || 8000);
+
+/* Which interface to bind.
+ *
+ * Loopback on a workstation: this serves the repo ROOT, and a laptop on an
+ * untrusted network has no business offering that to the network. A managed
+ * container is the opposite case -- the platform's proxy runs outside the
+ * container's network namespace, so a loopback bind is unreachable from it
+ * and nothing is served at all.
+ *
+ * The platform announces itself by setting $PORT, which is the same signal it
+ * uses to say which port to use, so that is what switches the bind. HOST
+ * overrides both, for the cases neither guess fits.
+ */
+const HOST = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -78,6 +104,7 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Flashy served at http://127.0.0.1:${PORT}/ (editor: /editor.html)`);
+server.listen(PORT, HOST, () => {
+  const shown = HOST === "0.0.0.0" ? "localhost" : HOST;
+  console.log(`Flashy served on ${HOST}:${PORT} \u2014 http://${shown}:${PORT}/ (editor: /editor.html)`);
 });
