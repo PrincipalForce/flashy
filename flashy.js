@@ -168,6 +168,278 @@
     return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
   }
 
+  /* -------------------- Stroke styles ------------------------------------
+   *
+   * Flash's Stroke panel offered seven line styles and a scaling mode, and
+   * Flashy had three of the styles and none of the scaling:
+   *
+   *   HAIRLINE  a line one pixel wide at every zoom and under every scale.
+   *             Not "thin" -- actually hairline, which is what made it the
+   *             style for technical drawing and for guide art.
+   *   SOLID     the ordinary one.
+   *   DASHED    even dashes, length and gap both settable in Flash.
+   *   DOTTED    round dots, spaced.
+   *   RAGGED    a wobbling edge, for a hand-inked look.
+   *   STIPPLE   a scatter of dots along the line, dense in the middle.
+   *   HATCHED   short strokes crossing the line, like engraving.
+   *
+   * The first four are a line width and a dash pattern. The last three are
+   * not strokes at all: Flash drew them procedurally and, on export, turned
+   * them into filled shapes -- which is also the only way to get the same
+   * picture out of a canvas, an SVG and a SWF. So `decorate` returns a
+   * command stream of closed loops to FILL, and all four render paths fill
+   * the same loops.
+   *
+   * The scatter has to be identical in every one of those paths, so the
+   * randomness is a deterministic hash of the position along the line rather
+   * than Math.random -- a stippled line that re-scatters itself between the
+   * stage and the export is a different drawing, not the same one twice.
+   * ------------------------------------------------------------------ */
+  const Stroke = {
+    STYLES: ['hairline', 'solid', 'dashed', 'dotted', 'ragged', 'stipple', 'hatched', 'none'],
+    /* Flash's Scale menu: which of the instance's scale factors reach the
+       line width. "none" is what you want on a UI frame that must stay a
+       1px box however the symbol is sized. */
+    SCALES: ['normal', 'horizontal', 'vertical', 'none'],
+
+    /** True for the three styles that are geometry rather than a dash. */
+    textured(style) {
+      return style === 'ragged' || style === 'stipple' || style === 'hatched';
+    },
+
+    /** The canvas/SVG dash pattern for a style, or null for an unbroken line. */
+    dash(style, width) {
+      const w = Math.max(0.1, width || 1);
+      /* Proportional to the width, which is what Flash's dashes did: a 1px
+         dashed line and a 10px one have the same rhythm, not the same gap. */
+      if (style === 'dashed') return [w * 3, w * 2];
+      if (style === 'dotted') return [w * 0.01, w * 2];
+      return null;
+    },
+
+    /**
+     * The line width actually drawn, after hairline and the scaling mode.
+     *
+     * `sx`/`sy` are the total scale reaching the object, stage zoom included,
+     * so dividing by them is what pins a width in SCREEN pixels. A hairline
+     * is 1 screen pixel by definition; an unscaled stroke is its authored
+     * width in screen pixels regardless of how big the symbol around it got.
+     */
+    width(style, width, scale, sx, sy) {
+      const s = Math.max(1e-6, (Math.abs(sx || 1) + Math.abs(sy || 1)) / 2);
+      if (style === 'hairline') return 1 / s;
+      const w = Math.max(0, width || 0);
+      if (scale === 'none') return w / s;
+      /* Horizontal/vertical: the NAMED axis scales the line and the other
+         does not, so the width wanted on screen is w times that axis alone.
+         Everything here is expressed as a screen width and then divided by
+         the scale the context has already applied. */
+      if (scale === 'horizontal') return w * Math.abs(sx || 1) / s;
+      if (scale === 'vertical') return w * Math.abs(sy || 1) / s;
+      return w;
+    },
+
+    /* A deterministic value in 0..1 from an integer. Any cheap integer hash
+       would do; what matters is that it is the SAME one everywhere. */
+    _noise(i) {
+      let h = (i | 0) * 374761393 + 668265263;
+      h = (h ^ (h >> 13)) * 1274126177;
+      h = h ^ (h >> 16);
+      return ((h >>> 0) % 100000) / 100000;
+    },
+
+    /** A command stream flattened to a list of polylines. */
+    polylines(cmds, steps) {
+      const N = steps || 8;
+      const out = [];
+      let cur = null, cx = 0, cy = 0, sx = 0, sy = 0;
+      const push = (x, y) => { cur.push(x, y); cx = x; cy = y; };
+      for (let i = 0; i < cmds.length;) {
+        const op = cmds[i];
+        if (op === 0) {
+          cur = [cmds[i + 1], cmds[i + 2]];
+          out.push(cur);
+          cx = sx = cmds[i + 1]; cy = sy = cmds[i + 2];
+          i += 3;
+        } else if (op === 1) {
+          if (!cur) { cur = [cmds[i + 1], cmds[i + 2]]; out.push(cur); }
+          else push(cmds[i + 1], cmds[i + 2]);
+          i += 3;
+        } else if (op === 2) {
+          if (!cur) { cur = [cmds[i + 1], cmds[i + 2]]; out.push(cur); }
+          const qx = cmds[i + 1], qy = cmds[i + 2];
+          const x1 = cmds[i + 3], y1 = cmds[i + 4];
+          const x0 = cx, y0 = cy;
+          for (let k = 1; k <= N; k++) {
+            const t = k / N, u = 1 - t;
+            push(u * u * x0 + 2 * u * t * qx + t * t * x1,
+                 u * u * y0 + 2 * u * t * qy + t * t * y1);
+          }
+          i += 5;
+        } else {
+          // A closed loop comes back to its start, so the decoration wraps.
+          if (cur && (cx !== sx || cy !== sy)) push(sx, sy);
+          cur = null;
+          i += 1;
+        }
+      }
+      return out.filter((p) => p.length >= 4);
+    },
+
+    /**
+     * The filled geometry for a textured style.
+     *
+     * Takes a command stream and the line width; returns a command stream of
+     * closed loops. Ragged is one ribbon per polyline with a wobbling edge;
+     * stipple is a scatter of dots; hatched is a row of perpendicular ticks.
+     * Everything is driven off arc length, so the texture does not bunch up
+     * where the path curves.
+     */
+    decorate(cmds, style, width) {
+      /* Only the three textured styles have geometry. Without this guard the
+         hatched branch below is a catch-all and a SOLID line comes back as a
+         row of ticks -- which is the sort of thing that only shows up once it
+         is already in an export. */
+      if (!this.textured(style)) return [];
+      const w = Math.max(0.2, width || 1);
+      const lines = this.polylines(cmds);
+      const out = [];
+      const self = this;
+      // Running index into the noise, so no two features share a value.
+      let n = 0;
+
+      const quad = (ax, ay, bx, by, cxp, cyp, dx, dy) => {
+        out.push(0, ax, ay, 1, bx, by, 1, cxp, cyp, 1, dx, dy, 3);
+      };
+      const disc = (x, y, r) => {
+        // An octagon. At stipple sizes it is a dot, and it keeps the output a
+        // line-only stream, which every consumer can already fill.
+        out.push(0, x + r, y);
+        for (let k = 1; k < 8; k++) {
+          const a = (k / 8) * Math.PI * 2;
+          out.push(1, x + Math.cos(a) * r, y + Math.sin(a) * r);
+        }
+        out.push(3);
+      };
+
+      lines.forEach((pts) => {
+        // Arc length and the unit normal at each vertex.
+        const len = [0];
+        for (let i = 2; i < pts.length; i += 2) {
+          len.push(len[len.length - 1] +
+            Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]));
+        }
+        const total = len[len.length - 1];
+        if (total < 1e-6) return;
+
+        /** Position and unit tangent at arc length `s`. */
+        const at = (s) => {
+          let i = 1;
+          while (i < len.length && len[i] < s) i++;
+          const i0 = Math.max(0, i - 1), i1 = Math.min(len.length - 1, i);
+          const span = len[i1] - len[i0];
+          const t = span > 1e-9 ? (s - len[i0]) / span : 0;
+          const ax = pts[i0 * 2], ay = pts[i0 * 2 + 1];
+          const bx = pts[i1 * 2], by = pts[i1 * 2 + 1];
+          const dx = bx - ax, dy = by - ay;
+          const d = Math.hypot(dx, dy) || 1;
+          return { x: ax + dx * t, y: ay + dy * t, tx: dx / d, ty: dy / d };
+        };
+
+        if (style === 'ragged') {
+          /* Both edges of the ribbon are walked, one out and one back, so the
+             result is a single closed loop per polyline -- which is what lets
+             it be filled with the ordinary even-odd rule alongside everything
+             else. Step at about the line width: finer and the wobble reads as
+             noise, coarser and it reads as a polygon. */
+          const step = Math.max(w * 0.8, total / 400);
+          const cnt = Math.max(2, Math.ceil(total / step));
+          const side = (sign, first) => {
+            for (let k = 0; k <= cnt; k++) {
+              const s = (k / cnt) * total;
+              const p = at(first ? s : total - s);
+              const j = 0.55 + self._noise(n + k * 2 + (first ? 0 : 1)) * 0.9;
+              const h = (w / 2) * j * sign;
+              out.push(k === 0 && first ? 0 : 1,
+                       p.x - p.ty * h, p.y + p.tx * h);
+            }
+          };
+          side(1, true);
+          side(-1, false);
+          out.push(3);
+          n += cnt * 2 + 4;
+        } else if (style === 'stipple') {
+          /* Dots at jittered spacing and jittered size, plus a jittered
+             offset across the line -- all three, because dots on the centre
+             line at even spacing read as a dotted stroke, not as stipple. */
+          const step = Math.max(w * 0.9, total / 600);
+          for (let s = 0; s < total; s += step * (0.6 + self._noise(n) * 0.9)) {
+            const p = at(s);
+            const off = (self._noise(n + 1) - 0.5) * w * 0.8;
+            const r = w * (0.16 + self._noise(n + 2) * 0.22);
+            disc(p.x - p.ty * off, p.y + p.tx * off, r);
+            n += 3;
+          }
+        } else {
+          /* Hatched: short ticks across the line. The angle leans, which is
+             what makes it read as engraving rather than as a ladder. */
+          const step = Math.max(w * 1.1, total / 400);
+          const half = w * 0.85, thick = Math.max(w * 0.14, 0.12);
+          for (let s = 0; s < total; s += step) {
+            const p = at(s);
+            const lean = 0.45 + self._noise(n) * 0.25;
+            // The tick's direction: mostly across the line, leaning along it.
+            let dx = -p.ty + p.tx * lean, dy = p.tx + p.ty * lean;
+            const d = Math.hypot(dx, dy) || 1;
+            dx /= d; dy /= d;
+            const px = -dy * thick, py = dx * thick;
+            const a = [p.x - dx * half, p.y - dy * half];
+            const b = [p.x + dx * half, p.y + dy * half];
+            quad(a[0] + px, a[1] + py, b[0] + px, b[1] + py,
+                 b[0] - px, b[1] - py, a[0] - px, a[1] - py);
+            n += 1;
+          }
+        }
+      });
+      return out;
+    },
+
+    /**
+     * The line a stroke follows, in the object's own box coordinates.
+     *
+     * The decorative styles need this and so does nothing else, but every
+     * stroked kind has to be here or a hatched pencil line comes out plain.
+     * A warped shape gives its WARPED outline, because the stroke follows
+     * the shape you can see.
+     */
+    spine(o, warp, primitives) {
+      if (warp && warp.active && warp.active(o)) {
+        const wp = warp.outlineOf(o, primitives);
+        if (wp && wp.length) return wp;
+      }
+      if (warp && warp.outline) {
+        const base = warp.outline(o, primitives);
+        if (base && base.length) return base;
+      }
+      const w = Math.abs(o.width || 0), h = Math.abs(o.height || 0);
+      if (o.type === 'line') {
+        /* The line tool stores only its box, and a NEGATIVE width or height
+           is how it records which diagonal it drew -- so the unsigned box
+           above is the wrong one to walk here. */
+        const sw = o.width || 0, sh = o.height || 0;
+        const x0 = sw < 0 ? w : 0, y0 = sh < 0 ? h : 0;
+        return [0, x0, y0, 1, w - x0, h - y0];
+      }
+      if ((o.type === 'pencil' || o.type === 'brush') && o.points && o.points.length >= 4) {
+        // Already box-relative, which is how the painter reads them too.
+        const out = [0, o.points[0], o.points[1]];
+        for (let i = 2; i < o.points.length; i += 2) out.push(1, o.points[i], o.points[i + 1]);
+        return out;
+      }
+      return null;
+    }
+  };
+
   // -------------------- Graphics --------------------
   // Records vector drawing commands and replays them to a 2D context.
   // beginFill/endFill group path commands into a single filled path; lineStyle
@@ -188,12 +460,21 @@
     }
     closePath() { this._cmds.push([4]); return this; }
 
-    lineStyle(thickness, color, alpha, caps, joints, miterLimit) {
+    /**
+     * `dash` is the canvas dash pattern, or null for an unbroken line.
+     *
+     * It used not to exist, so every dashed and dotted stroke in an exported
+     * movie was published solid -- the authoring stage drew the dashes and
+     * the engine quietly did not. Optional, so every existing call means
+     * exactly what it always did.
+     */
+    lineStyle(thickness, color, alpha, caps, joints, miterLimit, dash) {
       if (thickness == null || thickness === 0) {
         this._cmds.push([10, 0]);
       } else {
         this._cmds.push([10, thickness, color == null ? 0 : color, alpha == null ? 1 : alpha,
-          caps || 'round', joints || 'round', miterLimit || 3]);
+          caps || 'round', joints || 'round', miterLimit || 3,
+          (dash && dash.length) ? dash.slice() : null]);
       }
       return this;
     }
@@ -260,6 +541,7 @@
       let stroke = null;
       let strokeWidth = 0;
       let caps = 'round', joins = 'round', miter = 3;
+      let dashes = null;
       let inPath = false;
 
       const ensurePath = () => { if (!inPath) { ctx.beginPath(); inPath = true; } };
@@ -272,7 +554,9 @@
           ctx.lineCap     = caps;
           ctx.lineJoin    = joins;
           ctx.miterLimit  = miter;
+          if (ctx.setLineDash) ctx.setLineDash(dashes || []);
           ctx.stroke();
+          if (ctx.setLineDash) ctx.setLineDash([]);
         }
         inPath = false;
       };
@@ -286,11 +570,11 @@
           case 3: ensurePath(); ctx.bezierCurveTo(c[1], c[2], c[3], c[4], c[5], c[6]); break;
           case 4: ensurePath(); ctx.closePath(); break;
           case 10:
-            if (c[1] === 0) { stroke = null; strokeWidth = 0; }
+            if (c[1] === 0) { stroke = null; strokeWidth = 0; dashes = null; }
             else {
               strokeWidth = c[1];
               stroke = toRGBA(c[2], c[3]);
-              caps = c[4]; joins = c[5]; miter = c[6];
+              caps = c[4]; joins = c[5]; miter = c[6]; dashes = c[7] || null;
             }
             break;
           case 11: commit(); fill = toRGBA(c[1], c[2]); fillRule = c[3] || 'nonzero'; break;
@@ -4036,7 +4320,7 @@
     version: '0.7.6',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
-    Shape, TextField, RichText, Fonts, Gradient, Warp, Bitmap, MovieClip, Timeline, Tween, Stage,
+    Shape, TextField, RichText, Fonts, Gradient, Warp, Stroke, Bitmap, MovieClip, Timeline, Tween, Stage,
     /* 9-slice: the cell maths plus the container that uses it, shared with the
        authoring stage and the SVG export so all three agree to the pixel. */
     Slice9, NineSlice,

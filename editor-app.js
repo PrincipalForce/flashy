@@ -14,7 +14,7 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Free Transform's Distort and Envelope. {kind:"distort"|"envelope", points:[...]} in the object's own box coordinates, or null -- and null costs the render path nothing. */this.warp=null;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Text kinds and field options. `textType` is the big one: a STATIC field is
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";/* Flash's Scale menu for a stroke: which of the instance's scale factors reach the line width. "none" is what keeps a UI frame a 1px box however the symbol around it is sized. */this.strokeScale="normal";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Free Transform's Distort and Envelope. {kind:"distort"|"envelope", points:[...]} in the object's own box coordinates, or null -- and null costs the render path nothing. */this.warp=null;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Text kinds and field options. `textType` is the big one: a STATIC field is
    drawn and forgotten, a DYNAMIC one has a name so a script can write to it,
    and an INPUT one can be typed into. Without the last two there is no score
    display, no form and no typed-in name. All default to the static behaviour
@@ -141,6 +141,11 @@ function currentMaxFrame(){
 }
 var lastClickTime=0,lastClickTarget=null;
 var fillColor="#000000",fillAlpha=1,strokeColor="#000000",strokeAlpha=1,strokeWidth=1;
+/* The line style the next shape gets, sticky across draws the way Flash's
+   Stroke panel was: pick Hatched once and every shape comes out hatched
+   until you pick something else. The objects store their own copy, so
+   changing this later does not restyle what is already on the stage. */
+var strokeStyleCur="solid",strokeScaleCur="normal";
 var undoStack=[],redoStack=[];
 
 /* ------------------------------------------------------------------ *
@@ -961,6 +966,13 @@ function drawModeOption(){
     set:function(v){setDrawMode(v);}};
 }
 
+/** The style a newly drawn shape gets: the current one, or none if unstroked. */
+function newStrokeStyle(){
+  if(strokeStyleCur==="hairline")return "hairline";
+  if(!(strokeWidth>0))return "none";
+  return strokeStyleCur==="none"?"solid":strokeStyleCur;
+}
+
 function toolOptionSpec(tool){
   if(tool==="transform"){
     /* Flash's four Free Transform modifiers. Scale/rotate/skew is the
@@ -1132,7 +1144,20 @@ function toolOptionSpec(tool){
       {type:"label",text:function(){return strokeWidth+" px"; }},
       {type:"range",min:0,max:40,step:0.5,title:"Stroke width the ink bottle applies",
        get:function(){return strokeWidth;},
-       set:function(v){strokeWidth=v;updateColorUI();updateToolOptions();}}
+       set:function(v){strokeWidth=v;updateColorUI();updateToolOptions();}},
+      /* Flash's Stroke panel lived next to the ink bottle, and the style it
+         showed was the one the bottle applied AND the one the next shape got.
+         Both, from one control, because two would disagree. */
+      {type:"choice",title:"Line style",
+       options:[["hairline","\u2500","Hairline \u2014 one screen pixel at every scale"],
+                ["solid","\u2501","Solid"],
+                ["dashed","\u254c","Dashed"],
+                ["dotted","\u254e","Dotted"],
+                ["ragged","\u2307","Ragged \u2014 a hand-inked wobble"],
+                ["stipple","\u22ef","Stipple \u2014 a scatter of dots"],
+                ["hatched","\u2261","Hatched \u2014 ticks across the line"]],
+       get:function(){return strokeStyleCur==="none"?"solid":strokeStyleCur;},
+       set:function(v){strokeStyleCur=v;updateToolOptions();}}
     ];
   }
   return null;
@@ -4175,7 +4200,17 @@ function paintObjRaw(cx,o,opts){
   var hw=(o.width||0)/2,hh=(o.height||0)/2;
   var alpha=o.alpha!=null?o.alpha:1;
   var fillOn=(o.fillType||"solid")!=="none";
-  var strokeOn=(o.strokeWidth||0)>0&&(o.strokeStyle||"solid")!=="none";
+  var strokeStyleName=o.strokeStyle||"solid";
+  var St=window.Flashy&&Flashy.Stroke;
+  /* Hairline is a style, not a width: it draws one screen pixel whatever the
+     authored width says, so a hairline with strokeWidth 0 still draws. */
+  var strokeOn=strokeStyleName!=="none"&&
+    ((o.strokeWidth||0)>0||strokeStyleName==="hairline");
+  /* Ragged, stipple and hatched are geometry rather than a pen: they are
+     filled below, after the shape, from Flashy.Stroke.decorate -- so the
+     ordinary stroke is suppressed and this flag is what suppresses it. */
+  var texturedStroke=strokeOn&&!!St&&St.textured(strokeStyleName);
+  if(texturedStroke)strokeOn=false;
   var fillA=alpha*(o.fillAlpha!=null?o.fillAlpha:1);
   var strokeA=alpha*(o.strokeAlpha!=null?o.strokeAlpha:1);
 
@@ -4202,12 +4237,30 @@ function paintObjRaw(cx,o,opts){
   if(o.blendMode&&o.blendMode!=="source-over")cx.globalCompositeOperation=o.blendMode;
   cx.globalAlpha=alpha;
 
-  var applyStroke=function(){
+  /* The scale the context has already applied, zoom and device pixel ratio
+     included. That is what a hairline and an unscaled stroke have to be
+     divided out by, and reading it from the context rather than recomputing
+     it from the object is what makes it right inside a symbol, a group and a
+     scaled trace alike. */
+  var ctxScale=function(){
+    if(!cx.getTransform)return [1,1];
+    var t=cx.getTransform();
+    return [Math.hypot(t.a,t.b)||1,Math.hypot(t.c,t.d)||1];
+  };
+  var applyStroke=function(baseW){
     cx.lineCap=o.strokeCap||"round";
     cx.lineJoin=o.strokeJoin||"round";
-    if(o.strokeStyle==="dashed")cx.setLineDash([6,4]);
-    else if(o.strokeStyle==="dotted")cx.setLineDash([2,3]);
-    else cx.setLineDash([]);
+    var sc=ctxScale();
+    var w=St?St.width(strokeStyleName,baseW!=null?baseW:o.strokeWidth,
+                      o.strokeScale,sc[0],sc[1])
+           :(baseW!=null?baseW:o.strokeWidth);
+    cx.lineWidth=w;
+    /* Through Flashy.Stroke so the stage, the SVG and the exported player
+       break the line in the same places. The dashes used to be a literal
+       [6,4] here and nothing at all in the engine, which is why a dashed
+       stroke published solid. */
+    var d=St?St.dash(strokeStyleName,w):null;
+    cx.setLineDash(d||[]);
   };
 
   /* Box fractions -> the centre-origin space the shapes draw in. */
@@ -4261,9 +4314,14 @@ function paintObjRaw(cx,o,opts){
       cx.globalAlpha=strokeA;applyStroke();cx.stroke();
     }
   }else if(o.type==="line"){
-    cx.beginPath();cx.moveTo(-hw,-hh);cx.lineTo(hw,hh);
-    cx.strokeStyle=strokeStyleFor(cx,o,boxMap,strokeA);cx.lineWidth=o.strokeWidth||1;
-    cx.globalAlpha=strokeA;applyStroke();cx.stroke();
+    /* Guarded by strokeOn, which a line used to ignore: a line is NOTHING but
+       its stroke, so it drew its pen even when the style said the stroke was
+       filled geometry -- a hatched line came out hatched on top of solid. */
+    if(strokeOn){
+      cx.beginPath();cx.moveTo(-hw,-hh);cx.lineTo(hw,hh);
+      cx.strokeStyle=strokeStyleFor(cx,o,boxMap,strokeA);cx.lineWidth=o.strokeWidth||1;
+      cx.globalAlpha=strokeA;applyStroke();cx.stroke();
+    }
   }else if(o.type==="pencil"||o.type==="brush"){
     if(o.points&&o.points.length>1){
       // points are object-local (relative to top-left); cx sits at the centre
@@ -4274,8 +4332,11 @@ function paintObjRaw(cx,o,opts){
       if(o.type==="brush"){
         cx.strokeStyle=o.fillColor;cx.lineWidth=(o.strokeWidth||1)*3;
         cx.lineCap="round";cx.lineJoin="round";cx.setLineDash([]);
-      }else{
+      }else if(strokeOn){
         cx.strokeStyle=strokeStyleFor(cx,o,boxMap,strokeA);cx.lineWidth=o.strokeWidth||1;applyStroke();
+      }else{
+        // A textured pencil line is filled geometry; the pen must not also run.
+        cx.strokeStyle="rgba(0,0,0,0)";
       }
       cx.globalAlpha=strokeA;cx.stroke();
     }
@@ -4344,10 +4405,13 @@ function paintObjRaw(cx,o,opts){
       }
       if(strokeOn){
         cx.strokeStyle=o.strokeColor;
-        // Undo the shape scale on the pen so a scaled trace keeps an even
-        // outline instead of a stretched one.
-        cx.lineWidth=o.strokeWidth/Math.max(1e-6,(Math.abs(psx)+Math.abs(psy))/2);
-        cx.globalAlpha=strokeA;applyStroke();cx.stroke();
+        /* The pen is divided by the shape scale so a scaled trace keeps an
+           even outline instead of a stretched one -- passed as the base
+           width, because applyStroke is the one place that decides what the
+           line width finally is. */
+        cx.globalAlpha=strokeA;
+        applyStroke(o.strokeWidth/Math.max(1e-6,(Math.abs(psx)+Math.abs(psy))/2));
+        cx.stroke();
       }
       cx.restore();
     }
@@ -4452,6 +4516,30 @@ function paintObjRaw(cx,o,opts){
         cx.strokeStyle="#55DD88";cx.lineWidth=1/((zoom||1));
         cx.setLineDash([]);
         cx.strokeRect(-hw,-hh,o.width,o.height);
+      }
+    }
+  }
+  /* Ragged, stipple and hatched. Flash drew these procedurally and turned
+     them into filled shapes on export; here they ARE filled shapes in every
+     path, which is the only way a canvas, an SVG and a SWF can show the same
+     scatter. Drawn after the artwork, because a decorative line sits on top
+     of its own fill. */
+  if(texturedStroke&&St&&window.FlashyTrace){
+    var spine=St.spine(o,Flashy.Warp,Flashy.Primitives);
+    if(spine&&spine.length){
+      var dsc=ctxScale();
+      var dw=St.width("solid",o.strokeWidth||1,o.strokeScale,dsc[0],dsc[1]);
+      var deco=St.decorate(spine,strokeStyleName,Math.max(0.2,dw));
+      if(deco.length){
+        cx.save();
+        cx.translate(-hw,-hh);
+        cx.beginPath();
+        FlashyTrace.pathToContext(deco,cx);
+        cx.fillStyle=o.strokeColor||"#000";
+        cx.globalAlpha=strokeA;
+        // Even-odd: the ticks and dots are many separate loops in one path.
+        cx.fill("evenodd");
+        cx.restore();
       }
     }
   }
@@ -5762,6 +5850,9 @@ function onMouseUp(e){
         obj.fillColor=fillColor;obj.fillAlpha=fillAlpha;
         obj.strokeColor=strokeColor;obj.strokeAlpha=strokeAlpha;
         obj.strokeWidth=strokeWidth;
+        // The current line style and scaling mode, the same way the primitive
+        // settings below are carried onto the shape the tool just made.
+        obj.strokeStyle=newStrokeStyle();obj.strokeScale=strokeScaleCur;
         // Carry the tool's primitive settings onto the shape it just made.
         if(curTool==="rect"&&rectPrim.cornerRadius>0)obj.cornerRadius=rectPrim.cornerRadius;
         if(curTool==="oval"){
@@ -5817,6 +5908,12 @@ function onMouseUp(e){
         // store points relative to top-left so the object can be moved/exported
         obj2.points=pts.map(function(v,i){return i%2===0?v-minX:v-minY;});
         obj2.fillColor=fillColor;obj2.strokeColor=strokeColor;obj2.strokeWidth=strokeWidth;
+        /* A pencil line takes the current style; a brush's body is a thick
+           pen in the fill colour and has no line style to take. */
+        if(curTool==="pencil"){
+          obj2.strokeStyle=strokeStyleCur==="none"?"solid":strokeStyleCur;
+          obj2.strokeScale=strokeScaleCur;
+        }
         /* The brush's size is its own control, not the stroke width — but the
            painter draws a brush at three times `strokeWidth`, and so do the
            SVG and runtime exports. Storing size/3 keeps one number flowing
@@ -7484,8 +7581,30 @@ function updateProps(){
 
     // ── Stroke ──
     sect("Stroke");
-    row("Style",o.strokeStyle||"solid",function(v){pushUndo();o.strokeStyle=v;render();updateProps();},{type:"select",width:"80px",options:[["solid","Solid"],["dashed","Dashed"],["dotted","Dotted"],["none","None"]]});
+    /* Flash's seven line styles. The first four are a pen and a dash
+       pattern; the last three are filled geometry, which is what Flash did
+       with them on export and the only way a canvas, an SVG and a SWF can
+       show the same scatter. */
+    row("Style",o.strokeStyle||"solid",function(v){pushUndo();o.strokeStyle=v;render();updateProps();},
+        {type:"select",width:"90px",options:STROKE_STYLE_OPTIONS});
     if((o.strokeStyle||"solid")!=="none"){
+      /* Flash's Scale menu. Without it a 1px frame inside a symbol thickens
+         the moment the symbol is scaled, and there is no way to say no. */
+      if((o.strokeStyle||"solid")!=="hairline"){
+        row("Scale",o.strokeScale||"normal",function(v){
+          pushUndo();o.strokeScale=v;render();updateProps();
+        },{type:"select",width:"90px",options:STROKE_SCALE_OPTIONS});
+      }else{
+        note("A hairline is one screen pixel at every zoom and under every "+
+             "scale, which is what makes it the style for technical line "+
+             "work. Its width and scaling mode are ignored on purpose.");
+      }
+      if(STROKE_TEXTURED(o.strokeStyle)){
+        note("Ragged, stipple and hatched are drawn as filled geometry, not "+
+             "as a pen, so they export to SVG and to the player as the same "+
+             "shapes the stage draws. The scatter is a hash of position "+
+             "along the line, so it never re-rolls between renders.");
+      }
       /* A gradient along a line. Flash allowed it; the data model here only
          ever had the fill's, so a stroke could only be one colour. */
       row("Fill",o.strokeFillType||"solid",function(v){
@@ -15152,7 +15271,7 @@ function makePolyStar(x1,y1,x2,y2){
   o.x=x0;o.y=y0;o.width=w;o.height=h;
   o.fillColor=fillColor;o.fillAlpha=fillAlpha;o.fillType="solid";
   o.strokeColor=strokeColor;o.strokeAlpha=strokeAlpha;o.strokeWidth=strokeWidth;
-  o.strokeStyle=strokeWidth>0?"solid":"none";
+  o.strokeStyle=newStrokeStyle();o.strokeScale=strokeScaleCur;
   return o;
 }
 
@@ -15239,7 +15358,11 @@ function inkBottleApply(o){
   o.strokeColor=strokeColor;
   o.strokeAlpha=strokeAlpha;
   o.strokeWidth=strokeWidth;
-  o.strokeStyle=strokeWidth>0?(o.strokeStyle&&o.strokeStyle!=="none"?o.strokeStyle:"solid"):"none";
+  /* The bottle applies the style it is showing, which is the whole point of
+     the control sitting beside it -- it used to keep whatever style the shape
+     already had, so there was no way to make a line hatched at all. */
+  o.strokeStyle=newStrokeStyle();
+  o.strokeScale=strokeScaleCur;
   // A brush stroke's colour lives in fillColor because it is painted as a
   // stroke; the ink bottle has to write where the painter reads.
   if(o.type==="brush")o.fillColor=strokeColor;
@@ -15467,7 +15590,8 @@ function penCommit(close){
   o.fillColor=fillColor;o.fillAlpha=fillAlpha;
   o.strokeColor=strokeColor;o.strokeAlpha=strokeAlpha;
   o.strokeWidth=strokeWidth>0?strokeWidth:1;
-  o.strokeStyle="solid";
+  o.strokeStyle=strokeStyleCur==="none"?"solid":strokeStyleCur;
+  o.strokeScale=strokeScaleCur;
   kf.objects.push(o);
   selection=[o];
   return true;
@@ -20073,6 +20197,23 @@ function saveSymbolBack() {
  * ------------------------------------------------------------------ */
 
 /** Flash's three, by their canvas names. */
+/* Flash's seven line styles, in Flash's own order -- hairline first, because
+   it is the thinnest and the Stroke panel read top to bottom by weight. */
+var STROKE_STYLE_OPTIONS = [
+  ["hairline", "Hairline"], ["solid", "Solid"], ["dashed", "Dashed"],
+  ["dotted", "Dotted"], ["ragged", "Ragged"], ["stipple", "Stipple"],
+  ["hatched", "Hatched"], ["none", "None"]
+];
+/** Flash's Scale menu for a stroke. */
+var STROKE_SCALE_OPTIONS = [
+  ["normal", "Normal"], ["horizontal", "Horizontal"],
+  ["vertical", "Vertical"], ["none", "None"]
+];
+/** The three styles that are geometry rather than a pen. */
+function STROKE_TEXTURED(style) {
+  return !!(window.Flashy && Flashy.Stroke && Flashy.Stroke.textured(style));
+}
+
 var GRADIENT_OVERFLOW = [
   ["pad", "Extend"],
   ["reflect", "Reflect"],
@@ -23236,8 +23377,30 @@ function exportRuntime(data, canvas, options) {
       node = new Flashy.Shape();
       var g = node.graphics;
       var filled = (o.fillType || "solid") !== "none";
-      var stroked = (o.strokeStyle || "solid") !== "none" && (o.strokeWidth || 0) > 0;
+      var sName = o.strokeStyle || "solid";
+      var ESt = Flashy.Stroke;
+      /* Hairline is a style, not a width, so it draws with none authored;
+         ragged, stipple and hatched are filled geometry rather than a pen and
+         turn the pen off entirely. All three of those used to publish as
+         plain solid strokes, and so did every dash -- the engine's lineStyle
+         had no dash argument at all. */
+      var stroked = sName !== "none" &&
+        ((o.strokeWidth || 0) > 0 || sName === "hairline");
+      var sTex = stroked && !!ESt && ESt.textured(sName);
+      if (sTex) stroked = false;
       var sa = o.strokeAlpha != null ? o.strokeAlpha : 1;
+      /* The instance's own scale is on the node, so it is what a hairline and
+         an unscaled stroke are divided back out by -- the same reasoning the
+         stage painter applies, reading the live context transform. */
+      var eSx = Math.abs(o.scaleX || 1), eSy = Math.abs(o.scaleY || 1);
+      var sDash = ESt ? ESt.dash(sName, ESt.width(sName, o.strokeWidth || 0,
+                                                  o.strokeScale, eSx, eSy)) : null;
+      /** The one place the export decides a line's width and its dashes. */
+      var setLine = function (base) {
+        var w = ESt ? ESt.width(sName, base, o.strokeScale, eSx, eSy) : base;
+        g.lineStyle(w, hex(o.strokeColor, "#000"), sa,
+                    o.strokeCap || "round", o.strokeJoin || "round", 3, sDash);
+      };
 
       /* A parameterised primitive — a rounded rectangle, or an oval arc, pie
          or donut — resolves to a command stream from Flashy.Primitives, which
@@ -23270,7 +23433,7 @@ function exportRuntime(data, canvas, options) {
               g.beginFill(hex(o.fillColor, "#000"), o.fillAlpha != null ? o.fillAlpha : 1, "evenodd");
             }
           }
-          if (stroked) g.lineStyle(o.strokeWidth, hex(o.strokeColor, "#000"), sa);
+          if (stroked) setLine(o.strokeWidth);
           var X = function (v) { return v * psx - hw; };
           var Y = function (v) { return v * psy - hh; };
           for (var pi = 0; pi < cmds.length;) {
@@ -23289,15 +23452,21 @@ function exportRuntime(data, canvas, options) {
         var pts = o.points;
         if (pts && pts.length >= 4) {
           var wide = o.type === "brush";
-          g.lineStyle(wide ? (o.strokeWidth || 1) * 3 : (o.strokeWidth || 1),
-                      hex(wide ? o.fillColor : o.strokeColor, "#000"), sa);
+          /* A brush's body is a thick round pen, not a stroke style: it takes
+             the fill colour and never a dash. A pencil line is a stroke and
+             takes all of it. */
+          if (wide) {
+            g.lineStyle((o.strokeWidth || 1) * 3, hex(o.fillColor, "#000"), sa);
+          } else {
+            setLine(o.strokeWidth || 1);
+          }
           g.moveTo(pts[0] - hw, pts[1] - hh);
           for (var p = 2; p < pts.length; p += 2) g.lineTo(pts[p] - hw, pts[p + 1] - hh);
         }
       } else if (o.type === "line") {
         // The line tool stores only its bounding box; width/height may be
         // negative, which is how direction is encoded.
-        g.lineStyle(o.strokeWidth || 1, hex(o.strokeColor, "#000"), sa);
+        if (stroked) setLine(o.strokeWidth || 1);
         g.moveTo(-hw, -hh); g.lineTo(hw, hh);
       } else {
         if (filled && !gradFill(g, o, function (fx, fy) {
@@ -23305,10 +23474,35 @@ function exportRuntime(data, canvas, options) {
         })) {
           g.beginFill(hex(o.fillColor, "#000"), o.fillAlpha != null ? o.fillAlpha : 1);
         }
-        if (stroked) g.lineStyle(o.strokeWidth, hex(o.strokeColor, "#000"), sa);
+        if (stroked) setLine(o.strokeWidth);
         if (o.type === "rect") g.drawRect(-hw, -hh, o.width, o.height);
         else if (o.type === "oval") g.drawEllipse(-hw, -hh, o.width, o.height);
         if (filled) g.endFill();
+      }
+
+      /* Ragged, stipple and hatched, from the same Flashy.Stroke.decorate the
+         stage fills. The scatter is a deterministic hash of position along
+         the line, which is why the published movie scatters its dots in the
+         same places the stage did rather than merely similar ones. */
+      if (sTex && ESt && (o.strokeWidth || 0) > 0) {
+        var spine = ESt.spine(o, Flashy.Warp, Flashy.Primitives);
+        if (spine && spine.length) {
+          var dw = ESt.width("solid", o.strokeWidth || 1, o.strokeScale, eSx, eSy);
+          var deco = ESt.decorate(spine, sName, Math.max(0.2, dw));
+          if (deco.length) {
+            g.lineStyle(0);
+            // Even-odd: the ticks and dots are many loops in one path.
+            g.beginFill(hex(o.strokeColor, "#000"), sa, "evenodd");
+            for (var di = 0; di < deco.length;) {
+              var dop = deco[di];
+              if (dop === 0) { g.moveTo(deco[di + 1] - hw, deco[di + 2] - hh); di += 3; }
+              else if (dop === 1) { g.lineTo(deco[di + 1] - hw, deco[di + 2] - hh); di += 3; }
+              else if (dop === 3) { g.closePath(); di += 1; }
+              else break;
+            }
+            g.endFill();
+          }
+        }
       }
     }
 
@@ -24854,14 +25048,24 @@ function _symbolSlicedSVG(o, sym, depth) {
 
 /** _objToSVGRaw, wrapped in this object's filter group. Mirrors paintObj. */
 function _objToSVG(o, depth) {
+  /* A ragged, stippled or hatched stroke is filled geometry rather than a
+     pen, so it is a sibling of the shape -- inside the filter group when
+     there is one, because a blurred line has to blur with its own shape. */
+  var deco = _svgStrokeDecoration(o);
   var fx = _svgFilterFor(o);
-  if (!fx) return _objToSVGRaw(o, depth);
+  if (!fx) return _objToSVGRaw(o, depth) + deco;
   return fx.defs + '<g filter="' + fx.ref + '">' +
-         _objToSVGRaw(o, depth) + '</g>\n';
+         _objToSVGRaw(o, depth) + deco + '</g>\n';
 }
 
-function _objToSVGRaw(o, depth) {
-  depth = depth || 0;
+/**
+ * An object's SVG transform.
+ *
+ * Shared, because the textured-stroke decoration has to land under exactly
+ * the same transform as the shape it decorates -- two copies of this would be
+ * two chances for a hatched line to drift off its own outline.
+ */
+function _svgObjTransform(o) {
   var hw = (o.width||0)/2, hh = (o.height||0)/2;
   // Same centre-origin convention as the stage and the canvas painter: move to
   // the object's centre, rotate/scale there, then draw around (0,0).
@@ -24877,14 +25081,68 @@ function _objToSVGRaw(o, depth) {
   if ((o.scaleX!=null&&o.scaleX!==1)||(o.scaleY!=null&&o.scaleY!==1)) {
     tf += ' scale('+(o.scaleX||1)+','+(o.scaleY||1)+')';
   }
+  return tf;
+}
+
+/**
+ * The filled geometry for a ragged, stippled or hatched stroke.
+ *
+ * The same Flashy.Stroke.decorate the stage fills, under the same transform
+ * the shape itself gets -- so the scatter is in the same places in the SVG as
+ * on the stage rather than merely similar.
+ */
+function _svgStrokeDecoration(o) {
+  var St = window.Flashy && Flashy.Stroke;
+  if (!St || !window.FlashyTrace) return "";
+  var name = o.strokeStyle||"solid";
+  if (!St.textured(name) || !((o.strokeWidth||0)>0)) return "";
+  var spine = St.spine(o, Flashy.Warp, Flashy.Primitives);
+  if (!spine || !spine.length) return "";
+  var w = St.width("solid", o.strokeWidth||1, o.strokeScale,
+                   Math.abs(o.scaleX||1), Math.abs(o.scaleY||1));
+  var deco = St.decorate(spine, name, Math.max(0.2, w));
+  if (!deco.length) return "";
+  var hw = (o.width||0)/2, hh = (o.height||0)/2;
+  var d = FlashyTrace.pathToSVG(FlashyTrace.pathTransform(deco, 1, 1, -hw, -hh));
+  return '<path transform="'+xmlAttr(_svgObjTransform(o))+'" d="'+d+
+         '" fill="'+xmlAttr(o.strokeColor||"#000")+'" fill-rule="evenodd"'+
+         ' stroke="none"'+
+         ((o.strokeAlpha!=null&&o.strokeAlpha<1)?' opacity="'+o.strokeAlpha+'"':'')+
+         '/>\n';
+}
+
+function _objToSVGRaw(o, depth) {
+  depth = depth || 0;
+  var hw = (o.width||0)/2, hh = (o.height||0)/2;
+  var tf = _svgObjTransform(o);
   var a = ' transform="'+xmlAttr(tf)+'"';
   if (o.alpha!=null&&o.alpha<1) a += ' opacity="'+o.alpha+'"';
   var grad = _svgGradient(o);
   var fl = (o.fillType||"solid")==="none" ? "none"
          : grad ? grad.ref : xmlAttr(o.fillColor||"#000");
   var gdefs = grad ? grad.defs : "";
-  var st = (!o.strokeWidth||(o.strokeStyle||"solid")==="none") ? "none" : xmlAttr(o.strokeColor||"#000");
-  var sw = o.strokeWidth||0;
+  var sName = o.strokeStyle||"solid";
+  var SvgSt = window.Flashy && Flashy.Stroke;
+  var sHas = sName!=="none" && ((o.strokeWidth||0)>0 || sName==="hairline");
+  // A textured stroke is not a stroke here either: the pen is turned off and
+  // _svgStrokeDecoration emits the geometry as a filled sibling.
+  var sTex = sHas && !!SvgSt && SvgSt.textured(sName);
+  var st = (!sHas || sTex) ? "none" : xmlAttr(o.strokeColor||"#000");
+  /* The object's own scale is in the transform above, so it is what a
+     hairline and an unscaled stroke have to be divided back out by. */
+  var sw = SvgSt
+    ? SvgSt.width(sName, o.strokeWidth||0, o.strokeScale,
+                  Math.abs(o.scaleX||1), Math.abs(o.scaleY||1))
+    : (o.strokeWidth||0);
+  /* The dash rides on `a`, which every branch below concatenates into its own
+     element -- SVG attributes are order-independent, so one place sets it for
+     all of them. A hairline also asks for non-scaling-stroke, which is SVG's
+     own name for precisely this. */
+  var sDash = SvgSt ? SvgSt.dash(sName, sw) : null;
+  if (sDash) {
+    a += ' stroke-dasharray="'+sDash.map(function(v){return +v.toFixed(3);}).join(" ")+'"';
+  }
+  if (sName==="hairline") a += ' vector-effect="non-scaling-stroke"';
   /* A parameterised primitive — a rounded rectangle, or an oval arc, pie or
      donut — emits its own outline from the same geometry the painter uses, so
      the SVG and the stage cannot disagree about the shape. */
@@ -27077,12 +27335,27 @@ function init(){
       if(v.color!=null)strokeColor=v.color;
       if(v.alpha!=null)strokeAlpha=v.alpha;
       if(v.width!=null)strokeWidth=v.width;
+      if(v.style!=null)strokeStyleCur=v.style;
+      if(v.scale!=null)strokeScaleCur=v.scale;
       updateColorUI();updateToolOptions();
     },
     setFillStyle: function(v){
       if(v.color!=null)fillColor=v.color;
       if(v.alpha!=null)fillAlpha=v.alpha;
       updateColorUI();
+    },
+    /* Line styles: the seven Flash offered and the scaling mode, which the
+       data model has always had room for and nothing ever read. */
+    strokeStyleNow: function(){ return {style:strokeStyleCur, scale:strokeScaleCur}; },
+    newStrokeStyle: newStrokeStyle,
+    STROKE_STYLE_OPTIONS: STROKE_STYLE_OPTIONS,
+    STROKE_SCALE_OPTIONS: STROKE_SCALE_OPTIONS,
+    strokeDecoration: function(o){
+      var St = window.Flashy && Flashy.Stroke;
+      if(!St)return null;
+      var spine = St.spine(o, Flashy.Warp, Flashy.Primitives);
+      if(!spine)return null;
+      return St.decorate(spine, o.strokeStyle||"solid", Math.max(0.2, o.strokeWidth||1));
     },
     gradientHandles: gradientHandles,
     setGradientHandle: setGradientHandle,
