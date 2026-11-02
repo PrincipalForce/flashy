@@ -14,13 +14,13 @@ var N=1;function uid(){return N++;}
 // one would show up in the other.
 //
 // All default empty, so every other object type is unchanged.
-function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";/* Flash's Scale menu for a stroke: which of the instance's scale factors reach the line width. "none" is what keeps a UI frame a 1px box however the symbol around it is sized. */this.strokeScale="normal";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Free Transform's Distort and Envelope. {kind:"distort"|"envelope", points:[...]} in the object's own box coordinates, or null -- and null costs the render path nothing. */this.warp=null;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Flash's "Use runtime bitmap caching". The object is drawn once into an offscreen canvas and blitted from then on -- a complex vector drawing costs one blit per frame instead of hundreds of path operations. The trade is that it becomes PIXELS, so scaling or rotating it afterwards resamples rather than re-renders, which is why the default is off and why Flash's advice was to cache what does not change shape. */this.cacheAsBitmap=false;/* Text kinds and field options. `textType` is the big one: a STATIC field is
+function EditorObject(t){this.id=uid();this.type=t;this.x=0;this.y=0;this.width=0;this.height=0;this.rotation=0;this.scaleX=1;this.scaleY=1;this.skewX=0;this.skewY=0;this.alpha=1;this.name="";this.fillColor="#000000";this.fillAlpha=1;this.fillType="solid";this.fillStops=null;this.fillGrad=null;this.strokeColor="#000000";this.strokeAlpha=1;this.strokeWidth=1;this.strokeStyle="solid";/* Flash's Scale menu for a stroke: which of the instance's scale factors reach the line width. "none" is what keeps a UI frame a 1px box however the symbol around it is sized. */this.strokeScale="normal";this.strokeCap="round";this.strokeJoin="round";this.points=null;this.text="";this.font="Arial";this.fontSize=24;this.fontBold=false;this.fontItalic=false;this.fontUnderline=false;this.textAlign="left";this.lineHeight=1.2;this.symbolName="";this.instanceName="";this.symbolBehavior="movieclip";this.firstFrame=1;this.loopMode="loop";this.blendMode="source-over";this.bitmapAsset="";this.smoothing=true;/* A placed video. `videoAsset` names an entry in doc.videos; `videoStart` is the frame it was placed on, so that frame is time zero; `videoMode` is Flash's two -- "embedded" means the playhead drives it, "stream" means it plays on its own clock. */this.videoAsset="";this.videoStart=1;this.videoMode="embedded";this.videoLoop=false;this.videoMuted=true;this.clipScript="";this.path=null;this.pathW=0;this.pathH=0;this.eraseMask=null;this.maskW=0;this.maskH=0;/* Free Transform's Distort and Envelope. {kind:"distort"|"envelope", points:[...]} in the object's own box coordinates, or null -- and null costs the render path nothing. */this.warp=null;/* The Bone tool, on a shape: a skeleton INSIDE the artwork, so the outline deforms to follow it. {bones:[...]} in the object's own box coordinates, or null. Flashy.Armature does the skinning, routed through the same seam as the Free Transform warp -- the stage, the SVG, the player and the eraser all read one implementation. */this.armature=null;/* Flash 8 filters and the Colour Effect. `filters` is an array of plain spec objects ({type, enabled, …}); `colorEffect` is {mode, …}. Both null by default, and when they are null nothing in the render path allocates. */this.filters=null;this.colorEffect=null;/* Flash's "Use runtime bitmap caching". The object is drawn once into an offscreen canvas and blitted from then on -- a complex vector drawing costs one blit per frame instead of hundreds of path operations. The trade is that it becomes PIXELS, so scaling or rotating it afterwards resamples rather than re-renders, which is why the default is off and why Flash's advice was to cache what does not change shape. */this.cacheAsBitmap=false;/* Text kinds and field options. `textType` is the big one: a STATIC field is
    drawn and forgotten, a DYNAMIC one has a name so a script can write to it,
    and an INPUT one can be typed into. Without the last two there is no score
    display, no form and no typed-in name. All default to the static behaviour
    every existing document means. */this.textType="static";this.variableName="";this.selectable=false;this.lineType="single";this.letterSpacing=0;this.maxChars=0;this.textBorder=false;this.textBackground=false;this.textBorderColor="#000000";this.textBackgroundColor="#FFFFFF";this.antiAlias="normal";this.renderAsHtml=false;}
 EditorObject.prototype.clone=function(){var c=new EditorObject(this.type);var s=this;Object.keys(s).forEach(function(k){var v=s[k];c[k]=Array.isArray(v)?v.slice():v;});/* `children` (a group's contents) holds OBJECTS, so the shallow slice above would hand the copy the originals and every edit to one group would show up in the other. Deep-clone it, the way KeyFrame.clone deep-clones its own object list. */
-if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});/* `filters` is an array of OBJECTS, so the shallow slice above would hand the copy the same filter specs and editing one object's blur would change the other's. Same bug class as `children`. */if(Array.isArray(s.filters))c.filters=s.filters.map(function(f){return f?JSON.parse(JSON.stringify(f)):f;});if(s.colorEffect)c.colorEffect=JSON.parse(JSON.stringify(s.colorEffect));/* `warp` holds an array inside an object, so the shallow copy above would share the handle list and dragging one shape's corner would move the other's. */if(s.warp)c.warp={kind:s.warp.kind,points:(s.warp.points||[]).slice()};c.id=uid();return c;};
+if(Array.isArray(s.children))c.children=s.children.map(function(k){return k.clone?k.clone():k;});/* `filters` is an array of OBJECTS, so the shallow slice above would hand the copy the same filter specs and editing one object's blur would change the other's. Same bug class as `children`. */if(Array.isArray(s.filters))c.filters=s.filters.map(function(f){return f?JSON.parse(JSON.stringify(f)):f;});if(s.colorEffect)c.colorEffect=JSON.parse(JSON.stringify(s.colorEffect));/* `warp` holds an array inside an object, so the shallow copy above would share the handle list and dragging one shape's corner would move the other's. */if(s.warp)c.warp={kind:s.warp.kind,points:(s.warp.points||[]).slice()};/* The bone list nests objects inside an array: a shallow copy would have two keyframes sharing one pose, so posing frame 5 would pose frame 1. */if(s.armature&&Array.isArray(s.armature.bones)){c.armature={bones:s.armature.bones.map(function(b){return Object.assign({},b);})};}c.id=uid();return c;};
 // `sound` is Flash's model: a sound is attached to a keyframe, not to a layer.
 // {asset, sync:"stream"|"event", volume, loop, offset} or null.
 /* `labelType` is Flash's three kinds of frame label and they are not
@@ -63,7 +63,7 @@ Layer.prototype.removeKeyframe=function(f){var i=-1;for(var j=0;j<this.keyframes
 // exactly as keyframes reference sounds and instances reference `library`, and
 // the bytes travel inside the .flashy so a project with a photo background is
 // still one self-contained file.
-var doc={width:550,height:400,fps:24,backgroundColor:"#FFFFFF",layers:[new Layer("Layer 1")],library:{},sounds:{},bitmaps:{},characters:{},totalFrames:60};
+var doc={width:550,height:400,fps:24,backgroundColor:"#FFFFFF",layers:[new Layer("Layer 1")],library:{},sounds:{},bitmaps:{},videos:{},characters:{},totalFrames:60};
 Object.defineProperty(doc,"maxFrame",{get:function(){var m=1;this.layers.forEach(function(l){var e=l.getFrameEnd();if(e>m)m=e;});return Math.max(m,this.totalFrames);}});
 var curLayer=0,curFrame=1,selection=[],clipboard=[],playing=false,playTimer=null;
 var selectedKF=null; // {layerIdx, frameIdx} — which keyframe cell is selected in the timeline
@@ -523,6 +523,7 @@ var menus=[
     {label:"Revert",action:"revert"},
     {type:"sep"},
     {label:"Document Settings...",action:"docSettings"},
+    {label:"ActionScript 3 Document Class...",action:"as3Document"},
     {label:"Bitmap Properties...",action:"bitmapSettings"},
     {label:"Match Stage Size to Contents",action:"matchStage"},
     {label:"Publish Settings...",action:"publishSettings"},
@@ -538,6 +539,8 @@ var menus=[
     // never actually been bound for the same reason.)
     {label:"Import Image...",action:"importImage"},
     {label:"Import Sound...",action:"importSound",shortcut:"Ctrl+R"},
+    {label:"Import Video...",action:"importVideo"},
+    {label:"Cue Points...",action:"videoCues"},
     {label:"Import Flash Movie (.swf/.fla)...",action:"importFlash"},
     {label:"Import XFL Folder...",action:"importXFL"},
     {label:"Shared Library...",action:"sharedLibrary"},
@@ -910,6 +913,10 @@ var TOOLS=[
      artwork rather than edit it. Both produce ordinary objects, which is how
      Flash's worked and is what makes them safe: a live procedural fill would
      mean never being able to fix one leaf. */
+  /* Flash's Bone tool, on a shape: click head to tip to lay a bone in, then
+     drag a bone's tip to pose the drawing. The symbol-rig half of the Bone
+     tool is the Pose tool, which Flashy has had all along. */
+  {id:"bone",label:"Bone Tool (X) \u2014 click head to tip to lay a bone into a shape, then drag a tip to pose it",key:"x",svg:'<circle cx="3" cy="3" r="2" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="11" cy="11" r="2" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M4.4,4.4 L6,6.5 L9.6,9.6 L8,7.5 Z" fill="currentColor"/><line x1="4.4" y1="4.4" x2="9.6" y2="9.6" stroke="currentColor" stroke-width="1.6"/>'},
   {id:"deco",label:"Deco Tool (U) \u2014 drag out an area to fill it with a pattern",key:"u",svg:'<circle cx="3.5" cy="3.5" r="1.6" fill="currentColor"/><circle cx="10.5" cy="3.5" r="1.6" fill="currentColor"/><circle cx="7" cy="7" r="1.6" fill="currentColor"/><circle cx="3.5" cy="10.5" r="1.6" fill="currentColor"/><circle cx="10.5" cy="10.5" r="1.6" fill="currentColor"/>'},
   {id:"spray",label:"Spray Brush (G) \u2014 drag to scatter copies of a symbol",key:"g",svg:'<path d="M3,11 L6,8 L8,10 L5,13 Z" fill="currentColor"/><circle cx="9" cy="5" r="1.1" fill="currentColor"/><circle cx="12" cy="3" r="0.9" fill="currentColor"/><circle cx="11.5" cy="7" r="0.8" fill="currentColor"/><circle cx="8" cy="2" r="0.7" fill="currentColor"/>'},
   {id:"eraser",label:"Eraser Tool (E) — erases vector shapes and bitmaps alike",key:"e",svg:'<path d="M5.5,11.5 L1.5,7.5 L7.5,1.5 L11.5,5.5 Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><line x1="3.5" y1="9.5" x2="9.5" y2="3.5" stroke="currentColor" stroke-width="1"/><line x1="1" y1="12.5" x2="13" y2="12.5" stroke="currentColor" stroke-width="1.2"/>'},
@@ -983,6 +990,52 @@ function newStrokeStyle(){
 }
 
 function toolOptionSpec(tool){
+  if(tool==="bone"){
+    var boneTarget=function(){
+      return selection.length===1&&canBone(selection[0])?selection[0]:null;
+    };
+    return [
+      {type:"choice",title:"What a drag does",
+       options:[["pose","\u21bb","Pose \u2014 drag a bone's tip to bend the chain"],
+                ["draw","\u2795","Add \u2014 click head to tip to lay in a new bone"]],
+       get:function(){return boneMode;},
+       set:function(v){boneMode=v;boneDrawFrom=null;updateToolOptions();render();}},
+      {type:"label",hidden:function(){return !boneTarget();},
+       text:function(){
+         var o=boneTarget();
+         var n=o&&o.armature?o.armature.bones.length:0;
+         return n+" bone"+(n===1?"":"s");
+       }},
+      {type:"button",label:"Bind here",
+       title:"Make the current pose the rest position",
+       click:function(){
+         var o=boneTarget();
+         if(!o||!Flashy.Armature.active(o)){
+           showMessage("Bone Tool","Select a shape with bones in it first.");
+           return;
+         }
+         pushUndo();bindPose(o);fullRefresh();
+       }},
+      {type:"button",label:"Reset pose",title:"Back to the rest position",
+       click:function(){
+         var o=boneTarget();
+         if(!o||!resetPose(o)){
+           showMessage("Bone Tool","Select a shape with bones in it first.");
+           return;
+         }
+         pushUndo();resetPose(o);fullRefresh();
+       }},
+      {type:"button",label:"Remove bones",title:"Delete the whole skeleton",
+       click:function(){
+         var o=boneTarget();
+         if(!o||!o.armature){
+           showMessage("Bone Tool","Select a shape with bones in it first.");
+           return;
+         }
+         pushUndo();clearArmature(o);fullRefresh();
+       }}
+    ];
+  }
   if(tool==="deco"){
     return [
       {type:"choice",title:"Deco pattern",
@@ -1370,6 +1423,8 @@ function setTool(id){
      using. */
   if(id!=="pen")penCommit();
   if(id!=="subselect")subPoint=null;
+  // A bone half drawn when the tool changes would reappear on the next click.
+  if(id!=="bone")boneDrawFrom=null;
   if(id!=="lasso")lassoPts=null;
   render();
 }
@@ -1477,6 +1532,7 @@ function render(){
   // artwork at any zoom — the same reason the rig overlay is drawn here.
   if(curTool==="subselect")drawSubselectOverlay(ctx);
   if(curTool==="transform")drawWarpOverlay(ctx);
+  if(curTool==="bone")drawBoneOverlay(ctx);
   if(curTool==="gradient")drawGradientOverlay(ctx);
   if(curTool==="pen")drawPenOverlay(ctx);
   drawShapeHints(ctx);
@@ -1517,6 +1573,12 @@ function render(){
   }
   ctx.restore();
   if(showRulers)drawRulers();
+  /* Embedded video follows the playhead, which is what distinguishes it from
+     a streamed one. Done after the draw rather than before: the seek is
+     asynchronous, so this frame shows what had arrived and the NEXT repaint
+     shows the frame just asked for -- which is how a browser plays video at
+     all, and trying to be cleverer about it stalls the scrub. */
+  if(window.Flashy&&Flashy.Video)syncVideos();
   // selection handles
   selection.forEach(function(o){drawSel(o);});
   // tool preview
@@ -4536,6 +4598,38 @@ function paintObjRaw(cx,o,opts){
       }
       cx.globalAlpha=strokeA;cx.stroke();
     }
+  }else if(o.type==="video"){
+    /* The frame the playhead is on, drawn straight out of the <video>
+       element. The element's own time is driven by syncVideos() from the
+       render, which is what makes scrubbing the timeline scrub the footage.
+       A placeholder rather than a hole while it decodes: an empty rectangle
+       with no explanation is the worst of the three possible outcomes. */
+    var vel=videoElement(o.videoAsset);
+    var vdrew=false;
+    if(vel&&window.Flashy&&Flashy.Video){
+      cx.globalAlpha=alpha;
+      var prevVS=cx.imageSmoothingEnabled;
+      cx.imageSmoothingEnabled=o.smoothing!==false;
+      vdrew=Flashy.Video.draw(cx,vel,-hw,-hh,Math.abs(o.width),Math.abs(o.height));
+      cx.imageSmoothingEnabled=prevVS;
+    }
+    if(!vdrew&&chrome){
+      cx.globalAlpha=alpha*0.9;
+      cx.fillStyle="#1E2430";
+      cx.fillRect(-hw,-hh,Math.abs(o.width),Math.abs(o.height));
+      cx.strokeStyle="rgba(120,200,255,0.6)";
+      cx.lineWidth=1/((zoom||1));
+      cx.setLineDash([4/((zoom||1)),3/((zoom||1))]);
+      cx.strokeRect(-hw,-hh,Math.abs(o.width),Math.abs(o.height));
+      cx.setLineDash([]);
+      // A play triangle, so it is obviously a video and obviously not ready.
+      var vt=Math.min(Math.abs(hw),Math.abs(hh))*0.45;
+      cx.beginPath();
+      cx.moveTo(-vt*0.5,-vt);cx.lineTo(vt,0);cx.lineTo(-vt*0.5,vt);
+      cx.closePath();
+      cx.fillStyle="rgba(120,200,255,0.55)";
+      cx.fill();
+    }
   }else if(o.type==="bitmap"){
     var bimg=bitmapImage(o.bitmapAsset);
     if(bimg){
@@ -5819,6 +5913,63 @@ function onMouseDown(e){
       return;
     }
     dragPreview={type:"eraser",points:[p.x,p.y]};
+  }else if(curTool==="bone"){
+    var bo=selection.length===1?selection[0]:null;
+    if(!bo||!canBone(bo)){
+      /* Pick the shape first. A bone belongs to one drawing, so there is
+         nothing sensible to do with a click on empty stage. */
+      var bhit=hitTest(p.x,p.y);
+      if(bhit&&canBone(bhit)){
+        selection=[bhit];
+        updateProps();
+      }else if(bhit){
+        showMessage("Bone Tool",
+          "Bones go inside a shape or a drawing.\n\n"+
+          "A symbol, a group, a text field or a bitmap has contents rather "+
+          "than an outline, so there is nothing to deform. For a skeleton of "+
+          "SYMBOLS \u2014 the other half of Flash's Bone tool \u2014 use the "+
+          "Pose tool and the Character panel.");
+      }else{
+        selection=[];
+        updateProps();
+      }
+      dragPreview=null;
+      render();
+    }else if(boneMode==="draw"){
+      if(!boneDrawFrom){
+        // The first click is the head; the second is the tip.
+        boneDrawFrom={x:p.x,y:p.y};
+      }else{
+        var pre=snap();
+        var made=addBone(bo,boneDrawFrom.x,boneDrawFrom.y,p.x,p.y);
+        boneDrawFrom=null;
+        if(made>=0){
+          pushUndoSnap(pre);
+          fullRefresh();
+        }else{
+          showMessage("Bone Tool",
+            "That bone would have no length. Click the head, then click "+
+            "where the tip should be.");
+          render();
+        }
+      }
+      dragging=false;
+    }else{
+      var bh=boneHit(bo,p.x,p.y);
+      if(bh){
+        boneDrag={obj:bo,index:bh.index};
+        bonePreSnap=snap();
+      }else if(Flashy.Armature.active(bo)){
+        showMessage("Bone Tool",
+          "Drag a bone's TIP \u2014 the blue handle at its far end. The joint "+
+          "at the other end belongs to the bone above it.");
+      }else{
+        showMessage("Bone Tool",
+          "This shape has no bones yet. Switch to Add and click head to tip "+
+          "to lay one in.");
+      }
+      render();
+    }
   }else if(curTool==="deco"){
     // Dragged out like a rectangle: the area is what gets filled.
     dragPreview={type:"deco",x1:p.x,y1:p.y,x2:p.x,y2:p.y};
@@ -5965,6 +6116,13 @@ function onMouseMove(e){
     penDragTo(p.x,p.y);
   }else if(curTool==="lasso"){
     if(lassoMode==="freeform"&&lassoPts)lassoPts.push(p.x,p.y);
+  }else if(curTool==="bone"){
+    if(boneDrag){
+      // Shift reaches further up the chain; without it a drag bends the two
+      // bones nearest the handle, which is what posing a limb usually means.
+      dragBone(boneDrag.obj,boneDrag.index,p.x,p.y,
+               {bones:e.shiftKey?99:2});
+    }
   }else if(curTool==="deco"){
     if(dragPreview){dragPreview.x2=p.x;dragPreview.y2=p.y;}
   }else if(curTool==="spray"){
@@ -6065,6 +6223,12 @@ function onMouseUp(e){
     if(warpDrag){
       if(warpPreSnap)pushUndoSnap(warpPreSnap);
       warpDrag=null;warpPreSnap=null;
+      updateProps();
+    }
+  }else if(curTool==="bone"){
+    if(boneDrag){
+      if(bonePreSnap)pushUndoSnap(bonePreSnap);
+      boneDrag=null;bonePreSnap=null;
       updateProps();
     }
   }else if(curTool==="deco"){
@@ -7826,7 +7990,11 @@ function updateProps(){
        is pixels. Showing dead controls above the frame picker is noise in
        exactly the workflow (lip sync, posing) where the frame picker gets
        used most. */
-    if(o.type!=="symbol"&&o.type!=="bitmap"){
+    /* A video has neither a fill nor a stroke: it is pixels arriving over
+       time. Showing dead colour controls above the playback settings is noise
+       in exactly the workflow those settings belong to -- the same reason a
+       symbol and a bitmap are excluded. */
+    if(o.type!=="symbol"&&o.type!=="bitmap"&&o.type!=="video"){
     // ── Fill ──
     sect("Fill");
     /* Switching to Linear or Radial seeds a two-stop gradient from the colour
@@ -7863,6 +8031,108 @@ function updateProps(){
         colorRow("Color",o.fillColor,function(nc){pushUndo();o.fillColor=nc;render();});
         sliderRow("Alpha",o.fillAlpha!=null?o.fillAlpha:1,0,1,0.01,function(v){pushUndo();o.fillAlpha=v;render();},{percent:true,unit:"%"});
       }
+    }
+
+    /* A placed video. Flash's Video object had exactly these: which clip,
+       where it starts, whether it loops, and whether the playhead drives it
+       or it runs on its own clock. */
+    if(o.type==="video"){
+      sect("Video");
+      var vnames=Object.keys(docVideos());
+      if(vnames.length>1){
+        row("Clip",o.videoAsset||"",function(v){
+          pushUndo();o.videoAsset=v;fullRefresh();
+        },{type:"select",width:"110px",
+           options:vnames.map(function(n){return [n,n];})});
+      }else{
+        row("Clip",o.videoAsset||"(none)",function(){},{type:"readonly"});
+      }
+      row("Playback",o.videoMode||"embedded",function(v){
+        pushUndo();o.videoMode=v==="stream"?"stream":"embedded";fullRefresh();
+      },{type:"select",width:"110px",
+         options:[["embedded","Embedded (timeline)"],["stream","Stream (own clock)"]]});
+      if((o.videoMode||"embedded")==="embedded"){
+        row("Starts on frame",o.videoStart||1,function(v){
+          pushUndo();o.videoStart=Math.max(1,parseInt(v,10)||1);fullRefresh();
+        },{type:"number",width:"56px"});
+        var vasset=docVideos()[o.videoAsset];
+        var vdur=vasset&&vasset.duration?vasset.duration:0;
+        if(vdur){
+          note("The playhead drives it, so scrubbing the timeline scrubs the "+
+               "footage. At "+doc.fps+" fps the clip fills "+
+               Math.max(1,Math.round(vdur*doc.fps))+" frames \u2014 one video "+
+               "frame per timeline frame, which is what makes animating over "+
+               "it possible.");
+        }
+      }else{
+        note("It plays on its own clock, as a NetStream did, and the movie "+
+             "draws whatever frame has arrived. A browser will not start it "+
+             "unmuted without a click.");
+      }
+      row("Loop",!!o.videoLoop,function(v){
+        pushUndo();o.videoLoop=!!v;fullRefresh();
+      },{type:"checkbox"});
+      row("Muted",o.videoMuted!==false,function(v){
+        pushUndo();o.videoMuted=!!v;fullRefresh();
+      },{type:"checkbox"});
+      row("Smoothing",o.smoothing!==false,function(v){
+        pushUndo();o.smoothing=!!v;fullRefresh();
+      },{type:"checkbox"});
+      var vcu=videoCues(o.videoAsset);
+      row("Cue points",vcu?String(vcu.length):"0",function(){},{type:"readonly"});
+      btnGroup([{label:"Cue points\u2026",
+                 title:"Named times that fire as the video passes them",
+                 onClick:function(){showVideoCueDialog(o.videoAsset);}}]);
+    }
+
+    /* The selected bone's joint. Flash's Bone tool put these in the Property
+       inspector too, and they are what turns a floppy chain into a joint: an
+       elbow that bends one way between two angles, a pinned hip that the
+       solver may not move, and a speed that makes a heavy joint lag. */
+    if(Flashy.Armature&&Flashy.Armature.active(o)){
+      var bsel=o.armature.bones[boneSelected]||o.armature.bones[0];
+      var bidx=o.armature.bones.indexOf(bsel);
+      sect("Bones");
+      row("Bone",String(bidx),function(v){
+        boneSelected=parseInt(v,10)||0;updateProps();render();
+      },{type:"select",width:"80px",
+         options:o.armature.bones.map(function(b,i){
+           return [String(i),"Bone "+i+(b.parent>=0?" (of "+b.parent+")":" (root)")];
+         })});
+      row("Rotate from",bsel.rotMin!=null?String(bsel.rotMin):"",function(v){
+        pushUndo();
+        var n=parseFloat(v);
+        bsel.rotMin=(String(v).trim()===""||!isFinite(n))?null:n;
+        fullRefresh();
+      },{width:"56px",unit:"\u00b0",placeholder:"none"});
+      row("Rotate to",bsel.rotMax!=null?String(bsel.rotMax):"",function(v){
+        pushUndo();
+        var n=parseFloat(v);
+        bsel.rotMax=(String(v).trim()===""||!isFinite(n))?null:n;
+        fullRefresh();
+      },{width:"56px",unit:"\u00b0",placeholder:"none"});
+      sliderRow("Joint speed",bsel.speed==null?1:bsel.speed,0.05,1,0.05,function(v){
+        bsel.speed=v;touchDoc();
+      },{percent:true,unit:"%"});
+      row("Pinned",!!bsel.pinned,function(v){
+        pushUndo();bsel.pinned=!!v;fullRefresh();
+      },{type:"checkbox"});
+      if(bsel.rotMin!=null&&bsel.rotMax!=null&&bsel.rotMin>bsel.rotMax){
+        note("The limits are the wrong way round, so this joint cannot move "+
+             "at all. Swap them.");
+      }else if(bsel.rotMin!=null||bsel.rotMax!=null){
+        note("Limits are relative to the bone above \u2014 an elbow that bends "+
+             "0 to 140 degrees means that with respect to the upper arm, not "+
+             "to the stage.");
+      }
+      btnGroup([
+        {label:"Bind here",title:"Make this pose the rest position",
+         onClick:function(){pushUndo();bindPose(o);fullRefresh();}},
+        {label:"Reset pose",title:"Back to the rest position",
+         onClick:function(){pushUndo();resetPose(o);fullRefresh();}},
+        {label:"Remove bone",title:"Delete this bone and re-parent its children",
+         onClick:function(){pushUndo();removeBone(o,bidx);boneSelected=0;fullRefresh();}}
+      ]);
     }
 
     /* Flash's "Use runtime bitmap caching", on the kinds it was offered for.
@@ -11181,6 +11451,10 @@ var libraryOpenFolders={};     // path -> false when collapsed
 
 /** The folder an item is in: "" for the top level. */
 function libFolderOf(kind,name){
+  if(kind==="video"){
+    var va=(doc.videos||{})[name];
+    return (va&&typeof va.folder==="string")?va.folder:"";
+  }
   var item=kind==="symbol"?(doc.library||{})[name]:(doc.bitmaps||{})[name];
   var f=item&&item.folder;
   return typeof f==="string"?f.replace(/^\/+|\/+$/g,""):"";
@@ -11195,6 +11469,20 @@ function setLibFolder(kind,name,folder){
 
 /** How many times a library item is used anywhere in the document. */
 function libUseCount(kind,name){
+  // A placed video is an instance of its asset, exactly as a bitmap is.
+  if(kind==="video"){
+    var n=0;
+    docScenes().forEach(function(sc){
+      (sc.layers||[]).forEach(function(l){
+        (l.keyframes||[]).forEach(function(kf){
+          (kf.objects||[]).forEach(function(o){
+            if(o.type==="video"&&o.videoAsset===name)n++;
+          });
+        });
+      });
+    });
+    return n;
+  }
   var n=0;
   var visit=function(objs){
     (objs||[]).forEach(function(o){
@@ -11290,6 +11578,7 @@ function libraryRows(){
   };
   Object.keys(doc.library||{}).forEach(function(n){push("symbol",n);});
   Object.keys(doc.bitmaps||{}).forEach(function(n){push("bitmap",n);});
+  Object.keys(doc.videos||{}).forEach(function(n){push("video",n);});
 
   rows.sort(function(a,b){
     if(librarySort==="kind"&&a.kind!==b.kind)return a.kind<b.kind?-1:1;
@@ -11454,6 +11743,7 @@ function showUnusedItemsDialog(){
       unused.forEach(function(u){
         if(u.kind==="symbol")delete doc.library[u.name];
         else if(u.kind==="bitmap")delete doc.bitmaps[u.name];
+        else if(u.kind==="video")delete docVideos()[u.name];
         else if(u.kind==="sound")delete doc.sounds[u.name];
       });
       outputLog("Deleted "+unused.length+" unused library item"+
@@ -11474,9 +11764,10 @@ function updateLib(){
   lp.appendChild(title);
   var keys=Object.keys(doc.library);
   var bkeys=Object.keys(doc.bitmaps||{});
-  if(keys.length===0&&bkeys.length===0){
+  var vkeys=Object.keys(doc.videos||{});
+  if(keys.length===0&&bkeys.length===0&&vkeys.length===0){
     var empty=document.createElement("div");empty.className="lib-empty";
-    empty.textContent="No symbols or bitmaps";lp.appendChild(empty);
+    empty.textContent="No symbols, bitmaps or video";lp.appendChild(empty);
     return;
   }
 
@@ -11532,6 +11823,21 @@ function updateLib(){
           ((sym&&sym.exportForAS&&sym.linkageName)
             ? ("\nExported for ActionScript as \u201C"+sym.linkageName+"\u201D") : "")+
           "\nDrag onto the stage to place it. Double-click to open it."
+      });
+    }
+    if(r.kind==="video"){
+      var va=docVideos()[r.name];
+      var secs=va&&va.duration?(Math.round(va.duration*10)/10+"s"):"";
+      return libRow("video",r.name,{
+        icon:"\u25B6",
+        dim:(va&&va.width?va.width+"\u00D7"+va.height:"")+(secs?" "+secs:""),
+        use:r.uses,
+        title:r.name+(va&&va.width?" \u2014 "+va.width+"\u00D7"+va.height+" px":"")+
+          (secs?", "+secs:"")+
+          ((va&&va.cues&&va.cues.length)
+            ? ("\n"+va.cues.length+" cue point"+(va.cues.length===1?"":"s")) : "")+
+          "\n"+(r.uses?(r.uses+" use"+(r.uses===1?"":"s")):"Not used anywhere")+
+          "\nDrag onto the stage to place it."
       });
     }
     var a=doc.bitmaps[r.name];
@@ -11824,6 +12130,7 @@ function symbolContentBox(sym){
 function placeLibItem(kind,name,opts){
   pushUndo();
   var placed=(kind==="bitmap")?placeBitmap(name,opts||{})
+            :(kind==="video")?placeVideo(name)
                               :placeSymbolInstance(name,opts||{});
   if(placed)selection=[placed];
   fullRefresh();
@@ -11918,9 +12225,16 @@ function traceLibBitmap(name){
 function showLibMenu(e,kind,name){
   var items=[
     {label:"Place on Stage",onClick:function(){placeLibItem(kind,name,{});}},
-    {label:kind==="symbol"?"Edit Symbol":"Open Bitmap",
-     onClick:function(){openLibItem(kind,name);}}
+    {label:kind==="symbol"?"Edit Symbol":kind==="video"?"Cue Points\u2026":"Open Bitmap",
+     onClick:function(){
+       if(kind==="video")showVideoCueDialog(name);
+       else openLibItem(kind,name);
+     }}
   ];
+  if(kind==="video"){
+    items.push({label:"Cue Points\u2026",
+                onClick:function(){showVideoCueDialog(name);}});
+  }
   if(kind==="bitmap"){
     items.push({label:"Trace Bitmap...",onClick:function(){traceLibBitmap(name);}});
   }
@@ -12426,7 +12740,21 @@ function doActionInner(a){
         {name:"w",label:"Width",type:"number",value:fmtUnits(doc.width,false),min:0.001,step:"any"},
         {name:"h",label:"Height",type:"number",value:fmtUnits(doc.height,false),min:0.001,step:"any"},
         {name:"fps",label:"Frame rate",type:"number",value:doc.fps,min:1,max:120,hint:"Frames per second."},
-        {name:"bg",label:"Background",value:doc.backgroundColor,placeholder:"#FFFFFF"}
+        {name:"bg",label:"Background",value:doc.backgroundColor,placeholder:"#FFFFFF"},
+        /* Flash's Publish Settings had this, and it decides what a frame
+           script IS: plain JavaScript, ActionScript 2 object handlers, or
+           ActionScript 3 compiled to JavaScript. */
+        {name:"dialect",label:"Scripts",type:"select",
+         value:doc.scriptDialect||"js",
+         options:[["js","JavaScript"],["as2","ActionScript 2"],
+                  ["as3","ActionScript 3"]],
+         hint:"ActionScript 3 is compiled to JavaScript and runs on the "+
+              "engine. It is not an AVM2: it runs AS3 SOURCE, not a .swf's "+
+              "compiled bytecode."},
+        {name:"docClass",label:"Document class",value:doc.documentClass||"",
+         placeholder:"Main",
+         hint:"ActionScript 3 only. The class the movie instantiates with the "+
+              "root, as a Flash project with a document class did."}
       ],
       validate:function(v){
         if(!(parseFloat(v.w)>0)||!(parseFloat(v.h)>0))return "Width and height must be positive numbers.";
@@ -12445,6 +12773,8 @@ function doActionInner(a){
         doc.width=pw;
         doc.height=ph;
         doc.fps=Math.max(1,Math.min(120,parseInt(v.fps,10)));
+        doc.scriptDialect=(v.dialect==="as2"||v.dialect==="as3")?v.dialect:"js";
+        doc.documentClass=String(v.docClass||"").trim();
         var bg=String(v.bg).trim();
         doc.backgroundColor=bg[0]==="#"?bg:"#"+bg;
         centerStage();fullRefresh();
@@ -12471,6 +12801,9 @@ function doActionInner(a){
     break;
   case "embedFont":
     showFontEmbedDialog();
+    break;
+  case "as3Document":
+    showAS3DocumentDialog();
     break;
   case "htmlTemplate":
     showTemplateEditor();
@@ -13174,6 +13507,25 @@ function doActionInner(a){
     break;
   case "swapBitmap":
     showSwapBitmapDialog();
+    break;
+  case "importVideo":
+    var vinp=document.createElement("input");
+    vinp.type="file";
+    vinp.accept="video/*,.mp4,.m4v,.webm,.ogv,.mov";
+    vinp.addEventListener("change",function(){
+      if(vinp.files&&vinp.files[0])importVideoFile(vinp.files[0]);
+    });
+    vinp.click();
+    break;
+  case "videoCues":
+    var vcsel=libSelected();
+    if(vcsel&&vcsel.kind==="video")showVideoCueDialog(vcsel.name);
+    else if(selection.length===1&&selection[0].type==="video")
+      showVideoCueDialog(selection[0].videoAsset);
+    else showMessage("Cue Points",
+      "Select a video in the Library, or a video on the stage, first.\n\n"+
+      "Cue points are marks in the FOOTAGE rather than in one placement of "+
+      "it, which is where Flash put them too.");
     break;
   case "importSound":
     var sinp=document.createElement("input");
@@ -18905,6 +19257,12 @@ function debugCurrentScript(opts) {
   if (!String(src || "").trim()) {
     return { ok: false, why: "there is no script on this frame to debug" };
   }
+  if (doc.scriptDialect === "as3") {
+    return { ok: false, why: "this script is ActionScript 3, which is " +
+             "compiled to JavaScript by flashy-as3.js — the debugger steps " +
+             "the source it was handed, and stepping compiled output would " +
+             "point at lines nobody wrote" };
+  }
   if (target.obj || doc.scriptDialect === "as2") {
     /* ActionScript is compiled by the AS2 runtime, not by `new Function`, so
        stepping through it would mean stepping through a different compiler's
@@ -19694,6 +20052,139 @@ function buildPrintHTML(opts) {
  * the document, and the placeholder list has to be in front of you while you
  * write it.
  */
+/* A document class to start from. Not a tutorial -- a working class that
+   draws something, so pressing Test Movie after opening this dialog shows
+   that the whole path works. */
+var DEFAULT_AS3_DOCUMENT = [
+  'package {',
+  '  import flash.display.Sprite;',
+  '  import flash.events.Event;',
+  '',
+  '  public class Main extends Sprite {',
+  '    private var box:Sprite;',
+  '    private var vx:Number = 2;',
+  '',
+  '    public function Main() {',
+  '      box = new Sprite();',
+  '      box.graphics.beginFill(0xCC2233);',
+  '      box.graphics.drawRect(-20, -20, 40, 40);',
+  '      box.graphics.endFill();',
+  '      box.x = 60;',
+  '      box.y = 60;',
+  '      addChild(box);',
+  '      addEventListener(Event.ENTER_FRAME, onFrame);',
+  '      trace("Main is running");',
+  '    }',
+  '',
+  '    private function onFrame(e:Event):void {',
+  '      box.x += vx;',
+  '      box.rotation += 3;',
+  '      if (box.x > 200 || box.x < 20) vx = -vx;',
+  '    }',
+  '  }',
+  '}'
+].join('\n');
+
+/**
+ * The ActionScript 3 document class.
+ *
+ * One class file, which is what a Flash project with a document class
+ * actually was: the rest of the project's classes are imported into it, and
+ * a multi-file class path is a build system rather than a document.
+ *
+ * Compiled live as it is typed, because the single most useful thing this
+ * dialog can do is say which line is wrong -- the alternative is finding out
+ * on Test Movie, with no line number at all.
+ */
+function showAS3DocumentDialog() {
+  var ta = null, status = null;
+  var recheck = function () {
+    if (!ta || !status) return;
+    var src = ta.value || "";
+    if (!src.trim()) {
+      status.textContent = "Empty: the movie will play its timeline and nothing else.";
+      status.className = "fy-dialog-hint";
+      return;
+    }
+    if (!window.FlashyAS3) {
+      status.textContent = "flashy-as3.js is not loaded in this build.";
+      status.className = "fy-dialog-error";
+      return;
+    }
+    try {
+      var c = window.FlashyAS3.compile(src);
+      var names = c.classes.map(function (x) { return x.name; });
+      status.textContent = names.length
+        ? ("Compiles. " + names.join(", ") +
+           (c.mainClass ? (" \u2014 the movie will instantiate " + c.mainClass) : "") + ".")
+        : "Compiles, but declares no class, so there is nothing to instantiate.";
+      status.className = "fy-dialog-hint";
+    } catch (e) {
+      status.textContent = "Line " + (e.line || "?") + ": " + (e.message || e);
+      status.className = "fy-dialog-error";
+    }
+  };
+  showDialog({
+    title: "ActionScript 3 Document Class",
+    okLabel: "Apply",
+    message: "Compiled to JavaScript and run against the engine. This is not " +
+             "an AVM2 \u2014 it runs ActionScript 3 SOURCE, not a .swf's " +
+             "compiled bytecode. Flash's own Sprite, MovieClip, TextField, " +
+             "Event, Point, Rectangle and Timer are in scope.",
+    build: function (body) {
+      ta = document.createElement("textarea");
+      ta.id = "as3-document";
+      ta.className = "fy-dialog-input";
+      ta.style.cssText = "width:100%;height:240px;font:11px/1.4 Consolas,monospace;" +
+                         "white-space:pre;resize:vertical";
+      ta.spellcheck = false;
+      ta.value = doc.documentScript || "";
+      ta.addEventListener("input", recheck);
+      body.appendChild(ta);
+      status = document.createElement("div");
+      status.className = "fy-dialog-hint";
+      status.id = "as3-status";
+      body.appendChild(status);
+      var un = document.createElement("div");
+      un.className = "fy-dialog-hint";
+      un.textContent = "Not supported, and refused rather than mistranslated: " +
+        (window.FlashyAS3 ? window.FlashyAS3.UNSUPPORTED.join("; ") : "\u2014") + ".";
+      body.appendChild(un);
+      recheck();
+    },
+    extraButtons: [
+      { label: "Example", onClick: function () {
+          if (ta) { ta.value = DEFAULT_AS3_DOCUMENT; recheck(); }
+        } }
+    ],
+    validate: function () {
+      var src = ta ? (ta.value || "") : "";
+      if (!src.trim() || !window.FlashyAS3) return null;
+      try { window.FlashyAS3.compile(src); } catch (e) {
+        return "Line " + (e.line || "?") + ": " + (e.message || e);
+      }
+      return null;
+    },
+    onOk: function () {
+      pushUndo();
+      doc.documentScript = ta ? (ta.value || "") : "";
+      /* Setting a document class means the document's scripts ARE
+         ActionScript 3, so the dialect follows -- leaving it on JavaScript
+         would compile the class and then never run it. */
+      if (String(doc.documentScript).trim()) {
+        doc.scriptDialect = "as3";
+        if (!doc.documentClass && window.FlashyAS3) {
+          try {
+            var c = window.FlashyAS3.compile(doc.documentScript);
+            if (c.mainClass) doc.documentClass = c.mainClass;
+          } catch (e) { /* validated above */ }
+        }
+      }
+      fullRefresh();
+    }
+  });
+}
+
 function showTemplateEditor() {
   var pub = docPublish();
   var ta = null;
@@ -22351,6 +22842,618 @@ function stampSymbols() {
 }
 
 /* ------------------------------------------------------------------ *
+ * The Bone tool, on shapes
+ *
+ * Flash's Bone tool did two things. Applied to a set of SYMBOLS it built a
+ * skeleton of parent/child instances, each turning about its joint -- which
+ * is what Flashy's character rigs already are, complete with rotation
+ * limits, planted joints and a CCD solver. Applied to a SHAPE it put bones
+ * INSIDE the artwork and the outline deformed to follow them.
+ *
+ * The second one is the famous one, and Flashy had nothing for it: a drawn
+ * arm bends at the elbow as a DRAWING rather than as two pieces, and a tail
+ * curves along its whole length.
+ *
+ * The deformation is `Flashy.Armature` -- linear blend skinning, a pure
+ * function of (outline, pose) -- and it is routed through the seam
+ * Flashy.Warp already owns, so the stage, the SVG export, the exported player
+ * and the eraser all get it from the one place. That seam being already wired
+ * into four render paths is the whole reason to put it there: a second one
+ * would be a second chance for them to disagree.
+ *
+ * Shapes and drawings only, which is the same list Distort and Envelope use
+ * and for the same reason: a symbol has contents, not an outline.
+ * ------------------------------------------------------------------ */
+
+/** True when this object is the kind bones can be drawn into. */
+function canBone(o) {
+  if (!o || !window.Flashy || !Flashy.Warp) return false;
+  if (!Math.abs(o.width || 0) || !Math.abs(o.height || 0)) return false;
+  return Flashy.Warp.outline(o, Flashy.Primitives) !== null;
+}
+
+/** The bone list for an object, created on first use. */
+function armatureOf(o) {
+  if (!o) return null;
+  if (!o.armature || !Array.isArray(o.armature.bones)) o.armature = { bones: [] };
+  return o.armature;
+}
+
+/**
+ * Add a bone from (x1,y1) to (x2,y2), in STAGE coordinates.
+ *
+ * `parent` is an index, or -1 for a root. A bone added with no parent given
+ * attaches to whichever existing bone's tip is nearest its head, which is
+ * what makes drawing a chain a matter of clicking end to end -- the same
+ * gesture Flash's Bone tool used.
+ */
+function addBone(o, x1, y1, x2, y2, parent) {
+  if (!canBone(o)) return -1;
+  var a = armatureOf(o);
+  var p1 = boneLocalPoint(o, x1, y1);
+  var p2 = boneLocalPoint(o, x2, y2);
+  if (!p1 || !p2) return -1;
+  var dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  var len = Math.hypot(dx, dy);
+  if (len < 1) return -1;
+  var angle = Math.atan2(dy, dx);
+
+  if (parent == null) {
+    parent = -1;
+    var best = 12;        // within a dozen box units of a tip counts as joined
+    var segs = Flashy.Armature.segments(a.bones, 'rest');
+    for (var i = 0; i < segs.length; i++) {
+      var d = Math.hypot(p1[0] - segs[i].tip[0], p1[1] - segs[i].tip[1]);
+      if (d < best) { best = d; parent = i; }
+    }
+  }
+  /* A child's angle is RELATIVE to its parent, because that is what the
+     matrix chain composes and what makes a joint limit mean something. */
+  var rel = angle;
+  if (parent >= 0) {
+    var ms = Flashy.Armature.matrices(a.bones, 'rest');
+    var pm = ms[parent];
+    rel = angle - Math.atan2(pm[1], pm[0]);
+  }
+  var b = Flashy.Armature.bone(p1[0], p1[1], len, rel, parent);
+  a.bones.push(b);
+  return a.bones.length - 1;
+}
+
+/** A stage point in the object's own box coordinates, or null. */
+function boneLocalPoint(o, x, y) {
+  var hw = Math.abs((o.width || 0) / 2), hh = Math.abs((o.height || 0) / 2);
+  var inv = matInvert(matMul(objMatrix(o), [1, 0, 0, 1, -hw, -hh]));
+  if (!inv) return null;
+  return [inv[0] * x + inv[2] * y + inv[4], inv[1] * x + inv[3] * y + inv[5]];
+}
+
+/** A box point back out to stage coordinates. */
+function boneStagePoint(o, x, y) {
+  var hw = Math.abs((o.width || 0) / 2), hh = Math.abs((o.height || 0) / 2);
+  var m = matMul(objMatrix(o), [1, 0, 0, 1, -hw, -hh]);
+  return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
+}
+
+/** Every bone's head and tip in STAGE coordinates, in the live pose. */
+function boneSegments(o) {
+  if (!o || !Flashy.Armature.active(o)) return [];
+  return Flashy.Armature.segments(o.armature.bones, 'angle').map(function (s, i) {
+    var head = boneStagePoint(o, s.head[0], s.head[1]);
+    var tip = boneStagePoint(o, s.tip[0], s.tip[1]);
+    return { index: i, head: head, tip: tip, bone: o.armature.bones[i] };
+  });
+}
+
+/** Drop a bone and re-parent its children onto its own parent. */
+function removeBone(o, index) {
+  if (!o || !o.armature || !o.armature.bones[index]) return false;
+  var bones = o.armature.bones;
+  var gone = bones[index];
+  bones.splice(index, 1);
+  bones.forEach(function (b) {
+    /* Re-parented onto the removed bone's parent rather than orphaned: a
+       forearm whose upper arm is deleted should hang off the shoulder, not
+       jump to the shape's corner. */
+    if (b.parent === index) b.parent = gone.parent;
+    if (b.parent > index) b.parent -= 1;
+  });
+  if (!bones.length) o.armature = null;
+  return true;
+}
+
+/** Remove the whole skeleton, so the drawing goes back to how it was drawn. */
+function clearArmature(o) {
+  if (!o || !o.armature) return false;
+  o.armature = null;
+  return true;
+}
+
+/** The bone whose tip is nearest a stage point, or null. */
+function boneHit(o, x, y) {
+  var segs = boneSegments(o);
+  var tol = 9 / zoom, best = null, bestD = tol * tol;
+  segs.forEach(function (s) {
+    // The TIP is the handle: dragging a bone means moving the end of it, and
+    // the head belongs to the joint above.
+    var dx = s.tip.x - x, dy = s.tip.y - y;
+    var d = dx * dx + dy * dy;
+    if (d <= bestD) { bestD = d; best = s; }
+  });
+  return best;
+}
+
+/* pose | draw -- what a drag on the stage does. Tool state, not document
+   state: which of the two you want changes several times a minute, and it is
+   not a property of the drawing. */
+var boneMode = "pose";
+
+/* Which bone the inspector is editing. An index rather than a reference,
+   because undo replaces the objects wholesale. */
+var boneSelected = 0;
+
+var boneDrag = null;       // {obj, index} while a bone is being dragged
+var bonePreSnap = null;
+var boneDrawFrom = null;   // the first click of a new bone
+
+/** Drag the chain ending at `index` so its tip follows a stage point. */
+function dragBone(o, index, x, y, opts) {
+  if (!o || !Flashy.Armature.active(o)) return null;
+  var local = boneLocalPoint(o, x, y);
+  if (!local) return null;
+  var res = Flashy.Armature.solve(o.armature.bones, index, local[0], local[1],
+                                  opts || {});
+  touchDoc();
+  return res;
+}
+
+/** Put the whole skeleton back in its bind pose. */
+function resetPose(o) {
+  if (!o || !Flashy.Armature.active(o)) return false;
+  Flashy.Armature.reset(o.armature.bones);
+  touchDoc();
+  return true;
+}
+
+/**
+ * Make the current pose the new bind pose.
+ *
+ * Flash's "set the rest position". Without it a skeleton can only ever be
+ * posed away from the drawing as drawn, so getting the bind pose slightly
+ * wrong means fighting it for ever.
+ */
+function bindPose(o) {
+  if (!o || !Flashy.Armature.active(o)) return false;
+  o.armature.bones.forEach(function (b) {
+    b.rest = b.angle;
+    b.slideX = 0;
+    b.slideY = 0;
+  });
+  touchDoc();
+  return true;
+}
+
+/** The skeleton, drawn inside the stage transform. */
+function drawBoneOverlay(cx) {
+  var pool = selection.length ? selection : [];
+  cx.save();
+  cx.lineWidth = 1 / zoom;
+  pool.forEach(function (o) {
+    var segs = boneSegments(o);
+    if (!segs.length) return;
+    segs.forEach(function (s) {
+      var b = s.bone;
+      /* Drawn as a tapered spindle rather than a line, which is how Flash
+         drew a bone and is the only way to see which end is the joint at a
+         glance. */
+      var dx = s.tip.x - s.head.x, dy = s.tip.y - s.head.y;
+      var len = Math.hypot(dx, dy) || 1;
+      var nx = -dy / len, ny = dx / len;
+      var wide = Math.min(len / 4, 5 / zoom);
+      cx.beginPath();
+      cx.moveTo(s.head.x, s.head.y);
+      cx.lineTo(s.head.x + dx * 0.25 + nx * wide, s.head.y + dy * 0.25 + ny * wide);
+      cx.lineTo(s.tip.x, s.tip.y);
+      cx.lineTo(s.head.x + dx * 0.25 - nx * wide, s.head.y + dy * 0.25 - ny * wide);
+      cx.closePath();
+      // Pinned bones are red, as a planted rig part is: the colour means
+      // "this will not move" in both places.
+      cx.fillStyle = b.pinned ? "rgba(255,122,122,0.55)" : "rgba(255,210,74,0.5)";
+      cx.fill();
+      cx.strokeStyle = "rgba(40,30,0,0.85)";
+      cx.stroke();
+      // The joint, at the head.
+      cx.beginPath();
+      cx.arc(s.head.x, s.head.y, 3.2 / zoom, 0, Math.PI * 2);
+      cx.fillStyle = (b.rotMin != null || b.rotMax != null)
+        ? "rgba(120,255,170,0.95)" : "rgba(255,255,255,0.95)";
+      cx.fill();
+      cx.strokeStyle = "rgba(20,60,120,0.9)";
+      cx.stroke();
+      // The handle, at the tip.
+      cx.beginPath();
+      cx.arc(s.tip.x, s.tip.y, 2.6 / zoom, 0, Math.PI * 2);
+      cx.fillStyle = "rgba(120,200,255,0.95)";
+      cx.fill();
+      cx.stroke();
+    });
+  });
+  // The bone being drawn, from its first click to the pointer.
+  if (boneDrawFrom && stageHover) {
+    cx.strokeStyle = "rgba(255,210,74,0.9)";
+    cx.setLineDash([4 / zoom, 3 / zoom]);
+    cx.beginPath();
+    cx.moveTo(boneDrawFrom.x, boneDrawFrom.y);
+    cx.lineTo(stageHover.x, stageHover.y);
+    cx.stroke();
+    cx.setLineDash([]);
+  }
+  cx.restore();
+}
+
+/* ------------------------------------------------------------------ *
+ * Video
+ *
+ * Flash's File > Import > Video and the Video object it produced. It is how
+ * every tutorial, every banner with a product shot and every Flash video
+ * player on the web was built, and Flashy had nothing -- the audit dismissed
+ * it as "needs a demuxer", which was wrong. A browser demuxes and decodes MP4
+ * and WebM already: a <video> element IS the decoder, and drawImage of it is
+ * the frame.
+ *
+ * The geometry and the timing are `Flashy.Video`, in the engine, because the
+ * stage and the exported player both need them and a second copy of "which
+ * second of the video is this frame" would be a second chance for the stage
+ * and the export to disagree about a cut.
+ *
+ * Two modes, Flash's own:
+ *
+ *   EMBEDDED  the playhead drives the video, so scrubbing scrubs it and the
+ *             movie's frame rate is the video's. This is what made animating
+ *             over footage frame by frame possible.
+ *   STREAM    the video plays on its own clock, as a NetStream did.
+ *
+ * Cue points are named times that fire as the video passes them, which is
+ * what captions, chapter marks and timed animation hang off.
+ * ------------------------------------------------------------------ */
+
+/* Flash capped embedded video, and so does this -- a 50MB file base64'd into
+   a .flashy is a document nobody can open. The limit is on the SOURCE bytes,
+   which is the number the user can see in their file manager. */
+var VIDEO_MAX_BYTES = 24 * 1024 * 1024;
+
+/** The video assets, created lazily so an old document loads unchanged. */
+function docVideos() {
+  if (!doc.videos || typeof doc.videos !== "object") doc.videos = {};
+  return doc.videos;
+}
+
+function uniqueVideoName(base) {
+  base = (base || "Video").trim() || "Video";
+  var vids = docVideos();
+  if (!vids[base]) return base;
+  var n = 2;
+  while (vids[base + " " + n]) n++;
+  return base + " " + n;
+}
+
+/** A video asset as a data URL, or "". */
+function videoDataURL(name) {
+  var a = docVideos()[name];
+  if (!a || !a.data) return "";
+  return "data:" + (a.mediaType || "video/mp4") + ";base64," + a.data;
+}
+
+/** Start decoding an asset. Safe to call repeatedly: Flashy.Videos caches. */
+function decodeVideo(name) {
+  var a = docVideos()[name];
+  if (!a || typeof Flashy === "undefined" || !Flashy.Videos) {
+    return Promise.resolve(null);
+  }
+  if (!a.data) return Promise.resolve(null);
+  /* Through loadBase64, which makes a BLOB url: a <video> on a data: url
+     cannot serve byte ranges, so every seek either takes seconds or never
+     completes -- and an embedded video is seeked on every frame of a scrub. */
+  return Flashy.Videos.loadBase64(name, a.data, a.mediaType).then(function (el) {
+    /* The real size and duration are only known once a frame has decoded, and
+       they are what the Library and the placed object need. Writing them back
+       means the second placement does not have to wait at all. */
+    var w = el.videoWidth || a.width || 0;
+    var h = el.videoHeight || a.height || 0;
+    if (w) a.width = w;
+    if (h) a.height = h;
+    if (isFinite(el.duration) && el.duration > 0) a.duration = el.duration;
+    render();
+    return el;
+  })["catch"](function () { return null; });
+}
+
+/** The decoded element for a placed object, or null. */
+function videoElement(name) {
+  if (typeof Flashy === "undefined" || !Flashy.Videos) return null;
+  return Flashy.Videos.get(name);
+}
+
+/**
+ * File > Import > Video.
+ *
+ * Imports the file as an asset and places an instance on the current frame,
+ * the same way importing an image does -- an asset in the Library and nothing
+ * on the stage is the commonest "did that work?" in any editor.
+ */
+function importVideoFile(file, opts) {
+  opts = opts || {};
+  var looksVideo = file && (String(file.type).indexOf("video/") === 0 ||
+    /\.(mp4|m4v|webm|ogv|mov)$/i.test(file.name || ""));
+  if (!looksVideo) {
+    showMessage("Import Video", "That is not a video file: " +
+      ((file && file.name) || "(none)") +
+      "\n\nUse MP4 (H.264) or WebM, which are the two every browser decodes.");
+    return Promise.resolve(null);
+  }
+  if (file.size > VIDEO_MAX_BYTES) {
+    showMessage("Import Video",
+      file.name + " is " + Math.round(file.size / (1024 * 1024)) + " MB.\n\n" +
+      "Video travels inside the document, so the limit is " +
+      Math.round(VIDEO_MAX_BYTES / (1024 * 1024)) + " MB -- a bigger file " +
+      "makes a document nobody can open. Trim it or re-encode it smaller " +
+      "first. Flash capped embedded video for the same reason.");
+    return Promise.resolve(null);
+  }
+  return new Promise(function (resolve) {
+    var reader = new FileReader();
+    reader.onerror = function () {
+      showMessage("Import Video", "Could not read " + file.name);
+      resolve(null);
+    };
+    reader.onload = function () {
+      var dataURL = String(reader.result);
+      var comma = dataURL.indexOf(",");
+      if (comma < 0) { resolve(null); return; }
+      var mediaType = file.type || "video/mp4";
+      var name = uniqueVideoName((file.name || "Video").replace(/\.[^.]+$/, ""));
+      docVideos()[name] = {
+        name: name, mediaType: mediaType, data: dataURL.slice(comma + 1),
+        width: 0, height: 0, duration: 0, folder: "",
+        // Cue points belong to the ASSET, as Flash's did: they are marks in
+        // the footage, not in one placement of it.
+        cues: []
+      };
+      touchDoc();
+      decodeVideo(name).then(function (el) {
+        if (!el) {
+          delete docVideos()[name];
+          showMessage("Import Video",
+            "This browser could not decode " + file.name + ".\n\n" +
+            "MP4 with H.264 video and WebM with VP8 or VP9 are the two that " +
+            "work everywhere.");
+          touchDoc();
+          resolve(null);
+          return;
+        }
+        if (opts.place !== false) placeVideo(name);
+        fullRefresh();
+        resolve(name);
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Put an instance of a video asset on the current frame. */
+function placeVideo(name) {
+  var a = docVideos()[name];
+  if (!a) return null;
+  var kf = CKF();
+  if (!kf) {
+    var l = CL();
+    if (l) kf = l.insertKeyframe(curFrame);
+  }
+  if (!kf) return null;
+  var o = new EditorObject("video");
+  o.videoAsset = name;
+  var w = a.width || 320, h = a.height || 240;
+  /* Scaled down to fit the stage if it is larger, because an imported 1080p
+     clip on a 550x400 stage is otherwise entirely off it and looks like
+     nothing happened. */
+  var k = Math.min(1, doc.width / w, doc.height / h);
+  o.width = Math.round(w * k);
+  o.height = Math.round(h * k);
+  o.x = Math.round((doc.width - o.width) / 2);
+  o.y = Math.round((doc.height - o.height) / 2);
+  o.videoStart = curFrame;
+  pushUndo();
+  kf.objects.push(o);
+  selection = [o];
+  touchDoc();
+  return o;
+}
+
+/** Where in the asset a given movie frame lands, in seconds. */
+function videoTimeAt(o, frame) {
+  var a = docVideos()[o.videoAsset];
+  if (!a) return 0;
+  var dur = a.duration || Flashy.Videos.duration(o.videoAsset) || 0;
+  return Flashy.Video.timeFor(frame, o.videoStart || 1, doc.fps, dur,
+                              !!o.videoLoop);
+}
+
+/**
+ * Drive every embedded video on the current frame to the playhead.
+ *
+ * Called from the render, so scrubbing the timeline scrubs the footage --
+ * which is the whole difference between embedded and streamed video, and the
+ * reason embedded video existed at all.
+ */
+function syncVideos() {
+  if (typeof Flashy === "undefined" || !Flashy.Video) return 0;
+  var synced = 0;
+  frameObjects(currentLayers(), curFrame).forEach(function (o) {
+    if (o.type !== "video" || !o.videoAsset) return;
+    var el = videoElement(o.videoAsset);
+    if (!el) return;
+    if ((o.videoMode || "embedded") !== "embedded") return;
+    if (Flashy.Video.sync(el, videoTimeAt(o, curFrame))) synced++;
+  });
+  return synced;
+}
+
+/** The cue points on an asset, newest last. */
+function videoCues(name) {
+  var a = docVideos()[name];
+  if (!a) return null;
+  if (!Array.isArray(a.cues)) a.cues = [];
+  return a.cues;
+}
+
+/**
+ * Add a cue point to an asset.
+ *
+ * `type` is Flash's two: a NAVIGATION cue is a seek target (a chapter mark),
+ * an EVENT cue fires a script. Both reach the exported player; only the
+ * second does anything on its own.
+ */
+function addVideoCue(name, cueName, time, type) {
+  var cues = videoCues(name);
+  if (!cues) return null;
+  var t = Math.max(0, Number(time) || 0);
+  var cue = {
+    name: String(cueName || ("Cue " + (cues.length + 1))),
+    time: t,
+    type: type === "navigation" ? "navigation" : "event"
+  };
+  cues.push(cue);
+  // Sorted, because "which cue is next" is the only question anyone asks of
+  // this list and an unsorted answer is wrong on a loop.
+  cues.sort(function (a, b) { return a.time - b.time; });
+  touchDoc();
+  return cue;
+}
+
+function removeVideoCue(name, index) {
+  var cues = videoCues(name);
+  if (!cues || !cues[index]) return false;
+  cues.splice(index, 1);
+  touchDoc();
+  return true;
+}
+
+/** The frame a cue point falls on, for drawing it against the timeline. */
+function cueFrame(o, cue) {
+  return Math.round((o.videoStart || 1) + (cue.time || 0) * doc.fps);
+}
+
+/** Video assets, serialised. */
+function serializeVideos(videos) {
+  var out = {};
+  Object.keys(videos || {}).forEach(function (name) {
+    var a = videos[name];
+    if (!a || !a.data) return;
+    out[name] = {
+      name: name, mediaType: a.mediaType || "video/mp4", data: a.data,
+      width: a.width || 0, height: a.height || 0, duration: a.duration || 0,
+      folder: typeof a.folder === "string" ? a.folder : "",
+      cues: Array.isArray(a.cues)
+        ? a.cues.filter(function (c) { return c && isFinite(Number(c.time)); })
+                .map(function (c) {
+                  return { name: String(c.name || ""), time: Number(c.time),
+                           type: c.type === "navigation" ? "navigation" : "event" };
+                })
+        : []
+    };
+  });
+  return out;
+}
+
+/* Reviving is the same normalise-and-drop-the-junk pass as serialising, for
+   the same reason the bitmaps' is: a video asset is plain data with no
+   prototype to restore. */
+function reviveVideos(videos) { return serializeVideos(videos); }
+
+/**
+ * Cue points on a video asset.
+ *
+ * A list rather than one field, because a clip has several and the question
+ * is always "what is the order". Times are in seconds, which is what a video
+ * is measured in -- converting to frames here would bake the movie's frame
+ * rate into a mark in the FOOTAGE.
+ */
+function showVideoCueDialog(name){
+  var a=docVideos()[name];
+  if(!a){
+    showMessage("Cue Points","That video is not in the library.");
+    return;
+  }
+  var cues=videoCues(name);
+  var dur=a.duration||(window.Flashy&&Flashy.Videos?Flashy.Videos.duration(name):0);
+  showDialog({
+    title:"Cue Points \u2014 "+name,
+    okLabel:"Add",
+    cancelLabel:"Close",
+    footnote:(dur?("The clip runs "+(Math.round(dur*100)/100)+" seconds. "):"")+
+      "An EVENT cue fires a cuePoint event in the exported movie, which is "+
+      "what a caption or a timed animation listens for. A NAVIGATION cue is "+
+      "a seek target and fires nothing \u2014 Flash drew the same line.",
+    build:function(body){
+      if(!cues.length){
+        var none=document.createElement("div");
+        none.className="fy-dialog-hint";
+        none.textContent="No cue points yet.";
+        body.appendChild(none);
+        return;
+      }
+      cues.forEach(function(c,i){
+        var row=document.createElement("div");
+        row.className="fy-dialog-row";
+        var lab=document.createElement("span");
+        lab.className="fy-dialog-label";
+        lab.textContent=(Math.round(c.time*100)/100)+"s";
+        var txt=document.createElement("span");
+        txt.className="fy-dialog-input";
+        txt.style.cssText="display:flex;align-items:center;gap:6px";
+        txt.textContent=c.name+"  ("+c.type+")";
+        var del=document.createElement("button");
+        del.type="button";
+        del.className="fy-dialog-btn";
+        del.textContent="\u2715";
+        del.title="Remove this cue point";
+        del.addEventListener("click",function(){
+          pushUndo();
+          removeVideoCue(name,i);
+          showVideoCueDialog(name);
+        });
+        txt.appendChild(del);
+        row.appendChild(lab);
+        row.appendChild(txt);
+        body.appendChild(row);
+      });
+    },
+    fields:[
+      {name:"cue",label:"Name",value:"",placeholder:"Chapter 2"},
+      {name:"time",label:"At",type:"number",value:"0",min:0,step:"any",
+       hint:"Seconds from the start of the clip."},
+      {name:"type",label:"Kind",type:"select",value:"event",
+       options:[["event","Event"],["navigation","Navigation"]]}
+    ],
+    validate:function(v){
+      if(!String(v.cue).trim())return "Give the cue point a name.";
+      var t=parseFloat(v.time);
+      if(!isFinite(t)||t<0)return "The time must be a number of seconds.";
+      if(dur&&t>dur)return "That is past the end of the clip ("+
+        (Math.round(dur*100)/100)+"s).";
+      return null;
+    },
+    onOk:function(v){
+      pushUndo();
+      addVideoCue(name,String(v.cue).trim(),parseFloat(v.time),v.type);
+      fullRefresh();
+      // Reopened, because adding one cue point almost always means adding two.
+      showVideoCueDialog(name);
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -23585,6 +24688,9 @@ function plainObj(o){
   if(o.colorEffect)r.colorEffect=JSON.parse(JSON.stringify(o.colorEffect));
   // Same nesting as the filters: an array inside an object.
   if(o.warp)r.warp={kind:o.warp.kind,points:(o.warp.points||[]).slice()};
+  if(o.armature&&Array.isArray(o.armature.bones)){
+    r.armature={bones:o.armature.bones.map(function(b){return Object.assign({},b);})};
+  }
   return r;
 }
 function serializeLayers(layers){
@@ -23736,10 +24842,20 @@ function serializeDoc(){
     sounds:serializeSounds(doc.sounds),
     // …and so do images, for the same reason.
     bitmaps:serializeBitmaps(doc.bitmaps),
+    /* …and video, which is the same trade again: an embedded clip makes a
+       larger file and a document that is still one file. Flash embedded it
+       into the SWF for exactly this reason. */
+    videos:serializeVideos(doc.videos),
     /* "as2" marks a document that came from a .swf or .fla: its scripts are
        ActionScript and the exported player compiles them against the AS2
        scope rather than running them as plain JavaScript. */
     scriptDialect:doc.scriptDialect||"js",
+    /* The AS3 document class and its source. One class file, which is what a
+       Flash project with a document class actually was -- the rest of the
+       project's classes are imported into it, and a multi-file class path is
+       a build system rather than a document. */
+    documentClass:doc.documentClass||"",
+    documentScript:doc.documentScript||"",
     // Character rigs: the templates and pose libraries. The hierarchy and
     // current pose ride along on the keyframe objects themselves.
     characters:serializeCharacters(doc.characters),
@@ -23945,6 +25061,33 @@ function reviveObject(od){
   if(od.warp&&od.warp.kind&&Array.isArray(od.warp.points)){
     o.warp={kind:od.warp.kind,points:od.warp.points.map(Number)};
   }else o.warp=null;
+  /* Bones, normalised field by field: a hand-edited file cannot make the
+     skinning multiply by a string, and a bone with no length would divide by
+     zero in the weighting. */
+  o.armature=null;
+  if(od.armature&&Array.isArray(od.armature.bones)&&od.armature.bones.length){
+    var bl=[];
+    od.armature.bones.forEach(function(b,bi){
+      if(!b||typeof b!=="object")return;
+      var len=Number(b.len);
+      if(!isFinite(len)||len<=0)return;
+      var num=function(v,d){var n=Number(v);return isFinite(n)?n:d;};
+      var lim=function(v){var n=Number(v);return (v==null||!isFinite(n))?null:n;};
+      bl.push({
+        x:num(b.x,0),y:num(b.y,0),len:len,
+        // A parent must be an EARLIER bone, or the matrix walk can cycle.
+        parent:(Number(b.parent)>=0&&Number(b.parent)<bi)?Number(b.parent):-1,
+        rest:num(b.rest,0),angle:num(b.angle,num(b.rest,0)),
+        rotMin:lim(b.rotMin),rotMax:lim(b.rotMax),
+        slideX:num(b.slideX,0),slideY:num(b.slideY,0),
+        slideXMin:lim(b.slideXMin),slideXMax:lim(b.slideXMax),
+        slideYMin:lim(b.slideYMin),slideYMax:lim(b.slideYMax),
+        speed:Math.max(0.05,Math.min(1,num(b.speed,1))),
+        pinned:!!b.pinned
+      });
+    });
+    if(bl.length)o.armature={bones:bl};
+  }
   normalizeObjPoints(o);
   return o;
 }
@@ -24077,7 +25220,17 @@ function deserializeDoc(d){
   doc.library=reviveLibrary(d.library);
   doc.sounds=reviveSounds(d.sounds);
   doc.bitmaps=reviveBitmaps(d.bitmaps);
-  doc.scriptDialect=d.scriptDialect==="as2"?"as2":"js";
+  doc.videos=reviveVideos(d.videos);
+  /* Three dialects now. "as2" is what an imported .swf or .fla carries;
+     "as3" is ActionScript 3 source, compiled to JavaScript by
+     flashy-as3.js; "js" is the editor's own, and is what every document
+     written before any of this means. */
+  doc.scriptDialect=(d.scriptDialect==="as2"||d.scriptDialect==="as3")
+    ? d.scriptDialect : "js";
+  /* The document class: an AS3 class the player instantiates with the root,
+     which is how a Flash project with a document class started up. */
+  doc.documentClass=(typeof d.documentClass==="string")?d.documentClass:"";
+  doc.documentScript=(typeof d.documentScript==="string")?d.documentScript:"";
   doc.characters=reviveCharacters(d.characters);
   doc.guides={
     v:(d.guides&&Array.isArray(d.guides.v)?d.guides.v:[]).map(Number).filter(isFinite),
@@ -24131,6 +25284,8 @@ function loadDocFromObject(d){
   // The old document's cached surfaces are keyed by ids that are about to
   // mean something else.
   clearCacheSurfaces();
+  // ...and so are the decoded video elements, which also hold real memory.
+  if(window.Flashy&&Flashy.Videos)Flashy.Videos.clear();
   deserializeDoc(d);
   curFrame=1;curLayer=0;selection=[];
   undoStack=[];redoStack=[];editStack=[];
@@ -24212,6 +25367,38 @@ function getAS2Source(need,callback){
   }).catch(function(){
     callback("/* flashy-as2.js could not be loaded — object handlers will not run */");
   });
+}
+
+var _cachedAS3Source=null;
+/**
+ * The AS3 compiler's own source, for the export to carry.
+ *
+ * Shipped the same way the AS2 runtime is, and for the same reason: an
+ * exported movie has to be one file that works when opened from a desktop,
+ * and a compiler it fetches at run time is not that.
+ */
+function getAS3Source(need,callback){
+  if(!need){callback("");return;}
+  if(_cachedAS3Source){callback(_cachedAS3Source);return;}
+  fetch("flashy-as3.js").then(function(r){return r.text();}).then(function(src){
+    _cachedAS3Source=src;callback(src);
+  }).catch(function(){
+    callback("/* flashy-as3.js could not be loaded \u2014 ActionScript 3 will not run */");
+  });
+}
+
+/** True when this document's scripts need the AS3 compiler shipped. */
+function docNeedsAS3(d){
+  if(!d)return false;
+  if(d.scriptDialect!=="as3")return false;
+  if(String(d.documentScript||"").trim())return true;
+  var any=false;
+  (d.layers||[]).forEach(function(l){
+    (l.keyframes||[]).forEach(function(kf){
+      if(String(kf.script||"").trim())any=true;
+    });
+  });
+  return any;
 }
 /* ------------------------------------------------------------------ *
  * exportRuntime — the player that every code export ships
@@ -24828,6 +26015,22 @@ function exportRuntime(data, canvas, options) {
       var bwrap = new Flashy.MovieClip();
       bwrap.addChild(node);
       node = bwrap;
+    } else if (o.type === "video" && Flashy.Videos) {
+      /* A Shape whose render() blits the <video> element. The element's time
+         is driven by stepVideos each frame, so the shape just draws whatever
+         frame has arrived -- which is all a video object ever does. */
+      node = new Flashy.Shape();
+      var vname = o.videoAsset;
+      var vw = Math.abs(o.width || 0), vh = Math.abs(o.height || 0);
+      var vsmooth = o.smoothing !== false;
+      node.render = function (ctx2) {
+        var el = Flashy.Videos.get(vname);
+        if (!el) return;
+        var prev = ctx2.imageSmoothingEnabled;
+        ctx2.imageSmoothingEnabled = vsmooth;
+        Flashy.Video.draw(ctx2, el, -vw / 2, -vh / 2, vw, vh);
+        ctx2.imageSmoothingEnabled = prev;
+      };
     } else {
       node = new Flashy.Shape();
       var g = node.graphics;
@@ -25141,6 +26344,73 @@ function exportRuntime(data, canvas, options) {
     });
   }
 
+  /* ---- video --------------------------------------------------------- *
+   * Same arrangement as the bitmaps, and for the same reason: decoding is
+   * asynchronous and nothing waits for it. An EMBEDDED video is driven from
+   * the playhead each frame; a STREAM one is told to play once and then left
+   * to its own clock.
+   * -------------------------------------------------------------------- */
+  var videoAssets = data.videos || {};
+  var cueFired = {};
+  var cueTime = {};
+  if (Flashy.Videos) {
+    Object.keys(videoAssets).forEach(function (vn) {
+      var va = videoAssets[vn];
+      if (!va || !va.data) return;
+      Flashy.Videos.loadBase64(vn, va.data, va.mediaType || "video/mp4")
+        ["catch"](function () { /* one bad asset must not stop the movie */ });
+    });
+  }
+
+  /**
+   * Drive every placed video for this frame, and fire any cue point passed.
+   *
+   * Cue points are dispatched as `cuePoint` events on the stage, carrying the
+   * cue's name and type -- which is what Flash's FLVPlayback did, and is the
+   * difference between footage and footage you can hang a caption on.
+   */
+  function stepVideos(objs, fr) {
+    if (!Flashy.Videos || !Flashy.Video) return;
+    for (var i = 0; i < objs.length; i++) {
+      var o = objs[i];
+      if (!o || o.type !== "video" || !o.videoAsset) continue;
+      var el = Flashy.Videos.get(o.videoAsset);
+      if (!el) continue;
+      var asset = videoAssets[o.videoAsset] || {};
+      var dur = asset.duration || Flashy.Videos.duration(o.videoAsset) || 0;
+      var mode = o.videoMode || "embedded";
+      el.muted = o.videoMuted !== false;
+      el.loop = !!o.videoLoop;
+      var now;
+      if (mode === "stream") {
+        // Its own clock: started once, and whatever has arrived is drawn.
+        if (el.paused) { try { el.play(); } catch (e) { /* needs a gesture */ } }
+        now = el.currentTime || 0;
+      } else {
+        now = Flashy.Video.timeFor(fr, o.videoStart || 1, data.fps || 24,
+                                   dur, !!o.videoLoop);
+        if (!el.paused) { try { el.pause(); } catch (e) { /* fine */ } }
+        Flashy.Video.sync(el, now);
+      }
+      var key = o.videoAsset + "#" + i;
+      var was = cueTime[key];
+      cueTime[key] = now;
+      if (was != null && asset.cues && asset.cues.length) {
+        var hits = Flashy.Video.cuesBetween(asset.cues, was, now);
+        for (var h = 0; h < hits.length; h++) {
+          /* Navigation cues are seek targets and fire nothing; event cues
+             are the ones a script listens for. Flash drew the same line. */
+          if (hits[h].type === "navigation") continue;
+          stage.dispatchEvent("cuePoint", {
+            name: hits[h].name, time: hits[h].time,
+            type: hits[h].type, asset: o.videoAsset
+          });
+          cueFired[hits[h].name] = (cueFired[hits[h].name] || 0) + 1;
+        }
+      }
+    }
+  }
+
   /* ---- soundtrack --------------------------------------------------- *
    * Sounds are attached to keyframes, exactly as in the editor, and a
    * SoundTrack keeps them in agreement with the playhead. Decoding is async,
@@ -25224,6 +26494,67 @@ function exportRuntime(data, canvas, options) {
      compiled against the AS2 scope; anything authored here keeps the plain
      JavaScript it was written in. */
   var as2 = data.scriptDialect === "as2" && !!Flashy.AS2;
+  /* ActionScript 3. Compiled to JavaScript once, at startup, by the same
+     flashy-as3.js the authoring stage used -- so a movie that ran in Test
+     Movie runs the same way here. */
+  var as3 = data.scriptDialect === "as3" &&
+            typeof FlashyAS3 !== "undefined" && !!FlashyAS3;
+  var as3Scope = null;
+  var as3Classes = null;
+  if (as3) {
+    as3Scope = { stage: stage, root: stage, trace: function () {
+      if (Flashy.Output && Flashy.Output.write) {
+        Flashy.Output.write.apply(Flashy.Output, arguments);
+      }
+    } };
+    if (String(data.documentScript || "").trim()) {
+      var docRes = FlashyAS3.run(data.documentScript, as3Scope, stage, {});
+      if (!docRes.ok) {
+        /* Reported and survived rather than thrown. A movie whose document
+           class failed to compile should still play its animation -- the
+           alternative is a blank page, which tells the viewer nothing. */
+        if (Flashy.Output && Flashy.Output.write) {
+          Flashy.Output.write("ActionScript 3 error" +
+            (docRes.line ? (" on line " + docRes.line) : "") + ": " + docRes.error);
+        }
+      } else {
+        as3Classes = docRes.defined;
+        /* The document class, instantiated with the root and added to the
+           stage -- which is exactly how a Flash project with a document
+           class started up. */
+        var mainName = data.documentClass || docRes.mainClass;
+        var Main = mainName && as3Classes ? as3Classes[mainName] : null;
+        if (Main) {
+          try {
+            var main = new Main();
+            if (main && typeof main === "object") {
+              main.name = mainName;
+              /* On the ROOT and marked `__attached`, for the same reason an
+                 attachMovie() clip is: the root rebuilds its display list
+                 from the timeline every frame, and a child that is not in the
+                 document cannot be put back by that rebuild. Without the mark
+                 the document class would vanish on frame two. The Stage
+                 itself is not a container -- the root is. */
+              main.__attached = true;
+              root.addChild(main);
+              stage.documentClass = main;
+            }
+          } catch (e) {
+            if (Flashy.Output && Flashy.Output.write) {
+              Flashy.Output.write("ActionScript 3: " + mainName +
+                " could not be constructed: " + (e && e.message || e));
+            }
+          }
+        } else if (mainName) {
+          if (Flashy.Output && Flashy.Output.write) {
+            Flashy.Output.write("ActionScript 3: no class called " + mainName +
+              " was declared. Declared: " +
+              Object.keys(as3Classes || {}).join(", ") + ".");
+          }
+        }
+      }
+    }
+  }
 
   var compiled = {}, lastScriptFrame = 0;
   function runFrameScripts(fr) {
@@ -25236,6 +26567,20 @@ function exportRuntime(data, canvas, options) {
     for (var i = 0; i < list.length; i++) {
       var key = fr + ":" + i;
       try {
+        if (as3) {
+          /* ActionScript 3 frame scripts run through the compiler against
+             the document's own scope, so a frame script can reach the classes
+             the document class declared -- which is the whole reason anyone
+             writes a document class. Recompiled per frame ENTRY rather than
+             cached, because a frame script's statements are its body and
+             re-running the body is the point. */
+          var r3 = FlashyAS3.run(list[i], as3Scope, root, {});
+          if (!r3.ok && Flashy.Output && Flashy.Output.write) {
+            Flashy.Output.write("ActionScript 3 error on frame " + fr +
+              (r3.line ? (", line " + r3.line) : "") + ": " + r3.error);
+          }
+          continue;
+        }
         if (!compiled[key]) {
           compiled[key] = as2
             ? Flashy.AS2.frameScript(root, list[i], { stage: stage })
@@ -25564,7 +26909,12 @@ function exportRuntime(data, canvas, options) {
       /* Stable identity for stateful instances — a MovieClip keeps its own
          playhead, a Button its hover, and a scripted object whatever its
          handlers did to it — across the root's per-frame rebuild. */
-      addPlanned(host, layerObjects(la, fr), 0, fr, kf.index,
+      var frameObjs = layerObjects(la, fr);
+      // Embedded video follows the playhead, and cue points fire as it passes
+      // them. Done per layer-run, which is the one place every object that is
+      // actually ON this frame goes past.
+      stepVideos(frameObjs, fr);
+      addPlanned(host, frameObjs, 0, fr, kf.index,
         groupIndex + ":" + li + ":" + kf.index);
     }
   }
@@ -25978,6 +27328,8 @@ function genHTML(callback){
     var d=exportDocData();
     getAS2Source(docHasClipScripts(d),function(as2Src){
     if(as2Src)engineSrc=engineSrc+"\n"+as2Src;
+    getAS3Source(docNeedsAS3(d),function(as3Src){
+    if(as3Src)engineSrc=engineSrc+"\n"+as3Src;
     var sc="<"+"script>",sce="</"+"script>";
     /* The publish settings, where they land in the output: the page title, its
        background, how the canvas is scaled and whether the movie loops. Six
@@ -26079,6 +27431,7 @@ function genHTML(callback){
       s+="</body>\n</html>";
     }
     callback(s);
+    });
     });
   });
 }
@@ -26822,6 +28175,23 @@ function _objToSVGRaw(o, depth) {
       var psx = o.pathW ? (o.width/o.pathW) : 1, psy = o.pathH ? (o.height/o.pathH) : 1;
       var pd = FlashyTrace.pathToSVG(FlashyTrace.pathTransform(o.path, psx, psy, -hw, -hh));
       return gdefs+'<path'+a+' d="'+pd+'" fill="'+fl+'" fill-rule="evenodd" stroke="'+st+'" stroke-width="'+sw+'"/>\n';
+    case "video":
+      /* ONE FRAME, as a raster. SVG has no timeline here -- exportAsSVG is
+         deliberately a still of the current frame -- so a video becomes the
+         frame it is showing, which is the honest answer. A <foreignObject>
+         with a <video> in it would be a different document that happened to
+         have the same extension. */
+      var vel2=videoElement(o.videoAsset);
+      if(!vel2||(vel2.readyState||0)<2)return '';
+      var vw=Math.max(1,Math.round(Math.abs(o.width)));
+      var vh=Math.max(1,Math.round(Math.abs(o.height)));
+      var vcv=document.createElement("canvas");
+      vcv.width=vw;vcv.height=vh;
+      try{ vcv.getContext("2d").drawImage(vel2,0,0,vw,vh); }
+      catch(e){ return ''; }
+      return '<image'+a+' x="'+(-hw)+'" y="'+(-hh)+'" width="'+vw+
+             '" height="'+vh+'" href="'+vcv.toDataURL("image/png")+
+             '" xlink:href="'+vcv.toDataURL("image/png")+'"/>\n';
     case "bitmap":
       // Embedded as a data URI, so the SVG is as self-contained as the HTML
       // export — a file that needs a sidecar PNG is not an export.
@@ -27937,9 +29307,21 @@ function highlightScript(src){
  */
 function checkScript(src,dialect){
   if(!src||!src.trim())return {ok:true};
-  /* ActionScript is compiled by flashy-as2.js, not by the JavaScript parser —
-     reporting `_root` as a syntax error would be both wrong and alarming. */
+  /* ActionScript 2 is compiled by flashy-as2.js, not by the JavaScript parser
+     — reporting `_root` as a syntax error would be both wrong and alarming. */
   if(dialect==="as2")return {ok:true,skipped:true};
+  /* ActionScript 3 has its own compiler, and it reports a line number, so the
+     gutter can mark the real mistake rather than guessing from where the
+     JavaScript parser gave up. */
+  if(dialect==="as3"){
+    if(!window.FlashyAS3)return {ok:true,skipped:true};
+    try{
+      window.FlashyAS3.compile(src);
+      return {ok:true};
+    }catch(e){
+      return {ok:false,message:(e&&e.message)||String(e),line:e&&e.line||null};
+    }
+  }
   try{
     new Function("stop","play","gotoAndPlay","gotoAndStop","stage","root","Flashy","trace",src);
     return {ok:true};
@@ -27967,7 +29349,10 @@ function refreshCodeEditor(){
   if(!ta)return;
   var src=ta.value||"";
   var target=actionsTarget();
-  var dialect=(target.obj||doc.scriptDialect==="as2")?"as2":"js";
+  /* An object handler is always AS2 -- `onClipEvent` is an AS2 construct and
+     AS3 has no equivalent -- so the object case is checked before the
+     document's own dialect. */
+  var dialect=target.obj?"as2":(doc.scriptDialect||"js");
   var res=checkScript(src,dialect);
 
   if(hl){
@@ -29029,6 +30414,52 @@ function init(){
     propEaseCurve: propEaseCurve,
     motionActiveProps: motionActiveProps,
     updateMotionPanel: updateMotionPanel,
+    /* ActionScript 3: the dialect, the document class, and the compiler. */
+    scriptDialect: function(){ return doc.scriptDialect||"js"; },
+    setScriptDialect: function(v){
+      doc.scriptDialect=(v==="as2"||v==="as3")?v:"js";
+      touchDoc();fullRefresh();
+    },
+    documentClass: function(){ return doc.documentClass||""; },
+    documentScript: function(){ return doc.documentScript||""; },
+    setDocumentClass: function(name,src){
+      if(name!=null)doc.documentClass=String(name);
+      if(src!=null)doc.documentScript=String(src);
+      if(String(doc.documentScript||"").trim())doc.scriptDialect="as3";
+      touchDoc();fullRefresh();
+    },
+    DEFAULT_AS3_DOCUMENT: DEFAULT_AS3_DOCUMENT,
+    checkScript: checkScript,
+    docNeedsAS3: docNeedsAS3,
+    /* Video: the asset, the placement, the playhead sync and cue points. */
+    updateLib: updateLib,
+    docVideos: docVideos,
+    videoDataURL: videoDataURL,
+    decodeVideo: decodeVideo,
+    videoElement: videoElement,
+    importVideoFile: importVideoFile,
+    placeVideo: placeVideo,
+    videoTimeAt: videoTimeAt,
+    syncVideos: syncVideos,
+    videoCues: videoCues,
+    addVideoCue: addVideoCue,
+    removeVideoCue: removeVideoCue,
+    cueFrame: cueFrame,
+    VIDEO_MAX_BYTES: VIDEO_MAX_BYTES,
+    /* The Bone tool, on shapes: a skeleton inside the drawing. */
+    canBone: canBone,
+    armatureOf: armatureOf,
+    addBone: addBone,
+    removeBone: removeBone,
+    clearArmature: clearArmature,
+    boneSegments: boneSegments,
+    boneHit: boneHit,
+    dragBone: dragBone,
+    resetPose: resetPose,
+    bindPose: bindPose,
+    boneLocalPoint: boneLocalPoint,
+    boneMode: function(){ return boneMode; },
+    setBoneMode: function(v){ boneMode=v==="draw"?"draw":"pose"; boneDrawFrom=null; },
     /* Cache as bitmap, and the two generative tools. */
     canCache: canCache,
     cacheBoundsOf: cacheBoundsOf,

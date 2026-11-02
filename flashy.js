@@ -2618,6 +2618,430 @@
     }
   };
 
+  /* -------------------- Shape armatures (the Bone tool) ------------------
+   *
+   * Flash's Bone tool did two things, and Flashy had only the first.
+   *
+   * Applied to a set of SYMBOLS it built a skeleton of parent/child
+   * instances, each turning about its joint -- which is what Flashy's
+   * character rigs are, complete with rotation limits, planted joints and a
+   * CCD solver.
+   *
+   * Applied to a SHAPE it put bones INSIDE the artwork, and the outline
+   * deformed to follow them. That is the one that made the Bone tool famous:
+   * a drawn arm bends at the elbow as a drawing rather than as two pieces,
+   * and a tail or a tentacle curves along its whole length. Nothing in
+   * Flashy could do it.
+   *
+   * The deformation is linear blend skinning: every point of the outline is
+   * bound to the nearby bones by weight, and each bone contributes the
+   * transform it has moved through since the bind pose. That is the standard
+   * construction and it is the right one here for a specific reason -- it is
+   * a pure function of (outline, pose), so the stage, the SVG export, the
+   * exported player and the eraser can each compute it and get the same
+   * answer, which is the same arrangement Flashy.Warp already relies on.
+   *
+   * Coordinates are the object's own box, 0..width by 0..height, exactly as
+   * Warp's are. A bone is a head point, a length and an angle; its head is
+   * its parent's tip unless it has no parent.
+   * ------------------------------------------------------------------ */
+  const Armature = {
+    /** True when an object carries an armature worth applying. */
+    active(o) {
+      const a = o && o.armature;
+      return !!(a && Array.isArray(a.bones) && a.bones.length);
+    },
+
+    /**
+     * A fresh bone.
+     *
+     * `rest` is the angle the bone sits at in the BIND pose and `angle` is
+     * where it is now; they start equal, so adding a bone deforms nothing.
+     * An armature that moved the artwork the moment you drew a bone into it
+     * would be unusable -- the bind pose has to be the drawing as it stands.
+     */
+    bone(x, y, len, angle, parent) {
+      return {
+        x: x, y: y, len: len, parent: parent == null ? -1 : parent,
+        rest: angle, angle: angle,
+        /* Flash's per-joint controls. Rotation limits in DEGREES relative to
+           the parent, translation along and across the bone, a speed that
+           damps the joint, and a pin that freezes it. */
+        rotMin: null, rotMax: null,
+        slideX: 0, slideY: 0,
+        slideXMin: null, slideXMax: null,
+        slideYMin: null, slideYMax: null,
+        speed: 1, pinned: false
+      };
+    },
+
+    /**
+     * A bone's angle, clamped to its own limits.
+     *
+     * `angle` is already RELATIVE to the parent -- that is what the matrix
+     * chain composes, and it is the only way joint limits can mean anything:
+     * an elbow that may bend 0 to 140 degrees means that with respect to the
+     * upper arm, not with respect to the stage. The limits are in degrees for
+     * the same reason every angle a user types is.
+     */
+    clampAngle(bones, i, want) {
+      const b = bones[i];
+      if (b.rotMin == null && b.rotMax == null) return want;
+      let rel = want * 180 / Math.PI;
+      // Into -180..180, or a limit of "0 to 140" rejects 359 degrees, which
+      // is the same angle as -1.
+      while (rel > 180) rel -= 360;
+      while (rel < -180) rel += 360;
+      if (b.rotMin != null && rel < b.rotMin) rel = b.rotMin;
+      if (b.rotMax != null && rel > b.rotMax) rel = b.rotMax;
+      return rel * Math.PI / 180;
+    },
+
+    /** A 2x3 matrix as [a,b,c,d,tx,ty], the same layout the editor uses. */
+    _mul(m, n) {
+      return [
+        m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+        m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+        m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]
+      ];
+    },
+    _rot(a) { const c = Math.cos(a), s = Math.sin(a); return [c, s, -s, c, 0, 0]; },
+    _trans(x, y) { return [1, 0, 0, 1, x, y]; },
+    _apply(m, x, y) {
+      return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+    },
+    _invert(m) {
+      const det = m[0] * m[3] - m[1] * m[2];
+      if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+      const a = m[3] / det, b = -m[1] / det, c = -m[2] / det, d = m[0] / det;
+      return [a, b, c, d, -(a * m[4] + c * m[5]), -(b * m[4] + d * m[5])];
+    },
+
+    /**
+     * Every bone's world matrix, in the given pose.
+     *
+     * `which` picks the angle field: 'angle' for the live pose, 'rest' for
+     * the bind pose. One function for both, because the skinning needs them
+     * to be computed the same way -- two slightly different walks of the same
+     * hierarchy is how a mesh ends up subtly inside out.
+     */
+    matrices(bones, which) {
+      const key = which === 'rest' ? 'rest' : 'angle';
+      const out = new Array(bones.length);
+      const slide = key === 'rest'
+        ? () => [0, 0]
+        : (b) => [b.slideX || 0, b.slideY || 0];
+      const build = (i, guard) => {
+        if (out[i]) return out[i];
+        if (guard > bones.length) return (out[i] = [1, 0, 0, 1, 0, 0]);
+        const b = bones[i];
+        let m;
+        if (b.parent >= 0 && b.parent < bones.length && b.parent !== i) {
+          const pm = build(b.parent, guard + 1);
+          // A child's head is its parent's TIP, which is what makes a chain.
+          m = this._mul(pm, this._trans(bones[b.parent].len, 0));
+        } else {
+          m = this._trans(b.x, b.y);
+        }
+        const sl = slide(b);
+        if (sl[0] || sl[1]) m = this._mul(m, this._trans(sl[0], sl[1]));
+        m = this._mul(m, this._rot(b[key]));
+        return (out[i] = m);
+      };
+      for (let i = 0; i < bones.length; i++) build(i, 0);
+      return out;
+    },
+
+    /** A bone's head and tip in box coordinates, in the live pose. */
+    segments(bones, which) {
+      const ms = this.matrices(bones, which);
+      return bones.map((b, i) => {
+        const head = this._apply(ms[i], 0, 0);
+        const tip = this._apply(ms[i], b.len, 0);
+        return { head: head, tip: tip };
+      });
+    },
+
+    /* How sharply influence falls off with distance. Squared inverse: a point
+       twice as far from a bone gets a quarter of the pull, which is soft
+       enough to keep a joint from creasing and tight enough that a hand is
+       not dragged about by the hip. */
+    FALLOFF: 2,
+
+    /**
+     * Each bone's influence on a point, normalised to sum to 1.
+     *
+     * Distance is to the bone's rest SEGMENT rather than to its head, because
+     * a long bone must hold the whole of the limb it lies along -- weighting
+     * by the head alone makes the far end of every bone go slack.
+     */
+    weights(restSegs, x, y) {
+      const n = restSegs.length;
+      const w = new Array(n);
+      let total = 0;
+      for (let i = 0; i < n; i++) {
+        const s = restSegs[i];
+        const ax = s.head[0], ay = s.head[1];
+        const dx = s.tip[0] - ax, dy = s.tip[1] - ay;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 > 1e-12 ? ((x - ax) * dx + (y - ay) * dy) / len2 : 0;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        const qx = ax + dx * t, qy = ay + dy * t;
+        const d = Math.hypot(x - qx, y - qy);
+        /* A point ON a bone is bound to it alone. Without the floor this is a
+           division by zero at exactly the places the artist drew the bone
+           through. */
+        const v = 1 / Math.pow(Math.max(d, 0.5), this.FALLOFF);
+        w[i] = v;
+        total += v;
+      }
+      if (!(total > 0)) {
+        // No bone has any claim: fall back to the first, which leaves the
+        // point rigidly attached rather than at the origin.
+        for (let i = 0; i < n; i++) w[i] = i === 0 ? 1 : 0;
+        return w;
+      }
+      for (let i = 0; i < n; i++) w[i] /= total;
+      return w;
+    },
+
+    /** Where a point in box coordinates goes, under the live pose. */
+    skin(bones, point, cache) {
+      const c = cache || this.prepare(bones);
+      const w = this.weights(c.restSegs, point[0], point[1]);
+      let ox = 0, oy = 0;
+      for (let i = 0; i < bones.length; i++) {
+        if (w[i] < 1e-6) continue;
+        const local = this._apply(c.restInv[i], point[0], point[1]);
+        const moved = this._apply(c.live[i], local[0], local[1]);
+        ox += moved[0] * w[i];
+        oy += moved[1] * w[i];
+      }
+      return [ox, oy];
+    },
+
+    /** The matrices and inverses a skinning pass needs, computed once. */
+    prepare(bones) {
+      const rest = this.matrices(bones, 'rest');
+      const live = this.matrices(bones, 'angle');
+      const restInv = rest.map((m) => this._invert(m) || [1, 0, 0, 1, 0, 0]);
+      return { rest: rest, live: live, restInv: restInv,
+               restSegs: this.segments(bones, 'rest') };
+    },
+
+    /* How finely a curve is chopped before skinning. A skinned quadratic is
+       not a quadratic, for the same reason a warped one is not. */
+    STEPS: 8,
+
+    /**
+     * Skin a command stream given in box coordinates.
+     *
+     * Returns moves and lines only. Straight lines are subdivided as well:
+     * a bone bending through the middle of a long edge has to bend the edge,
+     * and an unsubdivided one stays obstinately straight while its ends move.
+     */
+    path(cmds, bones) {
+      if (!cmds || !cmds.length || !bones || !bones.length) return [];
+      const c = this.prepare(bones);
+      const at = (x, y) => this.skin(bones, [x, y], c);
+      const out = [];
+      let cx = 0, cy = 0;
+      for (let i = 0; i < cmds.length;) {
+        const op = cmds[i];
+        if (op === 0) {
+          const p = at(cmds[i + 1], cmds[i + 2]);
+          out.push(0, p[0], p[1]);
+          cx = cmds[i + 1]; cy = cmds[i + 2];
+          i += 3;
+        } else if (op === 1) {
+          const x1 = cmds[i + 1], y1 = cmds[i + 2];
+          for (let k = 1; k <= this.STEPS; k++) {
+            const t = k / this.STEPS;
+            const p = at(cx + (x1 - cx) * t, cy + (y1 - cy) * t);
+            out.push(1, p[0], p[1]);
+          }
+          cx = x1; cy = y1;
+          i += 3;
+        } else if (op === 2) {
+          const qx = cmds[i + 1], qy = cmds[i + 2];
+          const x1 = cmds[i + 3], y1 = cmds[i + 4];
+          for (let k = 1; k <= this.STEPS; k++) {
+            const t = k / this.STEPS, u = 1 - t;
+            const bx = u * u * cx + 2 * u * t * qx + t * t * x1;
+            const by = u * u * cy + 2 * u * t * qy + t * t * y1;
+            const p = at(bx, by);
+            out.push(1, p[0], p[1]);
+          }
+          cx = x1; cy = y1;
+          i += 5;
+        } else {
+          out.push(3);
+          i += 1;
+        }
+      }
+      return out;
+    },
+
+    /* How many passes of the solver, and how close counts as arrived.
+       Generous, because each pass is damped: an undamped CCD converges in a
+       handful of iterations and throws the root around on the first one,
+       which looks like the whole figure lurching. */
+    ITERATIONS: 40,
+    TOLERANCE: 0.3,
+
+    /**
+     * Bend the chain ending at bone `index` so its tip reaches (tx,ty).
+     *
+     * Cyclic coordinate descent, walking from the dragged bone up through its
+     * parents -- the same solver the symbol rigs use, and for the same
+     * reasons: it respects per-joint limits naturally (clamp after each turn)
+     * and it degrades into "straighten towards the target and stop" when the
+     * point is out of reach, which is what a limb should do.
+     *
+     * Returns {error, iterations}. A non-zero error is not a failure.
+     */
+    solve(bones, index, tx, ty, opts) {
+      opts = opts || {};
+      if (!bones[index]) return null;
+      const chain = this.chainFor(bones, index, opts.bones);
+      if (!chain.length) return { error: Infinity, iterations: 0 };
+
+      const snapshot = () => chain.map((i) => bones[i].angle);
+      const restore = (a) => chain.forEach((i, k) => { bones[i].angle = a[k]; });
+
+      const first = this._descend(bones, index, chain, tx, ty, opts);
+      if (first.error <= this.TOLERANCE) return first;
+
+      /* A one-sided joint -- an elbow that may only bend 0 to 140 degrees --
+       * has TWO poses that reach a given point, and plain CCD only ever walks
+       * towards the nearer one. When that is the forbidden one it gets stuck
+       * perfectly straight, which is the single most visible failure a
+       * constrained solver has: the limb refuses to bend at all.
+       *
+       * So if the first descent did not arrive and anything in the chain IS
+       * limited, start again from the middle of every limited joint's range
+       * and keep whichever answer came out better. Seeding breaks the
+       * degeneracy; comparing the two keeps the honest case honest.
+       */
+      const limited = chain.some((i) =>
+        bones[i].rotMin != null || bones[i].rotMax != null);
+      if (!limited) return first;
+
+      const firstPose = snapshot();
+      const firstError = first.error;
+      chain.forEach((i) => {
+        const b = bones[i];
+        if (b.rotMin == null && b.rotMax == null) return;
+        const lo = b.rotMin == null ? -180 : b.rotMin;
+        const hi = b.rotMax == null ? 180 : b.rotMax;
+        b.angle = ((lo + hi) / 2) * Math.PI / 180;
+      });
+      const second = this._descend(bones, index, chain, tx, ty,
+        Object.assign({}, opts, { rootFirst: true }));
+      if (second.error < firstError) {
+        return { error: second.error,
+                 iterations: first.iterations + second.iterations, seeded: true };
+      }
+      restore(firstPose);
+      return { error: firstError,
+               iterations: first.iterations + second.iterations };
+    },
+
+    /** The bones a drag on `index` may turn: it and its unpinned ancestors. */
+    chainFor(bones, index, maxBones) {
+      const limit = Math.max(1, maxBones || bones.length);
+      const chain = [];
+      let cur = index, guard = 0;
+      while (cur >= 0 && chain.length < limit && guard++ < bones.length + 1) {
+        if (!bones[cur] || bones[cur].pinned) break;
+        chain.push(cur);
+        cur = bones[cur].parent;
+      }
+      return chain;
+    },
+
+    /**
+     * One run of cyclic coordinate descent over `chain` (leaf first).
+     *
+     * `opts.rootFirst` walks the chain from the far end instead. It matters:
+     * leaf-first descent snaps the dragged bone straight at the target on its
+     * very first move, which destroys a seeded bend before the joints above
+     * have aimed at all. Root-first lets the whole limb swing towards the
+     * target and leaves the seeded elbow to be refined rather than erased.
+     *
+     * Damping always follows distance from the EFFECTOR, whichever order the
+     * joints are visited in -- it is there to stop the root lurching, and
+     * that is a property of the joint, not of the loop.
+     */
+    _descend(bones, index, chain, tx, ty, opts) {
+      const tipOf = () => {
+        const ms = this.matrices(bones, 'angle');
+        return this._apply(ms[index], bones[index].len, 0);
+      };
+      const distance = () => {
+        const t = tipOf();
+        return Math.hypot(tx - t[0], ty - t[1]);
+      };
+
+      const order = opts.rootFirst ? chain.slice().reverse() : chain;
+      const damp = Object.create(null);
+      chain.forEach(function (bi, k) { damp[bi] = k; });
+
+      let best = distance(), iterations = 0, stalled = 0;
+      for (let it = 0; it < (opts.iterations || this.ITERATIONS); it++) {
+        iterations++;
+        for (let k2 = 0; k2 < order.length; k2++) {
+          const bi = order[k2];
+          const k = damp[bi];
+          const ms = this.matrices(bones, 'angle');
+          const joint = this._apply(ms[bi], 0, 0);
+          const tip = tipOf();
+          const a = Math.atan2(tip[1] - joint[1], tip[0] - joint[0]);
+          const b = Math.atan2(ty - joint[1], tx - joint[0]);
+          let delta = b - a;
+          if (!isFinite(delta)) continue;
+          /* Damped further up the chain, and by the joint's own speed.
+             Undamped CCD throws the root around on the first pass, which looks
+             like the whole figure lurching; Flash's "Joint Speed" is the same
+             idea exposed as a control. */
+          const speed = bones[bi].speed == null
+            ? 1 : Math.max(0.05, Math.min(1, bones[bi].speed));
+          delta *= speed / (1 + k);
+          bones[bi].angle = this.clampAngle(bones, bi, bones[bi].angle + delta);
+        }
+        const now = distance();
+        if (now <= this.TOLERANCE) break;
+        /* Stalled for two passes running: out of reach, or the limits are
+           binding. Breaking on ONE non-improving pass stops far too early --
+           a damped joint can make no progress on one pass and plenty on the
+           next, once the joint above it has moved. */
+        if (now > best - 1e-4) {
+          if (++stalled >= 2) break;
+        } else {
+          stalled = 0;
+        }
+        if (now < best) best = now;
+      }
+      return { error: distance(), iterations: iterations };
+    },
+
+    /** Put every bone back where it was bound, undoing the whole pose. */
+    reset(bones) {
+      bones.forEach(function (b) {
+        b.angle = b.rest;
+        b.slideX = 0;
+        b.slideY = 0;
+      });
+      return bones;
+    },
+
+    /** A deep copy, so two keyframes never share one pose. */
+    clone(a) {
+      if (!a || !Array.isArray(a.bones)) return null;
+      return { bones: a.bones.map(function (b) { return Object.assign({}, b); }) };
+    }
+  };
+
   /* -------------------- Free Transform: Distort and Envelope --------------
    *
    * Flash's Free Transform had four modifiers. Scale, rotate and skew are
@@ -2642,8 +3066,16 @@
    * and for the same reason: there is no outline to warp, only contents.
    * ------------------------------------------------------------------ */
   const Warp = {
-    /** True when an object carries a warp worth applying. */
+    /**
+     * True when an object's outline needs replacing before it is drawn.
+     *
+     * A shape armature counts: the Bone tool's deformation goes through the
+     * same seam as Distort and Envelope, because the seam is already wired
+     * into all four render paths and a second one would be a second chance
+     * for them to disagree.
+     */
     active(o) {
+      if (Armature.active(o)) return true;
       if (!o || !o.warp || !o.warp.kind) return false;
       if (o.warp.kind !== 'distort' && o.warp.kind !== 'envelope') return false;
       const need = o.warp.kind === 'distort' ? 8 : 24;
@@ -2842,8 +3274,16 @@
     /** An object's warped outline, ready to stroke or fill in box space. */
     outlineOf(o, primitives) {
       if (!this.active(o)) return null;
-      const base = this.outline(o, primitives);
+      let base = this.outline(o, primitives);
       if (!base) return null;
+      /* The armature first, then the warp. That order is the one that reads
+         right: bones pose the drawing, and a Free Transform then distorts the
+         posed drawing -- which is what you get if you bend an arm and then
+         squash the whole limb. */
+      if (Armature.active(o)) base = Armature.path(base, o.armature.bones);
+      if (!o.warp || !o.warp.kind) return base;
+      const need = o.warp.kind === 'distort' ? 8 : 24;
+      if (!Array.isArray(o.warp.points) || o.warp.points.length < need) return base;
       return this.path(base, o.warp, Math.abs(o.width || 1), Math.abs(o.height || 1));
     }
   };
@@ -3371,6 +3811,213 @@
   // A Bitmap whose image has not arrived yet draws nothing rather than
   // throwing, which is what lets an export start on frame one instead of
   // holding the whole movie hostage to a 3MB photo.
+  /* -------------------- Video --------------------
+   *
+   * Flash's File > Import > Video, and the Video object it produced. It is
+   * how every tutorial, every banner with a product shot and every Flash
+   * video player on the web was built, and Flashy had nothing: the audit
+   * dismissed it as "needs a demuxer", which was simply wrong. A browser
+   * demuxes and decodes MP4 and WebM already -- a <video> element IS the
+   * decoder, and `drawImage(videoElement)` is the frame.
+   *
+   * Two modes, which are Flash's own two and behave quite differently:
+   *
+   *   EMBEDDED  the video is part of the timeline. Its time is driven by the
+   *             playhead, so scrubbing scrubs the video and the movie's frame
+   *             rate is the video's frame rate. This is what "embed in
+   *             timeline" did, and it is the one that lets you animate over a
+   *             video frame by frame.
+   *   STREAM    the video plays on its own clock, as a NetStream did. The
+   *             movie draws whatever frame has arrived.
+   *
+   * CUE POINTS are the third piece and the reason the Flash video player was
+   * worth using: a named time that fires as the video passes it, so captions,
+   * chapter marks and animation can be hung off the footage.
+   *
+   * Decoding is asynchronous and nothing waits for it, exactly as the bitmap
+   * and sound caches do: the movie starts and the picture appears on the next
+   * repaint after the first frame lands. Holding frame one until a video is
+   * ready would be the wrong trade for a cartoon that mostly is not video.
+   * ------------------------------------------------------------------ */
+  const Videos = {
+    _els: Object.create(null),
+    _ready: Object.create(null),
+    /* The blob urls handed out, so clear() can revoke them. A leaked blob url
+       holds the whole clip in memory for the life of the page. */
+    _urls: Object.create(null),
+
+    /** The formats a browser will actually decode, in the order to try. */
+    TYPES: ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'],
+
+    /**
+     * Start decoding `url` under `name`, returning a promise of the element.
+     *
+     * Cached by name, like Flashy.Bitmaps: a video placed on fifty frames is
+     * decoded once. `muted` and `playsInline` are not preferences -- without
+     * them a browser refuses to start the element at all without a gesture,
+     * and the whole point here is a picture that appears without one.
+     */
+    load(name, url) {
+      if (this._els[name]) return Promise.resolve(this._els[name]);
+      if (this._ready[name]) return this._ready[name];
+      if (typeof document === 'undefined') return Promise.reject(new Error('no DOM'));
+      const el = document.createElement('video');
+      el.muted = true;
+      el.playsInline = true;
+      el.preload = 'auto';
+      el.crossOrigin = 'anonymous';
+      el.src = url;
+      const p = new Promise((resolve, reject) => {
+        let done = false;
+        const ok = () => {
+          if (done) return;
+          done = true;
+          this._els[name] = el;
+          resolve(el);
+        };
+        /* `loadeddata` rather than `canplay`: it is the first event after a
+           frame actually exists, which is the moment drawImage stops drawing
+           nothing. */
+        el.addEventListener('loadeddata', ok);
+        el.addEventListener('canplay', ok);
+        el.addEventListener('error', () => {
+          if (done) return;
+          done = true;
+          reject(new Error('could not decode video ' + name));
+        });
+        el.load();
+      });
+      this._ready[name] = p;
+      return p;
+    },
+
+    /**
+     * Decode base64 bytes under `name`.
+     *
+     * A BLOB url, not a data: url, and that is not a detail: a <video> on a
+     * data: url cannot serve byte ranges, so seeking it either takes seconds
+     * or never completes -- the element sits at readyState 1 for ever and
+     * draws nothing. A blob url seeks instantly, which is what embedded
+     * video needs on every frame of a scrub.
+     */
+    loadBase64(name, base64, mediaType) {
+      if (this._els[name]) return Promise.resolve(this._els[name]);
+      if (this._ready[name]) return this._ready[name];
+      if (typeof document === 'undefined' || typeof Blob === 'undefined') {
+        return Promise.reject(new Error('no DOM'));
+      }
+      let url;
+      try {
+        const bin = atob(String(base64 || ''));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        url = URL.createObjectURL(new Blob([bytes], { type: mediaType || 'video/mp4' }));
+      } catch (e) {
+        return Promise.reject(new Error('could not read video ' + name));
+      }
+      this._urls[name] = url;
+      return this.load(name, url);
+    },
+
+    /** The element for `name`, if it has finished decoding. */
+    get(name) { return this._els[name] || null; },
+
+    /** How long `name` runs, in seconds, or 0 if it is not decoded yet. */
+    duration(name) {
+      const el = this._els[name];
+      return (el && isFinite(el.duration)) ? el.duration : 0;
+    },
+
+    /** Forget everything, which the editor does when a document is replaced. */
+    clear() {
+      Object.keys(this._els).forEach((k) => {
+        const el = this._els[k];
+        try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) { /* gone */ }
+      });
+      Object.keys(this._urls).forEach((k) => {
+        try { URL.revokeObjectURL(this._urls[k]); } catch (e) { /* gone */ }
+      });
+      this._els = Object.create(null);
+      this._ready = Object.create(null);
+      this._urls = Object.create(null);
+    }
+  };
+
+  const Video = {
+    MODES: ['embedded', 'stream'],
+
+    /**
+     * Where in the video a movie frame lands, in seconds.
+     *
+     * `frame` is 1-based and `start` is the frame the video was placed on, so
+     * the first frame of the placement is time zero. Flash's embedded video
+     * ran one video frame per TIMELINE frame, which is why this divides by
+     * the movie's rate rather than the video's: a 30fps video on a 12fps
+     * timeline plays slowly and deliberately, and that is what made frame-by
+     * -frame animation over footage possible.
+     */
+    timeFor(frame, start, fps, duration, loop) {
+      const f = Math.max(0, (frame || 1) - (start || 1));
+      let t = f / Math.max(1, fps || 24);
+      if (!(duration > 0)) return 0;
+      if (t > duration) t = loop ? (t % duration) : duration;
+      return t;
+    },
+
+    /**
+     * Drive an element to the time a movie frame wants.
+     *
+     * Seeking is skipped when the element is already close enough, because a
+     * seek per repaint makes a browser drop every frame it was about to show
+     * -- which looks exactly like a video that will not play.
+     */
+    SEEK_TOLERANCE: 0.04,
+
+    sync(el, time) {
+      if (!el || !isFinite(time)) return false;
+      if (Math.abs((el.currentTime || 0) - time) <= this.SEEK_TOLERANCE) return false;
+      try { el.currentTime = time; } catch (e) { return false; }
+      return true;
+    },
+
+    /**
+     * Draw a video into `ctx` at (x,y,w,h).
+     *
+     * Returns false when there is nothing to draw yet, so a caller can show a
+     * placeholder rather than a hole -- an empty rectangle with no
+     * explanation is the worst of the three possible outcomes.
+     */
+    draw(ctx, el, x, y, w, h) {
+      if (!el || !w || !h) return false;
+      // readyState < 2 means no frame has been decoded, and drawImage on that
+      // throws in some browsers and silently draws nothing in others.
+      if ((el.readyState || 0) < 2) return false;
+      try { ctx.drawImage(el, x, y, w, h); } catch (e) { return false; }
+      return true;
+    },
+
+    /**
+     * Which cue points a step from `was` to `now` has just passed.
+     *
+     * Comparing against the PREVIOUS time rather than testing proximity is
+     * the whole trick: a cue point tested by "is the playhead near it" fires
+     * several times on a slow frame and not at all on a fast one. Looping
+     * wraps, so a cue point near the end still fires on every pass.
+     */
+    cuesBetween(cues, was, now) {
+      if (!cues || !cues.length) return [];
+      const out = [];
+      const wrapped = now < was;
+      cues.forEach((c) => {
+        const t = Number(c.time);
+        if (!isFinite(t)) return;
+        const hit = wrapped ? (t > was || t <= now) : (t > was && t <= now);
+        if (hit) out.push(c);
+      });
+      return out.sort((a, b) => a.time - b.time);
+    }
+  };
+
   const Bitmaps = {
     _images: Object.create(null),
     _loading: Object.create(null),
@@ -4462,7 +5109,7 @@
     version: '0.7.6',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
-    Shape, TextField, RichText, Fonts, Gradient, Warp, Stroke, Bitmap, MovieClip, Timeline, Tween, Stage,
+    Shape, TextField, RichText, Fonts, Gradient, Warp, Armature, Stroke, Video, Videos, Bitmap, MovieClip, Timeline, Tween, Stage,
     /* 9-slice: the cell maths plus the container that uses it, shared with the
        authoring stage and the SVG export so all three agree to the pixel. */
     Slice9, NineSlice,

@@ -1051,12 +1051,12 @@ the first pass never had a row for.
 | **Per-bitmap export settings** | Sounds got per-asset settings in Wave 11; bitmaps did not. | ✅ Wave 19 |
 | **Document units** | Everything is pixels. No inches, centimetres, millimetres or points for the rulers, the grid or the Info panel. | ✅ Wave 19 |
 | **Grid settings** | Show/hide and snap only — no spacing, colour or snap accuracy. | ✅ Wave 19 |
-| **Motion Editor** | A custom easing curve per TWEEN exists; a curve per PROPERTY (CS4's Motion Editor) does not. | ⬜ |
-| **Deco / Spray brush** | Absent. | ⬜ |
-| **Bone tool / IK** | Character rigs with poses exist; an IK chain with constrained joints does not. | ⬜ |
-| **Cache as bitmap** | Absent. | ⬜ |
-| **Video** | Import, a video object, cue points. Absent — needs a demuxer. | ⬜ |
-| **ActionScript 3** | Absent — needs a compiler and an AVM2. | ⬜ |
+| **Motion Editor** | A custom easing curve per TWEEN exists; a curve per PROPERTY (CS4's Motion Editor) does not. | ✅ Wave 20 |
+| **Deco / Spray brush** | Absent. | ✅ Wave 21 |
+| **Bone tool / IK** | Character rigs with poses exist; an IK chain with constrained joints does not. **Half wrong — the rigs already had limits and a solver. What was missing is bones INSIDE a shape.** | ✅ Wave 22 |
+| **Cache as bitmap** | Absent. | ✅ Wave 21 |
+| **Video** | Import, a video object, cue points. Absent — ~~needs a demuxer~~ **the browser IS the demuxer.** | ✅ Wave 23 |
+| **ActionScript 3** | Absent — needs a compiler and an AVM2. **Half right: the AVM2 is out of scope, the compiler was not.** | ✅ Wave 24 |
 
 ### Wave 14 — the gradient editor
 
@@ -1329,3 +1329,210 @@ Flash animation actually left Flash.
     settings on each save — a setting that does not survive the file is not a
     setting.
 *   `tests/units-grid-bitmaps.spec.js` (18 specs).
+
+### Wave 22 — the Bone tool, on shapes
+
+The second-pass row said "character rigs with poses exist; an IK chain with
+constrained joints does not", and that was half wrong: the rigs already had
+rotation limits, planted joints and a CCD solver. What was genuinely absent is
+the OTHER half of Flash's Bone tool. Applied to symbols it built a skeleton of
+parent/child instances — which is Flashy's rigs. Applied to a **shape** it put
+bones INSIDE the artwork and the outline deformed to follow them, and that is
+the famous one: a drawn arm bends at the elbow as a *drawing* rather than as
+two pieces, and a tail curves along its whole length.
+
+*   **`Flashy.Armature`** — linear blend skinning. Every outline point is bound
+    to the nearby bones by weight and each bone contributes the transform it
+    has moved through since the bind pose. It is a pure function of (outline,
+    pose), which is exactly why it can live in the engine and be computed
+    identically by the stage, the SVG export, the player and the eraser.
+*   Routed through **the seam `Flashy.Warp` already owns**. `Warp.active` is
+    now "this object's outline needs replacing", and `outlineOf` applies the
+    armature and then the warp — bones pose the drawing, a Free Transform
+    distorts the posed drawing. That seam being wired into four render paths
+    already is the whole reason to put it there.
+*   **Angles are relative to the parent.** That is what the matrix chain
+    composes, and it is the only way a joint limit can mean anything: an elbow
+    that may bend 0 to 140 degrees means that with respect to the upper arm.
+    Getting this wrong first time produced a chain whose tip was 69 units from
+    its root when it should have been 80, which is how it was caught.
+*   **Weights are distance to the bone's rest SEGMENT**, not to its head.
+    Weighting by the head makes the far end of every bone go slack, which is a
+    limb that detaches at the elbow. A point lying ON a bone is bound to it
+    alone, with a floor on the distance so it is not a division by zero at
+    exactly the places the artist drew the bone through.
+*   The bind pose is the drawing as it stands — `rest` and `angle` start equal
+    — so adding a bone deforms nothing. **Bind here** makes the current pose
+    the new rest, because a bind pose set slightly wrong is otherwise
+    something to fight for ever.
+*   The solver is CCD, damped per joint by Flash's **Joint Speed**, with a
+    **pin** that freezes a bone and shortens the chain above it. The hard part
+    was one-sided limits: a two-link reach has TWO poses, and plain CCD only
+    ever walks towards the nearer one — so with limits of 0..140 and the
+    nearer pose at −83 degrees it gets stuck perfectly straight, which is the
+    single most visible failure a constrained solver has. Fixed by seeding
+    from the middle of every limited joint's range and descending **root-first**
+    on the retry, then keeping whichever answer came out better. Leaf-first
+    descent snaps the dragged bone straight at the target on its first move
+    and erases the seed before the joints above have aimed at all.
+*   `tests/bone-tool.spec.js` (21 specs), including the eraser, the SVG and a
+    pixel probe 50px below a bar 20px tall in the exported player.
+
+### Wave 23 — video
+
+The second-pass row said "needs a demuxer". That was simply wrong: a browser
+demuxes and decodes MP4 and WebM already. A `<video>` element IS the decoder
+and `drawImage` of it is the frame. Flash's File ▸ Import ▸ Video is how every
+tutorial, every banner with a product shot and every Flash video player on the
+web was built.
+
+*   **`Flashy.Videos`** caches decoded elements by name, like `Flashy.Bitmaps`.
+    `loadBase64` makes a **blob URL, not a data: URL**, and that is not a
+    detail: a `<video>` on a data: URL cannot serve byte ranges, so seeking it
+    either takes seconds or never completes — the element sits at readyState 1
+    for ever and draws nothing. An embedded clip is seeked on every frame of a
+    scrub. `muted` and `playsInline` are likewise not preferences; without
+    them a browser refuses to start the element without a gesture at all.
+*   **`Flashy.Video`** holds the timing. `timeFor` divides by the MOVIE's rate
+    rather than the video's, because Flash's embedded video ran one video
+    frame per timeline frame — a 30fps clip on a 12fps timeline plays at
+    two-fifths speed, and that is what made animating over footage possible.
+    `sync` skips a seek inside a 40ms tolerance, because a seek per repaint
+    makes a browser drop every frame it was about to show, which looks exactly
+    like a video that will not play.
+*   **Two modes, Flash's own.** Embedded: the playhead drives the clip, so
+    scrubbing the timeline scrubs the footage. Stream: it runs on its own
+    clock, as a NetStream did, and the playhead must not touch it.
+*   **Cue points** are named times on the ASSET — marks in the footage, not in
+    one placement of it, which is where Flash put them. `cuesBetween` compares
+    against the PREVIOUS time rather than testing proximity: a cue tested by
+    "is the playhead near it" fires several times on a slow frame and not at
+    all on a fast one. Looping wraps, so a cue near the end fires on every
+    pass. An EVENT cue dispatches `cuePoint` on the stage in the exported
+    player; a NAVIGATION cue is a seek target and fires nothing, which is the
+    line Flash drew too.
+*   A clip that has not decoded draws a dark panel with a play triangle rather
+    than a hole: an empty rectangle with no explanation is the worst of the
+    three possible outcomes.
+*   The SVG export emits the frame the video is SHOWING, as a raster. The SVG
+    export is deliberately a still of the current frame, so that is the honest
+    answer — a `foreignObject` with a `<video>` in it would be a different
+    document that happened to have the same extension.
+*   Video travels inside the document, as the sounds and bitmaps do, capped at
+    24MB of source bytes. Flash capped embedded video for the same reason: a
+    50MB file base64'd into a document is a document nobody can open.
+*   `tests/video.spec.js` (14 specs). The fixture is a clip **recorded in the
+    browser with MediaRecorder**, so the decoder under test is the one that
+    will actually play it. One limitation is documented in the spec rather
+    than worked around: MediaRecorder's WebM carries no Cues index and so is
+    not reliably seekable, which is the fixture's problem and not the
+    editor's — so the scrub is tested at the level of what the editor controls
+    (the element is asked for the right time) and the pixels are tested at
+    frame 1, where no seek is involved.
+
+### Wave 24 — ActionScript 3
+
+The last row in the table, and the one the audit had written off as "needs a
+compiler and an AVM2". Half of that was true and half was not, and the
+distinction is the whole feature.
+
+An **AVM2** — a bytecode interpreter for compiled ABC — genuinely is out of
+scope, and nothing here pretends otherwise: this does not run a `.swf`'s
+compiled ActionScript. What it does is the other, and far more useful, half.
+**AS3 source** is a class-based language that is very nearly a subset of modern
+JavaScript once the type annotations come off, and the standard library it
+reaches for — Sprite, MovieClip, TextField, Event, Point, Rectangle, Timer —
+maps onto what Flashy's engine already *is*. So AS3 source compiles to
+JavaScript and runs on the real engine. That is also what Flash itself did at
+the level that mattered to an author: you wrote a document class, it was
+instantiated with the stage, and `addChild` put things on screen.
+
+*   **`flashy-as3.js`** — a tokenizer and a translator. Deliberately NOT an AST
+    round trip: AS3's statements and expressions already *are* JavaScript's, so
+    what is needed is a token rewriter that understands the places they differ.
+    The output is readable JavaScript padded to the SOURCE's own line numbers,
+    so a runtime error reports a line the author can find in their own file. An
+    AST pass loses that unless it carries a source map, and a source map is a
+    great deal of machinery for a feature whose point is that the script runs.
+*   **AS3's implicit `this` is the single most important thing it does.**
+    Inside a class, `x += vx`, `addChild(ball)` and `graphics.beginFill()` all
+    mean `this.`. JavaScript does not, and `with (this)` is both illegal in
+    strict mode and wrong about assignment. So the class body is scanned for
+    its declared members BEFORE anything is emitted, and a bare name that is
+    one of them — or one of the inherited display-object members, or a member
+    of another of the author's classes up the chain — is prefixed. Four things
+    are deliberately left alone: a property access after a dot, a declared
+    local or parameter (which shadows a member, as in AS3), an object-literal
+    key, and a name the compiler knows nothing about. Without this every AS3
+    class fails on its first line; with a wrong version of it the failures are
+    silent.
+*   **`rotation` is rewritten to the engine's `rotationDeg`.** AS3's rotation
+    is in degrees and the engine's is in radians. Leaving the name alone would
+    make every rotation in every compiled script wrong by a factor of 57.
+*   **`is` and `as` go through a helper**, because `x is Number` is a `typeof`
+    test and `x is Sprite` is an `instanceof` one and no infix rewrite can say
+    both. The left operand is already emitted when the operator is reached, so
+    the emitted output is scanned back to where the operand began — `+`, `-`,
+    `*`, `/` and `.` bind tighter than `is` and so are part of it, while
+    everything of lower or equal precedence stops the scan. These two are the
+    only places AS3 needs an expression parser, and writing one for them alone
+    would be the wrong trade.
+*   **Each class registers itself where it is declared**, not in a block at the
+    end. A JavaScript `extends` clause is evaluated where the class statement
+    is, so a second class extending the first would resolve the base before it
+    existed — and that is the one thing an author is most likely to write. The
+    base is resolved at RUN time, because whether it is the author's own class
+    or the engine's is not knowable until both are declared.
+*   `for each (… in …)` iterates values over an array or a plain object,
+    `Vector.<T>` becomes Array, typed catch parameters and rest parameters
+    work, and `trace()` goes where every other trace in Flashy goes.
+*   **What is NOT supported is refused with a line number** rather than
+    mistranslated: E4X (XML literals and the `..` and `.@` operators),
+    namespaces and `::`, `use namespace`. Each is a real AS3 feature, and a
+    compiler that quietly drops what it does not understand is worse than one
+    that refuses. A class the build does not have reports the list of the ones
+    it does, which turns a dead end into a decision.
+*   **The editor**: `scriptDialect` is now one of three, picked in Document
+    Settings; Modify ▸ ActionScript 3 Document Class opens a one-file class
+    editor that compiles as you type and names the line of any mistake;
+    the Actions panel's syntax check routes AS3 to its own compiler, because
+    `var n:int = 1` is a syntax error read as JavaScript and reporting it that
+    way would be both wrong and alarming; and the debugger says plainly that
+    it steps source rather than compiled output.
+*   **The export** ships `flashy-as3.js` only when the document has AS3 to
+    compile, instantiates the document class with the root, and marks it
+    `__attached` — the root rebuilds its display list from the timeline every
+    frame, and a child that is not in the document cannot be put back by that
+    rebuild, so without the mark the document class would vanish on frame two.
+    A document class that fails to compile is reported to the Output and the
+    animation still plays: a blank page tells the viewer nothing.
+*   Found along the way: ten calls in `editor-app.js` to a `Flashy.Output.trace`
+    that does not exist. The Output's entry point is `write` — `trace` is what
+    the *language* calls it — and every one of those calls was guarded by
+    `if (Flashy.Output.trace)`, so they had been silently doing nothing.
+*   `tests/as3.spec.js` (21 specs), ending with an exported movie whose box is
+    drawn by a compiled AS3 constructor, added to the real display list and
+    painted by the real painter.
+
+---
+
+## Where the second pass ended
+
+All fourteen rows are closed. Three ◐ rows remain from the first eleven
+tables, and they are scope decisions rather than omissions: runtime shared
+libraries (a second SWF loaded at run time), spell check (a proofreader, not a
+dictionary), and per-sound MP3 compression (no MP3 encoder). Each is written
+up where it stands.
+
+Two of the second pass's own rows turned out to be wrong about what was
+missing, and saying so is part of the audit:
+
+*   **Bone tool / IK** — "an IK chain with constrained joints does not exist"
+    was half wrong. The character rigs already had rotation limits, planted
+    joints and a CCD solver. What was genuinely absent was the Bone tool's
+    other half: bones INSIDE a shape, deforming the drawing.
+*   **Video** — "needs a demuxer" was simply wrong. A browser demuxes and
+    decodes MP4 and WebM already; a `<video>` element is the decoder.
+
+And **ActionScript 3** — "needs a compiler and an AVM2" — was half right. The
+AVM2 is out of scope and the compiler was not.
