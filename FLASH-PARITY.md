@@ -7,8 +7,9 @@ whether it is worth building.
 
 **Status key:** ✅ present · ◐ partial · ⬜ missing
 
-Audited at `0.7.6`. Verified by reading `editor-app.js` (`menus`, `TOOLS`,
-`doAction`, `paintObj`, `render`, `updateProps`), not by assumption.
+First audited at `0.7.6`; closed out at `0.8.0`. Verified by reading
+`editor-app.js` (`menus`, `TOOLS`, `doAction`, `paintObj`, `render`,
+`updateProps`), not by assumption.
 
 ---
 
