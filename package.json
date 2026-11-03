@@ -55,7 +55,8 @@
     "flashy-trace.js",
     "flashy-geom.js",
     "flashy-gif.js",
-    "flashy-as3.js"
+    "flashy-as3.js",
+    "flashy-dict.js"
   ],
   "scripts": {
     "// serve": "Node rather than `python -m http.server`, so a checkout needs nothing but Node \u2014 same reason the CI job can skip Python entirely.",
@@ -109,6 +110,7 @@
       "flashy-geom.js",
       "flashy-gif.js",
       "flashy-as3.js",
+      "flashy-dict.js",
       "feedback.js",
       "index.html",
       "examples/**",

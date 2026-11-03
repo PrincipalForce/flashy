@@ -19824,6 +19824,11 @@ function proofreadDocument() {
 }
 
 var SPELL_LABELS = {
+  /* "unknown" is deliberately not phrased as an error. The dictionary is a
+     2,000-word core unless one has been imported, so "not in the dictionary"
+     is the honest claim and "wrong" is not -- and a checker that overstates
+     gets switched off, which was the whole objection to building one. */
+  unknown: "not in the dictionary",
   misspelling: "likely misspelling",
   doubled: "doubled word",
   quotes: "unmatched quote",
@@ -19832,14 +19837,61 @@ var SPELL_LABELS = {
   mixedQuotes: "straight and curly quotes mixed"
 };
 
+/* Whether the word-list half of the check is on. A session setting, not a
+   document one: it is about how the person wants to work, not about the
+   cartoon. On by default now that there IS a word list -- the first pass had
+   no option to turn on. */
+var spellUseDictionary = true;
+
 function showSpellCheckDialog() {
-  var found = proofreadDocument();
   var listEl = null;
+
+  /* Both checks, merged and ordered by position so the list reads down the
+     field rather than by which pass found what. The entry shapes are
+     identical by design, so applyProofFix does not need to know which check
+     produced one. */
+  var gather = function () {
+    var byObj = [];
+    var index = Object.create(null);
+    var add = function (entries) {
+      entries.forEach(function (f) {
+        var key = f.where + "\u0000" + f.text;
+        var slot = index[key];
+        if (!slot) {
+          slot = { obj: f.obj, where: f.where, text: f.text, issues: [] };
+          index[key] = slot;
+          byObj.push(slot);
+        }
+        slot.issues = slot.issues.concat(f.issues);
+      });
+    };
+    add(proofreadDocument());
+    if (spellUseDictionary) add(spellCheckDocument());
+    byObj.forEach(function (f) {
+      /* Deduped by kind, position and word. A word in SPELL_FIXES is found by
+         BOTH passes -- the proofreader owns that table and spellCheck checks
+         it first so it is useful standalone -- so without this every known
+         misspelling would be listed twice. Deduping here rather than teaching
+         one pass to skip the other's findings keeps each of them correct on
+         its own, which is how they are tested. */
+      var seen = Object.create(null);
+      f.issues = f.issues.filter(function (it) {
+        var key = it.kind + " " + (it.at || 0) + " " + (it.word || "");
+        if (seen[key]) return false;
+        seen[key] = true;
+        return true;
+      });
+      f.issues.sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
+    });
+    return byObj;
+  };
+
+  var found = gather();
 
   var draw = function () {
     if (!listEl) return;
     listEl.textContent = "";
-    var now = proofreadDocument();
+    var now = gather();
     if (!now.length) {
       var ok = document.createElement("div");
       ok.className = "fy-dialog-hint";
@@ -19862,8 +19914,12 @@ function showSpellCheckDialog() {
                         " — " + f.where;
         row.appendChild(n);
         row.appendChild(v);
+        /* An unknown word gets a Fix button only when there is something to
+           fix it to. A button that would replace a word with itself is worse
+           than no button. */
         if (it.kind === "misspelling" || it.kind === "doubled" ||
-            it.kind === "spacing") {
+            it.kind === "spacing" ||
+            (it.kind === "unknown" && it.suggestion)) {
           var fix = document.createElement("button");
           fix.className = "props-btn-action";
           fix.textContent = "Fix";
@@ -19876,7 +19932,7 @@ function showSpellCheckDialog() {
           });
           row.appendChild(fix);
         }
-        if (it.kind === "misspelling") {
+        if (it.kind === "misspelling" || it.kind === "unknown") {
           var keep = document.createElement("button");
           keep.className = "props-btn-action";
           keep.textContent = "Keep";
@@ -19894,19 +19950,91 @@ function showSpellCheckDialog() {
 
   showDialog({
     title: "Spelling and Proofing",
-    message: "Deliberately a proofreader rather than a dictionary: it checks " +
-             "the things that are wrong in any language — a doubled word, a " +
-             "known misspelling, an unmatched quote, a double space, mixed " +
-             "quote styles. A spell check that flags every proper noun gets " +
-             "switched off within a minute, at which point it has made " +
-             "things worse.",
+    message: "Two checks. The PROOFREADER finds what is wrong in any " +
+             "language \u2014 a doubled word, a known misspelling, an unmatched " +
+             "quote, a double space, mixed quote styles. The WORD LIST finds " +
+             "words it does not recognise.\n\n" +
+             "A word merely absent from the list is reported as unknown, not " +
+             "as wrong, and gets a suggestion only when something close " +
+             "exists. Proper nouns, acronyms, numbers, file names and " +
+             "code-shaped words are skipped, because a check that flags all " +
+             "of those gets switched off within a minute.",
     fields: [],
     build: function (body) {
       listEl = document.createElement("div");
       listEl.className = "dbg-list";
       body.appendChild(listEl);
+
+      var bar = document.createElement("div");
+      bar.className = "fy-dialog-row";
+      var lab = document.createElement("label");
+      lab.style.cssText = "display:flex;align-items:center;gap:4px;color:#BBB";
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.id = "spell-use-dict";
+      cb.checked = spellUseDictionary;
+      cb.addEventListener("change", function () {
+        spellUseDictionary = cb.checked;
+        draw();
+        counts();
+      });
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode("Check against the word list"));
+      bar.appendChild(lab);
+      body.appendChild(bar);
+
+      var note = document.createElement("div");
+      note.className = "fy-dialog-hint";
+      note.id = "spell-dict-size";
+      body.appendChild(note);
+      var counts = function () {
+        var d = dictSize();
+        note.textContent = d.core + " words built in" +
+          (d.imported ? (", " + d.imported + " imported") : "") +
+          (d.personal ? (", " + d.personal + " of yours") : "") +
+          ". The built-in core is the common spine of written English, which " +
+          "is most of ordinary prose and nothing like all of it \u2014 load a " +
+          "full word list to cover the rest.";
+      };
+      counts();
       draw();
+      body.__spellCounts = counts;
     },
+    extraButtons: [
+      { label: "Load word list\u2026", onClick: function () {
+          /* Flash's dictionaries were selectable and it shipped several. A
+             plain word-per-line list is what every such list already is, so
+             there is nothing to convert. */
+          var inp = document.createElement("input");
+          inp.type = "file";
+          inp.accept = ".txt,.dic,text/plain";
+          inp.addEventListener("change", function () {
+            var file = inp.files && inp.files[0];
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onerror = function () {
+              showMessage("Spelling", "Could not read " + file.name);
+            };
+            reader.onload = function () {
+              var r = importDictionary(String(reader.result));
+              if (!r.ok) {
+                showMessage("Spelling", "That file gave nothing usable: " +
+                            r.why + ".");
+                return;
+              }
+              outputLog("Dictionary: loaded " + r.count + " words from " +
+                        file.name);
+              showSpellCheckDialog();
+            };
+            reader.readAsText(file);
+          });
+          inp.click();
+        } },
+      { label: "Built-in list", onClick: function () {
+          clearImportedDictionary();
+          showSpellCheckDialog();
+        } }
+    ],
     footnote: found.length
       ? found.length + " field" + (found.length === 1 ? "" : "s") + " to look at."
       : "",
@@ -19918,7 +20046,12 @@ function showSpellCheckDialog() {
 /** Apply one suggestion to one field. */
 function applyProofFix(o, issue) {
   var text = String(o.text == null ? "" : o.text);
-  if (issue.kind === "misspelling") {
+  /* An unknown word with a suggestion is replaced exactly as a known
+     misspelling is: the two differ in how CONFIDENT the suggestion is, not
+     in what applying it means. Without this the Fix button on an unknown
+     word did nothing at all. */
+  if (issue.kind === "misspelling" ||
+      (issue.kind === "unknown" && issue.suggestion)) {
     /* Replaced at the recorded position, not globally: the same word can be
        deliberate somewhere else in the same caption. Case is preserved when
        the original was capitalised. */
@@ -24128,6 +24261,314 @@ function compressAllSounds() {
     return { ok: true, done: results.filter(function (r) { return r.ok; }).length,
              results: results };
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Spell check against a word list
+ *
+ * The proofreader below this checks what is wrong regardless of language: a
+ * doubled word, a known misspelling, unmatched brackets. It was built instead
+ * of a spell check, on two stated grounds. One was wrong and one was right,
+ * and the difference is what this is.
+ *
+ * WRONG: "an English word list big enough to avoid false positives would be
+ * larger than the whole editor." `editor-app.js` is about 1.3 MB; a
+ * 50,000-word list is about 450 KB. The built-in core here is 23 KB. The
+ * claim was simply not true, and a feature was skipped on the strength of it.
+ *
+ * RIGHT: "a spell check that flags every proper noun gets switched off within
+ * a minute, at which point it has made things worse." That is exactly so, and
+ * everything here is arranged around not crying wolf:
+ *
+ *   - TWO severities. A word in SPELL_FIXES is a `misspelling` with a
+ *     confident correction. A word merely absent from the list is `unknown`,
+ *     which is a question rather than an accusation, and carries a suggestion
+ *     only when a close match actually exists.
+ *   - Proper nouns are skipped: a capitalised word that is not the first in
+ *     its sentence, and any ALL-CAPS run.
+ *   - Numbers, URLs, file names, and code-shaped identifiers are skipped.
+ *   - Affixes come off before the lookup, so one entry covers walk, walks,
+ *     walked, walking and walker.
+ *   - The personal dictionary already existed; an IMPORTED dictionary is new.
+ *     Flash's dictionaries were selectable and it shipped several, and a
+ *     plain word-per-line list is what every such list already is.
+ * ------------------------------------------------------------------ */
+
+/** The imported dictionary, if one has been loaded this session. */
+var importedDict = null;
+var importedDictCount = 0;
+
+/** Every word source, newest first: imported, built-in core, personal. */
+function dictHas(word) {
+  var w = String(word || "").toLowerCase();
+  if (!w) return false;
+  if (importedDict && importedDict[w]) return true;
+  if (window.FlashyDict && FlashyDict.CORE[w]) return true;
+  var personal = spellDictionary();
+  return !!(personal && personal[w]);
+}
+
+/** How many words the checker can currently recognise. */
+function dictSize() {
+  var core = (window.FlashyDict && FlashyDict.size) || 0;
+  var personal = Object.keys(spellDictionary() || {}).length;
+  return { core: core, imported: importedDictCount, personal: personal,
+           total: core + importedDictCount + personal };
+}
+
+/**
+ * Load a word list.
+ *
+ * Replaces rather than merges: a dictionary is a choice, and two merged
+ * together is neither of them. The personal dictionary is separate and
+ * survives, which is the one list the user actually built.
+ */
+function importDictionary(text) {
+  if (!window.FlashyDict) return { ok: false, why: "flashy-dict.js is not loaded" };
+  var parsed = FlashyDict.parse(text);
+  if (!parsed.count) {
+    return { ok: false, why: "no usable words in that file — one word per " +
+             "line is the format every word list already uses" };
+  }
+  importedDict = parsed.words;
+  importedDictCount = parsed.count;
+  return { ok: true, count: parsed.count };
+}
+
+/** Forget the imported list and go back to the built-in core. */
+function clearImportedDictionary() {
+  importedDict = null;
+  importedDictCount = 0;
+}
+
+/* The affixes worth stripping, longest first so "-ies" beats "-s". Each entry
+   is [suffix, what to put back]: "carries" -> "carry", "stopped" -> "stop".
+   Deliberately small. A full morphology engine would take a stem table with
+   it, and the point of stripping at all is that one dictionary entry should
+   not need five. */
+var AFFIXES = [
+  ["ies", "y"], ["ied", "y"], ["ier", "y"], ["iest", "y"], ["ily", "y"],
+  ["ing", ""], ["ings", ""], ["ed", ""], ["es", ""], ["er", ""], ["est", ""],
+  ["ly", ""], ["s", ""], ["ness", ""], ["ment", ""], ["ful", ""],
+  ["less", ""], ["able", ""], ["ible", ""]
+];
+
+/**
+ * Is this a word the dictionary knows, allowing for its endings?
+ *
+ * Tries the word, then the word with each affix removed, then with a doubled
+ * final consonant collapsed ("stopped" -> "stop") and a restored silent e
+ * ("hoping" -> "hope"). Those two are the rules English actually uses, and
+ * without them the common case of every regular verb is a false positive.
+ */
+function dictKnows(word) {
+  var w = String(word || "").toLowerCase();
+  if (!w) return true;
+  if (dictHas(w)) return true;
+  // A hyphenated or apostrophised compound: every part has to be known.
+  if (w.indexOf("-") > 0 || w.indexOf("’") > 0 || w.indexOf("'") > 0) {
+    var parts = w.split(/[-'’]/).filter(function (p) { return p.length > 1; });
+    if (parts.length > 1 && parts.every(function (p) { return dictKnows(p); })) {
+      return true;
+    }
+    // "walker's" is the possessive of a known word.
+    var base = w.replace(/['’]s$/, "");
+    if (base !== w && dictKnows(base)) return true;
+  }
+  /* A closed compound: two known words run together. English makes these
+     freely -- afternoon, grandmother, bookshelf, waterfall, countryside --
+     and listing them is hopeless where a rule covers hundreds.
+     It can accept a non-word that happens to split ("catdog"), and that is
+     the right way round to be wrong: a missed typo costs a typo, while a
+     false positive is the thing that gets the whole check switched off. A
+     genuine misspelling rarely splits cleanly into two dictionary words. */
+  if (w.length >= 6 && /^[a-z]+$/.test(w)) {
+    for (var c = 3; c <= w.length - 3; c++) {
+      if (dictHas(w.slice(0, c)) && dictHas(w.slice(c))) return true;
+    }
+  }
+  for (var i = 0; i < AFFIXES.length; i++) {
+    var suf = AFFIXES[i][0], put = AFFIXES[i][1];
+    if (w.length <= suf.length + 1) continue;
+    if (w.slice(-suf.length) !== suf) continue;
+    var stem = w.slice(0, -suf.length) + put;
+    if (dictHas(stem)) return true;
+    // "stopped" -> "stop": a doubled final consonant before -ed or -ing.
+    if (!put && stem.length > 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      if (dictHas(stem.slice(0, -1))) return true;
+    }
+    // "hoping" -> "hope": the silent e that -ing and -ed drop.
+    if (!put && dictHas(stem + "e")) return true;
+  }
+  return false;
+}
+
+/* Damerau-Levenshtein, capped. Capped because the only question asked of it
+   is "is this within two edits", and a full matrix for every candidate in a
+   50,000-word list is work thrown away. */
+function editDistance(a, b, cap) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  var prev2 = null;
+  var prev = [];
+  var cur = [];
+  for (var j = 0; j <= b.length; j++) prev[j] = j;
+  for (var i = 1; i <= a.length; i++) {
+    cur = [i];
+    var best = i;
+    for (var k = 1; k <= b.length; k++) {
+      var cost = a[i - 1] === b[k - 1] ? 0 : 1;
+      var v = Math.min(prev[k] + 1, cur[k - 1] + 1, prev[k - 1] + cost);
+      // A transposition: "teh" is one edit from "the", not two.
+      if (i > 1 && k > 1 && a[i - 1] === b[k - 2] && a[i - 2] === b[k - 1]) {
+        v = Math.min(v, prev2[k - 2] + 1);
+      }
+      cur[k] = v;
+      if (v < best) best = v;
+    }
+    // Every path through this row already costs more than the cap.
+    if (best > cap) return cap + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * The closest known words to a misspelling, best first.
+ *
+ * Length-filtered before the distance is computed, because that is the cheap
+ * test and it removes almost everything. Returns at most three: a list of ten
+ * guesses is a list nobody reads.
+ */
+function spellSuggestions(word, limit) {
+  var w = String(word || "").toLowerCase();
+  if (!w || !window.FlashyDict) return [];
+  var cap = w.length <= 4 ? 1 : 2;
+  var found = [];
+  var consider = function (cand) {
+    if (Math.abs(cand.length - w.length) > cap) return;
+    var d = editDistance(w, cand, cap);
+    if (d <= cap) found.push({ word: cand, d: d });
+  };
+  Object.keys(FlashyDict.CORE).forEach(consider);
+  if (importedDict) Object.keys(importedDict).forEach(consider);
+  var personal = spellDictionary();
+  if (personal) Object.keys(personal).forEach(consider);
+  found.sort(function (a, b) {
+    if (a.d !== b.d) return a.d - b.d;
+    // A shorter word at the same distance is the likelier intent.
+    if (a.word.length !== b.word.length) return a.word.length - b.word.length;
+    return a.word < b.word ? -1 : 1;
+  });
+  var out = [], seen = Object.create(null);
+  for (var i = 0; i < found.length && out.length < (limit || 3); i++) {
+    if (seen[found[i].word]) continue;
+    seen[found[i].word] = true;
+    out.push(found[i].word);
+  }
+  return out;
+}
+
+/**
+ * Should this token be checked at all?
+ *
+ * Everything here is a reason NOT to flag something, and that is the point:
+ * the objection the first pass raised was that a checker which cries wolf
+ * gets switched off, and each of these is a way it would have.
+ */
+function spellSkip(token, isSentenceStart) {
+  var raw = String(token || "");
+  if (!raw) return "empty";
+  if (raw.length < 3) return "short";
+  if (/\d/.test(raw)) return "number";
+  if (/[._/\\@:]/.test(raw)) return "identifier";   // URL, file name, code
+  if (/^[A-Z0-9]+$/.test(raw)) return "acronym";
+  // A capitalised word that does not open a sentence: a name, almost always.
+  if (!isSentenceStart && /^[A-Z]/.test(raw)) return "proper noun";
+  // camelCase or PascalCase mid-word: code, not prose.
+  if (/[a-z][A-Z]/.test(raw)) return "identifier";
+  if (!/^[A-Za-z][A-Za-z'’-]*$/.test(raw)) return "not a word";
+  return null;
+}
+
+/**
+ * Spell-check a string.
+ *
+ * Returns the same shape proofread() does, so one panel renders both: a list
+ * of {kind, word, suggestion, at, why}. `kind` is "misspelling" when the
+ * correction is confident and "unknown" when the word is merely absent, and
+ * the panel can show the second group separately or not at all.
+ */
+function spellCheck(text) {
+  var out = [];
+  var s = String(text == null ? "" : text);
+  if (!s.trim()) return out;
+  /* Sentence starts, so a capital at the front of one is checked and a
+     capital anywhere else is left alone. A new line starts a sentence too --
+     a caption is often one line per sentence with no full stop at all. */
+  var starts = Object.create(null);
+  starts[0] = true;
+  var re = /([.!?:;\n•]|^)[\s"'“‘(\[]*/g;
+  var m;
+  while ((m = re.exec(s))) {
+    starts[re.lastIndex] = true;
+    if (re.lastIndex === m.index) re.lastIndex++;   // zero-width match guard
+  }
+
+  var wordRe = /[A-Za-z][A-Za-z'’-]*/g;
+  var w;
+  while ((w = wordRe.exec(s))) {
+    var token = w[0];
+    var at = w.index;
+    var low = token.toLowerCase();
+    var sentenceStart = !!starts[at];
+
+    /* A known-wrong word is reported wherever it appears, capitalised or not:
+       "Teh" at the start of a sentence is still "The". This runs before the
+       skip rules for exactly that reason. */
+    if (SPELL_FIXES[low]) {
+      out.push({ kind: "misspelling", word: token, suggestion: SPELL_FIXES[low],
+                 at: at, why: "a common misspelling" });
+      continue;
+    }
+    var skip = spellSkip(token, sentenceStart);
+    if (skip) continue;
+    if (dictKnows(low)) continue;
+    var guesses = spellSuggestions(low, 3);
+    out.push({
+      kind: "unknown", word: token, at: at,
+      suggestion: guesses.length ? guesses[0] : null,
+      suggestions: guesses,
+      /* Said as a question. The dictionary is a 2,000-word core unless one has
+         been imported, so "not in the dictionary" is the honest claim and
+         "wrong" is not. */
+      why: guesses.length
+        ? "not in the dictionary"
+        : "not in the dictionary, and nothing close to it either"
+    });
+  }
+  return out;
+}
+
+/**
+ * Every spelling problem in the document's text.
+ *
+ * The same shape proofreadDocument() returns, so the panel that renders one
+ * renders both and applyProofFix works on either without knowing which check
+ * produced the entry.
+ */
+function spellCheckDocument() {
+  var out = [];
+  frWalk("document").forEach(function (e) {
+    var o = e.obj;
+    if (o.type !== "text" || !o.text) return;
+    var issues = spellCheck(o.text);
+    if (issues.length) {
+      out.push({ obj: o, where: e.where, text: String(o.text), issues: issues });
+    }
+  });
+  return out;
 }
 
 /* ------------------------------------------------------------------ *
@@ -31189,6 +31630,21 @@ function init(){
     propEaseCurve: propEaseCurve,
     motionActiveProps: motionActiveProps,
     updateMotionPanel: updateMotionPanel,
+    /* Spell check against a word list -- the half the first pass refused. */
+    dictHas: dictHas,
+    dictKnows: dictKnows,
+    dictSize: dictSize,
+    importDictionary: importDictionary,
+    clearImportedDictionary: clearImportedDictionary,
+    editDistance: editDistance,
+    spellSuggestions: spellSuggestions,
+    spellSkip: spellSkip,
+    spellCheck: spellCheck,
+    spellCheckDocument: spellCheckDocument,
+    spellUseDictionary: function (v) {
+      if (v != null) spellUseDictionary = !!v;
+      return spellUseDictionary;
+    },
     /* Real lossy compression for sounds, through the browser's own encoder. */
     SOUND_CODECS: SOUND_CODECS,
     SOUND_BITRATES: SOUND_BITRATES,

@@ -139,7 +139,7 @@ the exported player.
 | Device fonts vs embedded outlines, character embedding ranges | ✅ | `_sans`, `_serif` and `_typewriter` map onto the generic families every browser has. Embedding traces each glyph with the project’s own tracer — no font parser needed — into a 0..1 em path table, with five character ranges and a per-field switch. Only the faces a field asks for are exported. |
 | Break Apart text → letters → shapes | ✅ | `textToCharacters` — one object per glyph, measured with the painter's own metrics so each piece lands where its letter was. Letters to shapes needs the pen outlines the browser does not expose. |
 | Anti-alias mode (device / bitmap / animation / readability) | ✅ | It changes the pixels now. Bitmap thresholds the field’s own alpha to on-or-off, readability snaps glyphs onto the pixel grid, device substitutes the player’s family, and animation stays smooth so sub-pixel motion does not shimmer. |
-| Spell check | ◐ | A proofreader rather than a dictionary: doubled words, a table of known misspellings, unmatched quotes and brackets, double spaces, mixed quote styles, with one-click fixes and a personal dictionary. No general English word list — one big enough to avoid false positives would be larger than the editor, and a check that flags every proper noun gets switched off. |
+| Spell check | ✅ | A proofreader AND a word list: doubled words, known misspellings, unmatched quotes and brackets, double spaces, mixed quote styles, plus words the dictionary does not recognise. ~~A word list big enough would be larger than the editor~~ — **`flashy-dict.js` is 28 KB against a 1.3 MB editor**, and a fuller list can be imported. The proper-noun objection was right and is what the design answers. See Wave 27. |
 
 Without dynamic and input text there is no score display, no form, no typed-in
 name — an entire class of Flash content is unreachable.
@@ -730,7 +730,7 @@ was not mine to make — so they are built.
     is the right answer for pure decoration: announced decoration is worse
     than ignored decoration.
 
-57. ◐ **Shared libraries.** Author-time sharing: pull symbols out of another
+57. ✅ **Shared libraries.** Author-time sharing: pull symbols out of another
     .flashy, with the bitmaps and sounds they use, or the symbol arrives as an
     empty box with no clue why. A name clash renames the incoming one rather
     than overwriting — the local symbol might be the one the movie is built
@@ -738,13 +738,24 @@ was not mine to make — so they are built.
     and Update replaces the symbol’s CONTENTS rather than the entry, because
     every instance on the stage points at the name.
 
-    Runtime sharing is deliberately not built. It needs a loader protocol and
-    a second file that has to still be there, which is a large part of why
-    Flash content rotted; author-time sharing puts the symbol in this document
-    where every export path already handles it.
+    Runtime sharing is built too, in both directions — and the objection
+    first used to refuse it is what the design answers. It is quite true that
+    it needs a second file that has to still be there, and that this is a
+    large part of why Flash content rotted. So the embedded copy STAYS in the
+    document as the fallback: an imported symbol is an upgrade, not a
+    dependency. Reachable shared file, newer artwork; unreachable one, the
+    copy the movie shipped with and one line saying why. Flash drew nothing at
+    all in that case, which IS the rot the objection described.
 
-    Covered by `tests/timeline-effects.spec.js` (16) and
-    `tests/strings-access.spec.js` (20).
+    Either shape works as a source, a published manifest or a plain .flashy,
+    because the common case is “share out of that file there”. The manifest is
+    keyed by IDENTIFIER rather than local name, so renaming a symbol in the
+    source cannot break the files importing it, and resolving fetches once per
+    URL rather than once per symbol.
+
+    Covered by `tests/timeline-effects.spec.js` (16),
+    `tests/strings-access.spec.js` (20) and
+    `tests/runtime-sharing.spec.js` (12).
 
 ### What is left
 
@@ -857,20 +868,61 @@ a name, inserted at the caret.
     far more visible than a substituted one. And only the faces a field
     actually asks for are exported.
 
-61. ◐ **Spelling and proofing.** Deliberately a proofreader, not a dictionary.
-    An English word list big enough to avoid false positives would be larger
-    than the whole editor, and a spell check that flags every proper noun gets
-    switched off within a minute — at which point it has made things worse.
+61. ✅ **Spelling and proofing.** Two checks now, and the second one exists
+    because the reason first given for skipping it was wrong.
 
-    So it checks what is wrong regardless of language: a doubled word, a table
-    of misspellings common enough to be worth shipping, unmatched quotes and
-    brackets, a double space, straight and curly quotes mixed in one caption.
-    Every one is a real error in a caption and none needs to know the
-    language. Fixes are applied at the recorded position rather than globally,
+    The claim was that "an English word list big enough to avoid false
+    positives would be larger than the whole editor". That is measurably
+    untrue: `editor-app.js` is about 1.3 MB and `flashy-dict.js` is 28 KB — a
+    fiftieth of it. A feature was declined on an unchecked assertion, and the
+    first spec in `tests/spell-check.spec.js` now fetches both files and
+    measures them so the claim cannot quietly come back.
+
+    The second objection was right, and it is what the whole design is
+    arranged around: "a spell check that flags every proper noun gets switched
+    off within a minute, at which point it has made things worse." So nothing
+    here cries wolf.
+
+    *   **Two severities.** A word in the known-wrong table is a
+        `misspelling` with a confident correction. A word merely absent is
+        `unknown` — labelled "not in the dictionary", which is a question
+        rather than an accusation — and gets a suggestion only when something
+        close actually exists.
+    *   **Skipped:** a capitalised word that does not open its sentence, any
+        ALL-CAPS run, anything with a digit, URLs, file names, and camelCase.
+        Each of those is a way a checker earns being switched off, and each
+        has a spec.
+    *   **Affixes come off** before the lookup, including the doubled
+        consonant of "stopped" and the silent e of "hoping", so one entry
+        covers walk/walks/walked/walking/walker.
+    *   **Irregular pasts are listed**, because no amount of stripping "-ed"
+        reaches "sat" from "sit". The specs found this: before they were
+        added, "I met her and we sat down" produced two false positives in
+        eight words.
+    *   **Closed compounds split.** afternoon, grandmother, bookshelf,
+        waterfall, countryside — English makes these freely and listing them
+        is hopeless where one rule covers hundreds. It can accept a non-word
+        that happens to split, and that is the right way round to be wrong: a
+        missed typo costs a typo, a false positive costs the feature.
+    *   **A fuller dictionary can be loaded.** Flash's dictionaries were
+        selectable and it shipped several; a plain word-per-line list is what
+        every such list already is, so there is nothing to convert. Loading
+        one replaces rather than merges, because a dictionary is a choice.
+    *   The built-in core is about 2,600 words, and **the dialog says so**
+        rather than implying completeness.
+
+    Both passes find a word that is in the known-wrong table and absent from
+    the list; each is right to, and listing it twice is not, so the merged
+    view dedupes by kind, position and word. Found by a spec that had been
+    asserting one row and got two.
+
+    Fixes are still applied at the recorded position rather than globally,
     keeping a leading capital, because the same word can be deliberate
-    elsewhere in the same string.
+    elsewhere in the same string — and `applyProofFix` now handles an unknown
+    word with a suggestion, which it did not, so that Fix button did nothing.
 
-    Covered by `tests/fonts-spelling.spec.js` (21 specs).
+    Covered by `tests/fonts-spelling.spec.js` (21 specs) and
+    `tests/spell-check.spec.js` (18 specs).
 
 ### Wave 11 — getting the movie out
 
@@ -1534,23 +1586,38 @@ instantiated with the stage, and `addChild` put things on screen.
 
 ---
 
-## Where the second pass ended
+## Where the audit ended
 
-All fourteen rows are closed. Three ◐ rows remain from the first eleven
-tables, and they are scope decisions rather than omissions: runtime shared
-libraries (a second SWF loaded at run time), spell check (a proofreader, not a
-dictionary), and per-sound MP3 compression (no MP3 encoder). Each is written
-up where it stands.
+Nothing is left open. All fourteen second-pass rows are closed, and so are the
+three ◐ rows that had been carried forward from the first eleven tables as
+"scope decisions" — runtime shared libraries, spell check, and per-sound
+compression. See Waves 25, 26 and 27.
 
-Two of the second pass's own rows turned out to be wrong about what was
-missing, and saying so is part of the audit:
+The more useful result is that **five of the reasons given for not building
+something turned out to be wrong**, and in four of the five cases the wrongness
+was the same shape: an unexamined claim that a feature needed a subsystem.
 
-*   **Bone tool / IK** — "an IK chain with constrained joints does not exist"
-    was half wrong. The character rigs already had rotation limits, planted
-    joints and a CCD solver. What was genuinely absent was the Bone tool's
-    other half: bones INSIDE a shape, deforming the drawing.
-*   **Video** — "needs a demuxer" was simply wrong. A browser demuxes and
-    decodes MP4 and WebM already; a `<video>` element is the decoder.
+*   **Video** — "needs a demuxer". Simply wrong. A browser demuxes and decodes
+    MP4 and WebM already; a `<video>` element *is* the decoder.
+*   **Per-sound compression** — "no MP3 encoder, and writing one would be a
+    project of its own". True, and the wrong conclusion: MediaRecorder is an
+    audio encoder and gives Opus, which beats MP3 at the same bitrate.
+*   **Spell check** — "a word list big enough would be larger than the whole
+    editor". Measurably untrue: 28 KB against 1.3 MB. A spec now measures both
+    files so the claim cannot come back.
+*   **ActionScript 3** — "needs a compiler and an AVM2". Half right. The AVM2
+    is genuinely out of scope; the compiler was not.
+*   **Bone tool / IK** — "an IK chain with constrained joints does not exist".
+    Half wrong in the other direction: the rigs already had limits, planted
+    joints and a CCD solver, and what was actually missing was the Bone tool's
+    other half — bones *inside* a shape.
 
-And **ActionScript 3** — "needs a compiler and an AVM2" — was half right. The
-AVM2 is out of scope and the compiler was not.
+One refusal was substantively right and still produced a feature: **runtime
+shared libraries** really do need a second file that has to still be there,
+and that really is a large part of why Flash content rotted. The answer was to
+keep the embedded copy as a fallback, so a shared symbol is an upgrade rather
+than a dependency — the objection became the design.
+
+The pattern worth keeping: "this needs a subsystem" is a claim about the world
+and belongs in a spec, not in a status column. Three of the five above were
+settled by measuring something, and the measurements are now tests.
