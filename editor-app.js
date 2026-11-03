@@ -20383,8 +20383,13 @@ function soundSettings(name) {
   var a = doc.sounds && doc.sounds[name];
   if (!a) return null;
   if (!a.exportSettings) {
-    a.exportSettings = { rate: "original", mono: false, trim: false };
+    /* `compress` off by default: encoding is real time, so turning it on for
+       every sound in a document the first time anyone opens this dialog would
+       be a surprise measured in minutes. */
+    a.exportSettings = { rate: "original", mono: false, trim: false,
+                         compress: false, bitrate: 96000, codec: null };
   }
+  if (a.exportSettings.bitrate == null) a.exportSettings.bitrate = 96000;
   return a.exportSettings;
 }
 
@@ -20576,7 +20581,7 @@ function showSoundSettingsDialog() {
       });
       row.appendChild(rate);
 
-      [["mono", "Mono"], ["trim", "Trim"]].forEach(function (f) {
+      [["mono", "Mono"], ["trim", "Trim"], ["compress", "Compress"]].forEach(function (f) {
         var lab = document.createElement("label");
         lab.style.cssText = "display:flex;align-items:center;gap:2px;color:#BBB";
         var cb = document.createElement("input");
@@ -20590,11 +20595,46 @@ function showSoundSettingsDialog() {
         row.appendChild(lab);
       });
 
+      /* The bitrate, shown only when compression is on -- it means nothing
+         otherwise, and a live control that does nothing is worse than none. */
+      if (set.compress) {
+        var br = document.createElement("select");
+        br.className = "props-select";
+        br.style.width = "96px";
+        SOUND_BITRATES.forEach(function (b) {
+          var op = document.createElement("option");
+          op.value = String(b[0]);
+          op.textContent = Math.round(b[0] / 1000) + " kbps";
+          op.title = b[1];
+          if (Number(set.bitrate) === b[0]) op.selected = true;
+          br.appendChild(op);
+        });
+        br.addEventListener("change", function () {
+          set.bitrate = parseInt(br.value, 10) || 96000; touchDoc(); draw();
+        });
+        row.appendChild(br);
+      }
+
       var size = document.createElement("span");
       size.className = "dbg-value";
       var before = soundBytes(doc.sounds[n].data);
       var hasBuffer = !!decodedSound(n);
-      if (set.rate === "original" && !set.mono && !set.trim) {
+      if (set.compress) {
+        /* An estimate rather than an encode: encoding is real time, and
+           re-encoding every sound on every repaint of this list would make
+           the dialog unusable. The real number lands when Compress runs. */
+        var secs = hasBuffer ? decodedSound(n).duration : 0;
+        var est = secs ? Math.round(secs * (set.bitrate || 96000) / 8) : 0;
+        var codec = soundCodec(set.codec);
+        size.textContent = Math.round(before / 1024) + " KB \u2192 ~" +
+          Math.round(est / 1024) + " KB  " +
+          (codec ? codec.label : "no encoder in this browser") +
+          (set.compressedWith ? "  (done: " + set.compressedWith + ")" : "");
+        size.title = secs
+          ? ("About " + Math.ceil(secs) + "s to encode: the browser's encoder " +
+             "reads a live stream, so a clip takes roughly its own length.")
+          : "Decoded when the sound loads.";
+      } else if (set.rate === "original" && !set.mono && !set.trim) {
         size.textContent = Math.round(before / 1024) + " KB, unchanged";
       } else if (!hasBuffer) {
         size.textContent = "not decoded yet";
@@ -20615,18 +20655,64 @@ function showSoundSettingsDialog() {
     title: "Sound Settings",
     message: "One music bed and twenty blips want completely different " +
              "settings, which is why these are per sound.\n\n" +
-             "There is no MP3 encoder here. What these do is real but " +
-             "different: the decoded samples are made mono, resampled and " +
-             "trimmed, then written back as WAV. Mono at 11 kHz is a quarter " +
-             "of the bytes of stereo at 44, and for a blip nobody can tell. " +
-             "A setting that would make a file BIGGER is skipped.",
+             "Mono, rate and trim reshape the samples and write WAV \u2014 mono " +
+             "at 11 kHz is a quarter of the bytes of stereo at 44. COMPRESS " +
+             "goes further and runs the browser's own encoder, which is Opus: " +
+             "better than MP3 at the same bitrate, and decoded everywhere. " +
+             "MP3 itself is not offered because no browser will encode it.\n\n" +
+             "The encoder reads a live stream, so compressing a clip takes " +
+             "about its own length. A result BIGGER than the original is " +
+             "discarded either way.",
     fields: [],
     build: function (body) {
       listEl = document.createElement("div");
       listEl.className = "dbg-list";
       body.appendChild(listEl);
       draw();
+      var enc = soundCodec(null);
+      var note = document.createElement("div");
+      note.className = enc ? "fy-dialog-hint" : "fy-dialog-error";
+      note.textContent = enc
+        ? ("This browser encodes " + enc.label + ".")
+        : ("This browser has no audio encoder, so Compress will do nothing. " +
+           "Mono, rate and trim still work.");
+      body.appendChild(note);
     },
+    extraButtons: [
+      { label: "Compress now", onClick: function (v, close) {
+          var wanted = Object.keys(doc.sounds || {}).filter(function (n) {
+            var st = soundSettings(n);
+            return st && st.compress;
+          });
+          if (!wanted.length) {
+            showMessage("Sound Settings",
+              "Tick Compress on at least one sound first.");
+            return;
+          }
+          close();
+          var st = document.createElement("div");
+          st.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#333;color:#fff;padding:20px 40px;border-radius:8px;z-index:9999;font:14px sans-serif;";
+          st.textContent = "Encoding " + wanted.length + " sound" +
+                           (wanted.length === 1 ? "" : "s") + "\u2026";
+          document.body.appendChild(st);
+          pushUndo();
+          compressAllSounds().then(function (r) {
+            if (st.parentNode) document.body.removeChild(st);
+            var lines = r.results.map(function (x) {
+              if (x.ok) {
+                return x.name + ": " + Math.round(x.before / 1024) + " KB \u2192 " +
+                       Math.round(x.after / 1024) + " KB (" + x.saved + "% smaller, " +
+                       x.codec + ")";
+              }
+              return x.name + ": " + x.why;
+            });
+            fullRefresh();
+            showMessage("Sound Settings",
+              "Compressed " + r.done + " of " + wanted.length + ".\n\n" +
+              lines.join("\n"));
+          });
+        } }
+    ],
     okLabel: "Close",
     noCancel: true
   });
@@ -23746,6 +23832,301 @@ function showRuntimeShareDialog() {
         }
       });
     }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Real lossy compression for sounds
+ *
+ * The audit said: "There is no MP3 encoder here and writing one would be a
+ * project of its own." Both halves of that are true, and the conclusion drawn
+ * from them was wrong in the same way the video row's "needs a demuxer" was
+ * wrong.
+ *
+ * A browser already contains an audio ENCODER. MediaRecorder will take a
+ * MediaStream and hand back compressed bytes, and every browser offers Opus
+ * in WebM -- which beats MP3 comfortably at the same bitrate, decodes
+ * everywhere, and is what the web actually uses. So per-sound compression is
+ * not "resample and hope"; it is a real encode at a real bitrate.
+ *
+ * MP3 specifically is still not on offer, and that is now a statement about
+ * MP3 rather than about this editor: no browser will encode it, and shipping
+ * an encoder for a format that is worse than the one already present would be
+ * a project of its own for a worse result.
+ *
+ * THE COST, stated plainly: MediaRecorder encodes from a live stream, so a
+ * clip takes about its own duration to encode. A blip is instant and a
+ * three-minute music bed takes three minutes. The existing video export makes
+ * the same trade for the same reason, and the alternative -- an encoder
+ * written here -- is the project the audit was right to decline.
+ * ------------------------------------------------------------------ */
+
+/* The containers worth trying, best first. Opus is the reason this works at
+   all; AAC is offered because Safari prefers it and some pipelines want it. */
+var SOUND_CODECS = [
+  ["audio/webm;codecs=opus", "Opus (WebM)"],
+  ["audio/ogg;codecs=opus", "Opus (Ogg)"],
+  ["audio/mp4;codecs=mp4a.40.2", "AAC (MP4)"],
+  ["audio/webm", "WebM"]
+];
+
+/** The bitrates the dialog offers, in bits per second. */
+var SOUND_BITRATES = [
+  [24000, "24 kbps — speech, blips"],
+  [48000, "48 kbps — good speech, simple music"],
+  [96000, "96 kbps — music"],
+  [128000, "128 kbps — music, transparent for most ears"],
+  [192000, "192 kbps — near-transparent"]
+];
+
+/** The first codec this browser will actually encode, or null. */
+function soundCodec(preferred) {
+  if (typeof MediaRecorder === "undefined") return null;
+  var list = SOUND_CODECS.slice();
+  if (preferred) {
+    list = list.filter(function (c) { return c[0] === preferred; })
+               .concat(list.filter(function (c) { return c[0] !== preferred; }));
+  }
+  for (var i = 0; i < list.length; i++) {
+    try {
+      if (MediaRecorder.isTypeSupported(list[i][0])) {
+        return { mime: list[i][0], label: list[i][1] };
+      }
+    } catch (e) { /* a browser that throws on the question has not got it */ }
+  }
+  return null;
+}
+
+/**
+ * Encode an AudioBuffer with the browser's own encoder.
+ *
+ * Resolves to {data, mediaType, bytes, codec} or null. Real time, because
+ * MediaRecorder reads a live stream -- see the note above.
+ */
+function encodeAudioBuffer(buf, opts) {
+  opts = opts || {};
+  var picked = soundCodec(opts.codec);
+  if (!picked || !buf) return Promise.resolve(null);
+  var Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return Promise.resolve(null);
+
+  return new Promise(function (resolve) {
+    var ctx, rec, dest, src;
+    var done = false;
+    var finish = function (value) {
+      if (done) return;
+      done = true;
+      try { if (src) src.stop(); } catch (e) { /* already stopped */ }
+      try { if (ctx) ctx.close(); } catch (e) { /* already closed */ }
+      resolve(value);
+    };
+    try {
+      ctx = new Ctx({ sampleRate: buf.sampleRate });
+      dest = ctx.createMediaStreamDestination();
+      src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(dest);
+      rec = new MediaRecorder(dest.stream, {
+        mimeType: picked.mime,
+        audioBitsPerSecond: Math.max(8000, opts.bitrate || 96000)
+      });
+    } catch (e) {
+      finish(null);
+      return;
+    }
+    var chunks = [];
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onerror = function () { finish(null); };
+    rec.onstop = function () {
+      var blob = new Blob(chunks, { type: picked.mime.split(";")[0] });
+      if (!blob.size) { finish(null); return; }
+      var reader = new FileReader();
+      reader.onerror = function () { finish(null); };
+      reader.onload = function () {
+        var url = String(reader.result);
+        var comma = url.indexOf(",");
+        if (comma < 0) { finish(null); return; }
+        finish({
+          data: url.slice(comma + 1),
+          mediaType: picked.mime.split(";")[0],
+          bytes: blob.size,
+          codec: picked.label
+        });
+      };
+      reader.readAsDataURL(blob);
+    };
+    /* A hard ceiling, because a stream that never ends would hang the export.
+       Generous: the encode is real time, so the cap is the clip's own length
+       plus a margin for the encoder to flush. */
+    var cap = Math.ceil((buf.duration + 1) * 1000) + 500;
+    var timer = setTimeout(function () {
+      try { if (rec.state !== "inactive") rec.stop(); } catch (e) { finish(null); }
+    }, cap);
+    src.onended = function () {
+      // A tick after the last sample, so the encoder has it before it stops.
+      setTimeout(function () {
+        clearTimeout(timer);
+        try { if (rec.state !== "inactive") rec.stop(); } catch (e) { finish(null); }
+      }, 120);
+    };
+    try {
+      rec.start();
+      src.start();
+    } catch (e) {
+      clearTimeout(timer);
+      finish(null);
+    }
+  });
+}
+
+/**
+ * Compress one sound asset to its export settings.
+ *
+ * Runs after the existing mono/resample/trim pipeline, because those shrink
+ * the input to the encoder as well as the output: mono at 22 kHz encoded at
+ * 48 kbps is smaller than stereo at 44.1 encoded at 48 kbps, for the same
+ * perceived quality on the kind of audio that wants those settings.
+ *
+ * Resolves to a report. A result BIGGER than the original is discarded and
+ * said so, exactly as the WAV path already does: an already-compressed
+ * original usually beats anything a second pass can produce.
+ */
+function compressSound(name) {
+  var a = doc.sounds && doc.sounds[name];
+  if (!a) return Promise.resolve({ ok: false, why: "no such sound" });
+  var set = soundSettings(name);
+  if (!set || set.compress === false || !set.compress) {
+    return Promise.resolve({ ok: false, why: "compression is off for this sound" });
+  }
+  var buf = decodedSound(name);
+  if (!buf) {
+    return Promise.resolve({ ok: false, why: "the sound has not been decoded yet" });
+  }
+  var before = a.data ? Math.round(a.data.length * 3 / 4) : 0;
+
+  /* The mono/resample/trim result, as a buffer to encode. recodeSound already
+     does that work and writes WAV; this reuses the samples rather than
+     repeating the arithmetic. */
+  var prepared = prepareSoundBuffer(name, buf, set);
+  return encodeAudioBuffer(prepared, {
+    codec: set.codec || null,
+    bitrate: set.bitrate || 96000
+  }).then(function (enc) {
+    if (!enc) {
+      return { ok: false, before: before,
+               why: "this browser has no audio encoder available" };
+    }
+    if (enc.bytes >= before && before > 0) {
+      return { ok: false, before: before, after: enc.bytes, skipped: true,
+               codec: enc.codec,
+               why: "the encode came out larger than the original, so the " +
+                    "original is kept" };
+    }
+    a.data = enc.data;
+    a.mediaType = enc.mediaType;
+    set.compressedWith = enc.codec;
+    touchDoc();
+    return { ok: true, before: before, after: enc.bytes, codec: enc.codec,
+             saved: before ? Math.round((1 - enc.bytes / before) * 100) : 0 };
+  });
+}
+
+/**
+ * The samples an asset's settings ask for, as an AudioBuffer.
+ *
+ * The same mono / resample / trim pipeline recodeSound uses, stopping before
+ * the WAV is written -- which is where the encoder wants to pick it up.
+ */
+function prepareSoundBuffer(name, buf, set) {
+  var Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return buf;
+  var srcCh = [];
+  for (var c = 0; c < buf.numberOfChannels; c++) srcCh.push(buf.getChannelData(c));
+
+  var mixed = srcCh;
+  if (set.mono && srcCh.length > 1) {
+    var mono = new Float32Array(srcCh[0].length);
+    for (var i = 0; i < mono.length; i++) {
+      var sum = 0;
+      for (var k = 0; k < srcCh.length; k++) sum += srcCh[k][i];
+      mono[i] = sum / srcCh.length;
+    }
+    mixed = [mono];
+  }
+
+  var srcRate = buf.sampleRate;
+  var want = (!set.rate || set.rate === "original") ? srcRate : parseInt(set.rate, 10);
+  if (!(want > 0)) want = srcRate;
+  var out = mixed;
+  if (want !== srcRate) {
+    var ratio = want / srcRate;
+    var len = Math.max(1, Math.floor(mixed[0].length * ratio));
+    out = mixed.map(function (s) {
+      var dst = new Float32Array(len);
+      for (var j = 0; j < len; j++) {
+        var at = j / ratio;
+        var i0 = Math.floor(at), i1 = Math.min(s.length - 1, i0 + 1);
+        var t = at - i0;
+        dst[j] = s[i0] * (1 - t) + s[i1] * t;
+      }
+      return dst;
+    });
+  }
+
+  if (set.trim) {
+    /* Silence at the head and tail only. Trimming the middle would change
+       the timing of everything the sound is cued against. */
+    var FLOOR = 0.002;
+    var n = out[0].length;
+    var first = 0, last = n - 1;
+    var loud = function (idx) {
+      for (var ch = 0; ch < out.length; ch++) {
+        if (Math.abs(out[ch][idx]) > FLOOR) return true;
+      }
+      return false;
+    };
+    while (first < n && !loud(first)) first++;
+    while (last > first && !loud(last)) last--;
+    if (first > 0 || last < n - 1) {
+      var keep = last - first + 1;
+      out = out.map(function (s) { return s.slice(first, first + keep); });
+    }
+  }
+
+  var made;
+  try {
+    var tmp = new Ctx({ sampleRate: want });
+    made = tmp.createBuffer(out.length, out[0].length, want);
+    for (var ch2 = 0; ch2 < out.length; ch2++) made.copyToChannel(out[ch2], ch2);
+    try { tmp.close(); } catch (e) { /* fine */ }
+  } catch (e) {
+    return buf;
+  }
+  return made;
+}
+
+/** Compress every sound that is set to be compressed. */
+function compressAllSounds() {
+  var names = Object.keys(doc.sounds || {}).filter(function (n) {
+    var s = soundSettings(n);
+    return s && s.compress;
+  });
+  if (!names.length) {
+    return Promise.resolve({ ok: true, done: 0, results: [] });
+  }
+  /* One at a time. Each encode is real time and runs through an AudioContext;
+     a dozen in parallel would fight for the same audio hardware and come back
+     slower than doing them in order. */
+  var results = [];
+  return names.reduce(function (chain, n) {
+    return chain.then(function () {
+      return compressSound(n).then(function (r) {
+        results.push(Object.assign({ name: n }, r));
+      });
+    });
+  }, Promise.resolve()).then(function () {
+    return { ok: true, done: results.filter(function (r) { return r.ok; }).length,
+             results: results };
   });
 }
 
@@ -30808,6 +31189,14 @@ function init(){
     propEaseCurve: propEaseCurve,
     motionActiveProps: motionActiveProps,
     updateMotionPanel: updateMotionPanel,
+    /* Real lossy compression for sounds, through the browser's own encoder. */
+    SOUND_CODECS: SOUND_CODECS,
+    SOUND_BITRATES: SOUND_BITRATES,
+    soundCodec: soundCodec,
+    encodeAudioBuffer: encodeAudioBuffer,
+    prepareSoundBuffer: prepareSoundBuffer,
+    compressSound: compressSound,
+    compressAllSounds: compressAllSounds,
     /* Runtime shared libraries: a symbol that lives in one movie and is
        loaded by every other at run time. */
     showLinkage: showLinkageDialog,

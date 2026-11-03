@@ -286,7 +286,9 @@ test("settings default to leaving the sound alone", async ({ page }) => {
              recoded: F.recodeSound("blip"),
              missing: F.soundSettings("nope") };
   });
-  expect(out.set).toEqual({ rate: "original", mono: false, trim: false });
+  expect(out.set).toEqual({ rate: "original", mono: false, trim: false,
+      // Compression is off by default: the encode is real time.
+      compress: false, bitrate: 96000, codec: null });
   expect(out.recoded).toBeNull();
   expect(out.missing).toBeNull();
 });
@@ -423,7 +425,8 @@ test("the settings survive a save and reopen", async ({ page }) => {
     window._flashyEditor.loadDoc(JSON.parse(json));
     return F.soundSettings("blip");
   });
-  expect(back).toEqual({ rate: "11025", mono: true, trim: true });
+  expect(back).toEqual({ rate: "11025", mono: true, trim: true,
+      compress: false, bitrate: 96000, codec: null });
 });
 
 test("the Sound Settings dialog lists every sound", async ({ page }) => {
@@ -442,8 +445,12 @@ test("the Sound Settings dialog lists every sound", async ({ page }) => {
   await expect(page.locator("#fy-dialog .dbg-row")).toHaveCount(2);
   await expect(page.locator("#fy-dialog .dbg-row", { hasText: "blip" }))
     .toContainText("unchanged");
-  // And it says plainly what it does instead of pretending to re-encode.
-  await expect(page.locator("#fy-dialog")).toContainText("no MP3 encoder");
+  /* And it says plainly what it does. There IS a real encoder now -- the
+     browser's own, which gives Opus -- so the claim it has to make is about
+     MP3 specifically rather than about having no encoder at all. */
+  await expect(page.locator("#fy-dialog"))
+    .toContainText("no browser will encode it");
+  await expect(page.locator("#fy-dialog")).toContainText("Opus");
 });
 
 test("Sound Settings says so when there are no sounds", async ({ page }) => {

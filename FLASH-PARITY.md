@@ -188,7 +188,7 @@ name — an entire class of Flash content is unreachable.
 | Loop / repeat count | ✅ | Both, and they are different things: loop is forever, repeat 3 is three times and then silence. A BufferSource has no loop count, so a repeat is a loop with a scheduled stop. |
 | **Edit Envelope** (fade in/out, custom volume envelope, pan, L/R) | ✅ | Two draggable lanes over the sound's own waveform — an envelope is drawn against what you can hear. Scheduled on a real GainNode and StereoPannerNode rather than polled, so it stays accurate while the main thread is busy drawing. |
 | Effect presets (Fade In, Fade Out, Fade L→R, Fade R→L, Left, Right, Custom) | ✅ | `Flashy.SoundTrack.envelopeFor` is the one table, so the dialog, the authoring preview and the published movie cannot disagree about what "Fade In" is. Picking a preset fills the curve in, so you can start from one and adjust it. |
-| Per-sound compression / export settings | ◐ | Per-asset rate, mono and trim-silence, with the before and after size shown. No MP3 encoder: the decoded samples are made mono, resampled and trimmed and written back as WAV. A setting that would make a file BIGGER is reported and skipped. |
+| Per-sound compression / export settings | ✅ | Per-asset rate, mono, trim-silence AND real lossy compression, with the before and after size shown. ~~No MP3 encoder~~ — **the browser is the encoder**: MediaRecorder gives Opus, which beats MP3 at the same bitrate. MP3 itself is still absent, and that is now a fact about MP3. A setting that would make a file BIGGER is reported and skipped. See Wave 26. |
 | Auto lip sync | ✅ | Beyond Flash — a genuine Flashy advantage. |
 
 ## 10. Publishing
@@ -906,15 +906,32 @@ a name, inserted at the caret.
     panels, which is never what was meant. A blocked pop-up falls back to
     downloading the pages, which still print.
 
-64. ◐ **Per-sound export settings.** One music bed and twenty blips want
+64. ✅ **Per-sound export settings.** One music bed and twenty blips want
     completely different settings, which is why Flash made these per sound.
 
-    There is no MP3 encoder here and writing one would be a project of its
-    own. What there IS: the decoded samples, which can be mixed to mono,
-    resampled and trimmed of silence, then written back as 16-bit WAV. That is
-    real compression — mono at 11 kHz is an eighth of the bytes of stereo at
-    44.1, and for a blip nobody can tell — and it is honest about what it
-    does, which pretending to re-encode would not be.
+    The first pass said: "There is no MP3 encoder here and writing one would
+    be a project of its own." Both halves are true, and the conclusion drawn
+    from them was wrong in the same way the video row's "needs a demuxer" was.
+    **A browser already contains an audio encoder.** MediaRecorder takes a
+    MediaStream and returns compressed bytes, and every browser offers Opus in
+    WebM -- which beats MP3 at the same bitrate, decodes through
+    `decodeAudioData` with no new code, and is what the web actually uses.
+
+    So there are two tiers now. Mono, rate and trim reshape the samples and
+    write WAV; **Compress** runs the real encoder at a real bitrate. They
+    compose, and in that order on purpose: mono at 11 kHz encoded at 48 kbps
+    is smaller than stereo at 44.1 encoded at 48 kbps for the audio that wants
+    those settings, because the first tier shrinks the encoder's INPUT too.
+
+    MP3 itself is still not offered, and that is now a statement about MP3
+    rather than about this editor: no browser will encode it, and shipping an
+    encoder for a format worse than the one already present would be the
+    project the first pass was right to decline.
+
+    The cost is stated in the dialog rather than discovered: MediaRecorder
+    reads a LIVE stream, so a clip takes about its own duration to encode. A
+    blip is instant and a three-minute bed takes three minutes. The video
+    export already makes the same trade for the same reason.
 
     A recode that would make a file BIGGER is reported and skipped: an
     already-compressed original usually beats anything this can produce, and
