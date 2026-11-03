@@ -5106,7 +5106,7 @@
   const Flashy = {
     // Keep in step with package.json's "version" and the splash card in
     // editor.html; they had drifted to three different numbers.
-    version: '0.8.0',
+    version: '0.8.1',
     Easing, Graphics,
     DisplayObject, DisplayObjectContainer,
     Shape, TextField, RichText, Fonts, Gradient, Warp, Armature, Stroke, Video, Videos, Bitmap, MovieClip, Timeline, Tween, Stage,

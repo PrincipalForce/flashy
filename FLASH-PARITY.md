@@ -7,7 +7,9 @@ whether it is worth building.
 
 **Status key:** ✅ present · ◐ partial · ⬜ missing
 
-First audited at `0.7.6`; closed out at `0.8.0`. Verified by reading
+First audited at `0.7.6`. The second pass closed at `0.8.0`; the three
+partial rows carried forward from the first eleven tables closed at `0.8.1`.
+Verified by reading
 `editor-app.js` (`menus`, `TOOLS`, `doAction`, `paintObj`, `render`,
 `updateProps`), not by assumption.
 
