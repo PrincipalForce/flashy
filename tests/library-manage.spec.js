@@ -419,7 +419,10 @@ test("the Linkage dialog fills in an identifier rather than leaving it blank", a
   // Tick the box and clear the name: an exported symbol with no identifier
   // cannot be reached, which is the one combination that means nothing.
   await page.locator('.fy-dialog input[type="checkbox"]').check();
-  await page.locator('.fy-dialog input[type="text"]').fill("");
+  /* By field name, not by position: the dialog has three text fields now
+     that runtime sharing lives here too, and counting inputs is what made
+     this spec break when it gained them. */
+  await page.locator('.fy-dialog [data-field="linkageName"]').fill("");
   await page.locator(".fy-dialog-foot button").last().click();
 
   const s = await page.evaluate(() => window._flashyAI.doc.library.Spare);

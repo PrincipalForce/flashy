@@ -355,6 +355,11 @@ function showDialog(opts){
       row.classList.add("fy-dialog-row-check");
     }
     inp.className="fy-dialog-input";
+    /* The field's own name, on the element. A spec (or a user script) that
+       wants one field should not have to count inputs: positional selectors
+       break the moment a dialog gains a field, which is exactly what
+       happened to the Linkage dialog when runtime sharing was added. */
+    if(f.name)inp.dataset.field=f.name;
     row.appendChild(inp);
     body.appendChild(row);
     if(f.hint){
@@ -524,6 +529,7 @@ var menus=[
     {type:"sep"},
     {label:"Document Settings...",action:"docSettings"},
     {label:"ActionScript 3 Document Class...",action:"as3Document"},
+    {label:"Runtime Shared Symbols...",action:"runtimeShare"},
     {label:"Bitmap Properties...",action:"bitmapSettings"},
     {label:"Match Stage Size to Contents",action:"matchStage"},
     {label:"Publish Settings...",action:"publishSettings"},
@@ -11659,14 +11665,42 @@ function showLinkageDialog(name){
       {name:"exportForAS",label:"Export for ActionScript",type:"checkbox",
        value:!!sym.exportForAS},
       {name:"linkageName",label:"Identifier",
-       value:sym.linkageName||name.replace(/[^\w$]/g,"")||"Symbol"}
+       value:sym.linkageName||name.replace(/[^\w$]/g,"")||"Symbol"},
+      /* Flash's other half of this dialog. A symbol can live in ONE movie and
+         be loaded by every other at run time, which is how a studio kept one
+         logo across thirty files and updated all thirty by republishing one. */
+      {name:"shareMode",label:"Runtime sharing",type:"select",
+       value:(sym.runtimeShare&&sym.runtimeShare.mode)||"none",
+       options:[["none","Not shared"],
+                ["import","Import for runtime sharing"],
+                ["export","Export for runtime sharing"]]},
+      {name:"shareId",label:"Shared as",
+       value:(sym.runtimeShare&&sym.runtimeShare.identifier)||name,
+       hint:"The name the other end looks for. It is the contract, so "+
+            "renaming the symbol locally does not break the movies that "+
+            "import it."},
+      {name:"shareUrl",label:"From URL",
+       value:(sym.runtimeShare&&sym.runtimeShare.url)||"",
+       placeholder:"shared-library.flashy",
+       hint:"Imported symbols only. The copy in this document stays as the "+
+            "fallback, so a URL that cannot be reached means the movie draws "+
+            "what it shipped with rather than nothing."}
     ],
     footnote:"Unexported symbols are still placed from the Library as usual; "+
              "linkage only adds the runtime route.",
+    validate:function(v){
+      if(v.shareMode==="import"&&!String(v.shareUrl||"").trim()){
+        return "An imported symbol needs the URL to load it from.";
+      }
+      return null;
+    },
     onOk:function(v){
       pushUndo();
       sym.exportForAS=!!v.exportForAS;
       sym.linkageName=String(v.linkageName||"").trim();
+      setRuntimeShare(name,
+        v.shareMode==="none"?null:v.shareMode,
+        v.shareUrl, v.shareId);
       if(sym.exportForAS&&!sym.linkageName){
         // An exported symbol with no identifier cannot be reached, which is
         // the one combination that means nothing.
@@ -11676,6 +11710,13 @@ function showLinkageDialog(name){
       outputLog(sym.exportForAS
         ? ("Linkage: attachMovie(\""+sym.linkageName+"\", \"instance\", 1)")
         : ("Linkage removed from "+name));
+      var rs=runtimeShare(name);
+      if(rs){
+        outputLog("Runtime sharing: "+name+" is "+
+          (rs.mode==="import"?("imported as \u201C"+rs.identifier+
+                               "\u201D from "+rs.url)
+                             :("published as \u201C"+rs.identifier+"\u201D")));
+      }
     }
   });
 }
@@ -12804,6 +12845,9 @@ function doActionInner(a){
     break;
   case "as3Document":
     showAS3DocumentDialog();
+    break;
+  case "runtimeShare":
+    showRuntimeShareDialog();
     break;
   case "htmlTemplate":
     showTemplateEditor();
@@ -23454,6 +23498,258 @@ function showVideoCueDialog(name){
 }
 
 /* ------------------------------------------------------------------ *
+ * Runtime shared libraries
+ *
+ * Flash's Linkage dialog had two halves. "Export for ActionScript" names a
+ * symbol so a script can create one, and Flashy has had that. "Export for
+ * runtime sharing" and "Import for runtime sharing" are the other half: a
+ * symbol lives in ONE movie and every other movie loads it from there at run
+ * time. It is how a studio kept one logo, one font, one character across
+ * thirty files, and how a site updated all thirty by republishing one.
+ *
+ * The audit refused to build it, on the grounds that it needs a second file
+ * that has to still be there -- which is a large part of why Flash content
+ * rotted. That is a real objection and it is not a reason to leave the
+ * feature out; it is a reason to BUILD IT DIFFERENTLY:
+ *
+ *   The embedded copy stays in the document as a fallback. A runtime-shared
+ *   symbol is an UPGRADE, not a dependency: if the shared file is reachable
+ *   the movie uses the newer artwork, and if it is not the movie draws the
+ *   copy it shipped with and says so once. Flash's version drew nothing at
+ *   all, which is exactly the rot the audit was describing.
+ *
+ * So the thing the objection warns about is the thing this fixes.
+ * ------------------------------------------------------------------ */
+
+/** The runtime-sharing record on a symbol, or null. */
+function runtimeShare(name) {
+  var sym = (doc.library || {})[name];
+  if (!sym || !sym.runtimeShare) return null;
+  var rs = sym.runtimeShare;
+  if (rs.mode !== "import" && rs.mode !== "export") return null;
+  return rs;
+}
+
+/**
+ * Mark a symbol as runtime-shared.
+ *
+ * `mode` is "import" (this movie loads it from `url`), "export" (this movie
+ * publishes it for others), or null to stop sharing. The identifier defaults
+ * to the symbol's own name, because that is what the other end will look for
+ * and making it differ by accident is the commonest way this gets wired up
+ * wrong.
+ */
+function setRuntimeShare(name, mode, url, identifier) {
+  var sym = (doc.library || {})[name];
+  if (!sym) return { ok: false, why: "that symbol is not in the library" };
+  if (mode !== "import" && mode !== "export") {
+    delete sym.runtimeShare;
+    touchDoc();
+    return { ok: true, mode: null };
+  }
+  var id = String(identifier || "").trim() || name;
+  var u = String(url || "").trim();
+  if (mode === "import" && !u) {
+    return { ok: false, why: "an imported symbol needs the URL to load it from" };
+  }
+  sym.runtimeShare = { mode: mode, url: u, identifier: id };
+  touchDoc();
+  return { ok: true, mode: mode, identifier: id, url: u };
+}
+
+/** Every symbol this document shares at run time, in either direction. */
+function runtimeShared() {
+  return Object.keys(doc.library || {})
+    .filter(function (n) { return !!runtimeShare(n); })
+    .map(function (n) {
+      var rs = runtimeShare(n);
+      return { name: n, mode: rs.mode, url: rs.url, identifier: rs.identifier };
+    });
+}
+
+/**
+ * The manifest a movie publishes for others to import from.
+ *
+ * Only the symbols marked for export, keyed by their identifier rather than
+ * their local name -- the identifier is the contract, and renaming a symbol
+ * in the source movie must not break thirty files that import it.
+ */
+function runtimeShareManifest() {
+  var out = { flashyShared: 1, symbols: {} };
+  Object.keys(doc.library || {}).forEach(function (n) {
+    var rs = runtimeShare(n);
+    if (!rs || rs.mode !== "export") return;
+    var sym = doc.library[n];
+    ensureSymbolLayers(sym);
+    out.symbols[rs.identifier] = {
+      name: n,
+      layers: serializeLayers(sym.layers),
+      totalFrames: sym.totalFrames || 1,
+      behavior: sym.behavior || "movieclip",
+      /* The bitmaps and sounds the symbol uses travel with it, for the same
+         reason author-time sharing carries them: a symbol that arrives as an
+         empty box with no clue why is worse than one that does not arrive. */
+      bitmaps: serializeBitmaps(doc.bitmaps),
+      sounds: serializeSounds(doc.sounds)
+    };
+  });
+  return out;
+}
+
+/**
+ * Resolve one imported symbol from a loaded manifest.
+ *
+ * Replaces the symbol's CONTENTS rather than the library entry, exactly as
+ * author-time Update does and for the same reason: every instance on every
+ * stage points at the local name.
+ */
+function applyRuntimeShare(name, manifest) {
+  var sym = (doc.library || {})[name];
+  var rs = runtimeShare(name);
+  if (!sym || !rs || rs.mode !== "import") {
+    return { ok: false, why: "that symbol is not imported at run time" };
+  }
+  var table = manifest && manifest.symbols;
+  var entry = table && table[rs.identifier];
+  if (!entry) {
+    return { ok: false, why: "the shared file has no symbol called “" +
+             rs.identifier + "”" };
+  }
+  sym.layers = reviveLayers(entry.layers);
+  sym.totalFrames = entry.totalFrames || 1;
+  if (entry.behavior) sym.behavior = entry.behavior;
+  /* Assets the incoming symbol needs and this document does not have. Added
+     rather than overwritten: a local bitmap of the same name might be the one
+     the rest of the movie is built on. */
+  var added = 0;
+  Object.keys(entry.bitmaps || {}).forEach(function (bn) {
+    if (!doc.bitmaps[bn]) { doc.bitmaps[bn] = entry.bitmaps[bn]; added++; }
+  });
+  Object.keys(entry.sounds || {}).forEach(function (sn) {
+    if (!doc.sounds[sn]) { doc.sounds[sn] = entry.sounds[sn]; added++; }
+  });
+  touchDoc();
+  return { ok: true, assets: added };
+}
+
+/** Fetch a shared manifest. Resolves to null rather than throwing. */
+function loadRuntimeShare(url) {
+  if (typeof fetch !== "function") return Promise.resolve(null);
+  return fetch(url).then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function (data) {
+    /* A .flashy document works as a source too, not just a published
+       manifest: the commonest case is "share out of that file over there",
+       and asking the author to publish a manifest first would be a step with
+       no purpose. */
+    if (data && data.flashyShared) return data;
+    if (data && data.library) {
+      var m = { flashyShared: 1, symbols: {} };
+      Object.keys(data.library).forEach(function (n) {
+        m.symbols[n] = {
+          name: n,
+          layers: (data.library[n].layers) || [],
+          totalFrames: data.library[n].totalFrames || 1,
+          behavior: data.library[n].behavior || "movieclip",
+          bitmaps: data.bitmaps || {},
+          sounds: data.sounds || {}
+        };
+      });
+      return m;
+    }
+    return null;
+  })["catch"](function () { return null; });
+}
+
+/**
+ * Resolve every imported symbol, at author time.
+ *
+ * One fetch per distinct URL rather than one per symbol: thirty symbols
+ * shared out of one file is the normal case, and thirty requests for the same
+ * document would be thirty times the wait.
+ */
+function resolveRuntimeShares() {
+  var wanted = runtimeShared().filter(function (s) { return s.mode === "import"; });
+  if (!wanted.length) return Promise.resolve({ ok: true, resolved: 0, failed: [] });
+  var urls = {};
+  wanted.forEach(function (s) { urls[s.url] = true; });
+  var list = Object.keys(urls);
+  return Promise.all(list.map(loadRuntimeShare)).then(function (loaded) {
+    var byUrl = {};
+    list.forEach(function (u, i) { byUrl[u] = loaded[i]; });
+    var resolved = 0, failed = [];
+    wanted.forEach(function (s) {
+      var m = byUrl[s.url];
+      if (!m) { failed.push({ name: s.name, why: "could not load " + s.url }); return; }
+      var r = applyRuntimeShare(s.name, m);
+      if (r.ok) resolved++; else failed.push({ name: s.name, why: r.why });
+    });
+    if (resolved) fullRefresh();
+    return { ok: true, resolved: resolved, failed: failed };
+  });
+}
+
+/** File ▸ Update Runtime Shared Symbols. */
+function showRuntimeShareDialog() {
+  var shared = runtimeShared();
+  var imported = shared.filter(function (s) { return s.mode === "import"; });
+  var exported = shared.filter(function (s) { return s.mode === "export"; });
+  showDialog({
+    title: "Runtime Shared Symbols",
+    okLabel: imported.length ? "Update now" : "Close",
+    noCancel: !imported.length,
+    message: !shared.length
+      ? "No symbol in this document is shared at run time. Set it in the " +
+        "Library’s Linkage dialog: a symbol can be IMPORTED from another " +
+        "movie, or EXPORTED for other movies to import."
+      : "An imported symbol is an upgrade, not a dependency: the copy in this " +
+        "document is the fallback, so a shared file that cannot be reached " +
+        "means the movie draws what it shipped with rather than nothing.",
+    build: function (body) {
+      shared.forEach(function (s) {
+        var row = document.createElement("div");
+        row.className = "fy-dialog-row";
+        var lab = document.createElement("span");
+        lab.className = "fy-dialog-label";
+        lab.textContent = s.name;
+        var v = document.createElement("span");
+        v.className = "fy-dialog-input";
+        v.textContent = (s.mode === "import" ? "← " : "→ ") +
+                        s.identifier + (s.url ? ("  " + s.url) : "  (published)");
+        row.appendChild(lab);
+        row.appendChild(v);
+        body.appendChild(row);
+      });
+      if (exported.length) {
+        var note = document.createElement("div");
+        note.className = "fy-dialog-hint";
+        note.textContent = exported.length + " symbol" +
+          (exported.length === 1 ? " is" : "s are") + " published for other " +
+          "movies to import. Export the document and point them at it.";
+        body.appendChild(note);
+      }
+    },
+    onOk: function () {
+      if (!imported.length) return;
+      pushUndo();
+      resolveRuntimeShares().then(function (r) {
+        if (r.failed.length) {
+          showMessage("Runtime Shared Symbols",
+            "Updated " + r.resolved + " of " + imported.length + ".\n\n" +
+            r.failed.map(function (f) { return f.name + ": " + f.why; }).join("\n") +
+            "\n\nThe symbols that could not be loaded still draw the copy " +
+            "this document shipped with.");
+        } else {
+          outputLog("Runtime sharing: updated " + r.resolved + " symbol" +
+                    (r.resolved === 1 ? "" : "s") + ".");
+        }
+      });
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * Anchor editing
  *
  * Flash's Pen tool did three more things than draw: over a segment it added
@@ -24756,6 +25052,14 @@ function serializeLibrary(lib){
          and needs no migration for an older document. */
       folder:sym.folder||"",
       // Where a shared symbol came from, so Update can go back for it.
+      /* Runtime sharing: which direction, under what identifier, from where.
+         Saved with the symbol because it is a property of the symbol, and
+         because an imported symbol has to know where to look again. */
+      runtimeShare:(sym.runtimeShare&&sym.runtimeShare.mode)
+        ? {mode:sym.runtimeShare.mode,
+           url:String(sym.runtimeShare.url||""),
+           identifier:String(sym.runtimeShare.identifier||"")}
+        : null,
       sharedFrom:sym.sharedFrom?{source:sym.sharedFrom.source||"",
                                  symbol:sym.sharedFrom.symbol||""}:null,
       exportForAS:!!sym.exportForAS,
@@ -25172,6 +25476,15 @@ function reviveLibrary(lib){
       folder:typeof sd.folder==="string"?sd.folder:"",
       exportForAS:!!sd.exportForAS,
       linkageName:typeof sd.linkageName==="string"?sd.linkageName:"",
+      /* Runtime sharing, normalised: only the two modes mean anything, and
+         an imported symbol with no URL has nowhere to look, so it comes back
+         as not shared rather than as a request that can never succeed. */
+      runtimeShare:(sd.runtimeShare&&
+                    (sd.runtimeShare.mode==="import"||sd.runtimeShare.mode==="export")&&
+                    (sd.runtimeShare.mode==="export"||String(sd.runtimeShare.url||"").trim()))
+        ?{mode:sd.runtimeShare.mode,
+          url:String(sd.runtimeShare.url||""),
+          identifier:String(sd.runtimeShare.identifier||"")||name}:null,
       // Where a shared symbol came from, so Update can fetch it again.
       sharedFrom:(sd.sharedFrom&&sd.sharedFrom.symbol)
         ?{source:String(sd.sharedFrom.source||""),
@@ -26555,6 +26868,87 @@ function exportRuntime(data, canvas, options) {
       }
     }
   }
+
+  /* ---- runtime shared symbols ---------------------------------------- *
+   * A symbol marked "import for runtime sharing" lives in another movie and
+   * is fetched from it here. The copy this movie shipped with is already in
+   * `data.library`, and it stays there until the fetch succeeds -- so a
+   * shared file that cannot be reached means the movie draws what it shipped
+   * with and says so once, rather than drawing nothing.
+   *
+   * That is the whole difference from Flash's version, which drew nothing and
+   * is a large part of why Flash content rotted.
+   *
+   * Nothing waits for this. The root rebuilds its display list from
+   * `data.library` every frame, so swapping a symbol's layers in place is
+   * picked up on the next repaint with no further plumbing.
+   * -------------------------------------------------------------------- */
+  (function loadSharedSymbols() {
+    if (typeof fetch !== "function" || !data.library) return;
+    var byUrl = {};
+    Object.keys(data.library).forEach(function (name) {
+      var rs = data.library[name] && data.library[name].runtimeShare;
+      if (!rs || rs.mode !== "import" || !rs.url) return;
+      (byUrl[rs.url] || (byUrl[rs.url] = [])).push({ name: name, id: rs.identifier || name });
+    });
+    var urls = Object.keys(byUrl);
+    if (!urls.length) return;
+    // One request per URL, not per symbol: thirty symbols out of one file is
+    // the normal case, and thirty requests for it would be thirty waits.
+    urls.forEach(function (url) {
+      fetch(url).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (doc2) {
+        /* Either shape works as a source: a published manifest, or a plain
+           .flashy document. Requiring a manifest first would be a step with
+           no purpose -- the common case is "share out of that file there". */
+        var table = null;
+        if (doc2 && doc2.flashyShared && doc2.symbols) table = doc2.symbols;
+        else if (doc2 && doc2.library) table = doc2.library;
+        if (!table) throw new Error("not a Flashy document or shared library");
+        var done = 0;
+        byUrl[url].forEach(function (want) {
+          var entry = table[want.id];
+          if (!entry || !entry.layers) return;
+          data.library[want.name].layers = entry.layers;
+          if (entry.totalFrames) data.library[want.name].totalFrames = entry.totalFrames;
+          /* Assets the incoming symbol needs and this movie lacks. Added, not
+             overwritten: a local bitmap of the same name may be the one the
+             rest of the movie is built on. */
+          if (entry.bitmaps && Flashy.Bitmaps) {
+            Object.keys(entry.bitmaps).forEach(function (bn) {
+              if (data.bitmaps && data.bitmaps[bn]) return;
+              var ba = entry.bitmaps[bn];
+              if (!ba || !ba.data) return;
+              if (data.bitmaps) data.bitmaps[bn] = ba;
+              Flashy.Bitmaps.load(bn, "data:" + (ba.mediaType || "image/png") +
+                                      ";base64," + ba.data)["catch"](function () {});
+            });
+          }
+          /* Cached instances of this symbol have to go, or a MovieClip built
+             before the fetch keeps drawing the old artwork for ever -- the
+             cache exists precisely so those are NOT rebuilt each frame. */
+          Object.keys(instanceCache).forEach(function (k) {
+            if (instanceCache[k] && instanceCache[k].symbolName === want.name) {
+              delete instanceCache[k];
+            }
+          });
+          done++;
+        });
+        if (Flashy.Output && Flashy.Output.write) {
+          Flashy.Output.write("Runtime sharing: loaded " + done + " symbol" +
+            (done === 1 ? "" : "s") + " from " + url);
+        }
+      })["catch"](function (e) {
+        if (Flashy.Output && Flashy.Output.write) {
+          Flashy.Output.write("Runtime sharing: could not load " + url + " (" +
+            (e && e.message || e) + "). Drawing the copy this movie shipped " +
+            "with instead.");
+        }
+      });
+    });
+  }());
 
   var compiled = {}, lastScriptFrame = 0;
   function runFrameScripts(fr) {
@@ -30414,6 +30808,17 @@ function init(){
     propEaseCurve: propEaseCurve,
     motionActiveProps: motionActiveProps,
     updateMotionPanel: updateMotionPanel,
+    /* Runtime shared libraries: a symbol that lives in one movie and is
+       loaded by every other at run time. */
+    showLinkage: showLinkageDialog,
+    selectLibItem: selectLibItem,
+    runtimeShare: runtimeShare,
+    setRuntimeShare: setRuntimeShare,
+    runtimeShared: runtimeShared,
+    runtimeShareManifest: runtimeShareManifest,
+    applyRuntimeShare: applyRuntimeShare,
+    loadRuntimeShare: loadRuntimeShare,
+    resolveRuntimeShares: resolveRuntimeShares,
     /* ActionScript 3: the dialect, the document class, and the compiler. */
     scriptDialect: function(){ return doc.scriptDialect||"js"; },
     setScriptDialect: function(v){
